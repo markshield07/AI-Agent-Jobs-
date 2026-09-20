@@ -14,7 +14,10 @@ from jobagent.discovery.criteria import SearchCriteria
 
 
 def _words(text: str) -> list[str]:
-    return re.findall(r"[a-z0-9+#.]+", text.lower())
+    # A dot inside a token is part of a name (node.js); at the edges it is punctuation
+    # ('Engineer.', 'Sr.', '.NET' -> 'net'), so strip it after tokenising.
+    tokens = (t.strip(".") for t in re.findall(r"[a-z0-9+#.]+", text.lower()))
+    return [t for t in tokens if t]
 
 
 def title_matches(title: str, criteria: SearchCriteria) -> bool:
@@ -26,7 +29,7 @@ def title_matches(title: str, criteria: SearchCriteria) -> bool:
     wanted = criteria.normalised(criteria.titles)
     if not wanted:
         return True
-    have = set(_words(title))
+    have = set(_words(str(title or "")))
     return any(set(_words(w)) <= have for w in wanted if _words(w))
 
 
@@ -36,7 +39,11 @@ def parse_when(value: str | int | float | None) -> datetime | None:
         return None
     if isinstance(value, int | float):
         seconds = value / 1000 if value > 1e11 else value
-        return datetime.fromtimestamp(seconds, tz=UTC)
+        try:
+            return datetime.fromtimestamp(seconds, tz=UTC)
+        except (ValueError, OverflowError, OSError):
+            # NaN from a pandas frame, or a number that is not a date at all.
+            return None
     text = str(value).strip()
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"

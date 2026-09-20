@@ -8,6 +8,7 @@ import re
 from bs4 import BeautifulSoup
 
 _BLOCK_TAGS = ("p", "div", "li", "br", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "section")
+_CELL_TAGS = ("td", "th")
 
 
 def html_to_text(markup: str | None) -> str:
@@ -28,7 +29,13 @@ def html_to_text(markup: str | None) -> str:
     for tag in soup.find_all(_BLOCK_TAGS):
         tag.insert_before("\n")
         tag.insert_after("\n")
-    return _tidy(soup.get_text(" "))
+    for tag in soup.find_all(_CELL_TAGS):
+        tag.insert_before(" ")
+        tag.insert_after(" ")
+    # Join with nothing, as a browser lays out inline elements: '<em>x</em>.' stays
+    # 'x.', which keeps exact-phrase keyword matching honest; cells above and the
+    # block breaks keep the separation that matters.
+    return _tidy(soup.get_text(""))
 
 
 def _tidy(text: str) -> str:

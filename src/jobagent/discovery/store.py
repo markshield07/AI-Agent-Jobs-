@@ -69,7 +69,15 @@ def upsert_jobs(
     now = utcnow()
     with transaction(conn):
         for job in jobs:
-            if not (job.url and job.title and job.company):
+            required = (job.url, job.title, job.company, job.source)
+            if not all(isinstance(v, str) and v.strip() for v in required):
+                result.rejected += 1
+                continue
+            try:
+                url = canonical_url(job.url)
+            except ValueError:
+                # urlsplit refuses a host with unbalanced brackets; one such link
+                # must not roll back the whole batch.
                 result.rejected += 1
                 continue
             jid = job_id(job.url, job.title, job.company)
@@ -81,7 +89,7 @@ def upsert_jobs(
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
                 (
                     jid,
-                    canonical_url(job.url),
+                    url,
                     job.title.strip(),
                     job.company.strip(),
                     job.source,
@@ -92,7 +100,7 @@ def upsert_jobs(
                     job.salary_min,
                     job.salary_max,
                     job.posted_at,
-                    None if job.remote is None else int(job.remote),
+                    _remote_flag(job.remote),
                     job.external_id,
                     run_id,
                     now,
@@ -103,6 +111,16 @@ def upsert_jobs(
             else:
                 result.duplicates += 1
     return result
+
+
+def _remote_flag(value: bool | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        # A NaN that slipped through a source's pandas conversion: unknown, not a crash.
+        return None
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:

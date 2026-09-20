@@ -173,6 +173,17 @@ def test_full_run(conn, settings, criteria, profile, monkeypatch):
     assert run["found"] == 6 and run["scored"] == 5 and run["tokens_in"] == 1000
 
 
+def test_enrichment_failure_does_not_end_the_run(conn, settings, criteria, profile, monkeypatch):
+    def explode(url, **kw):
+        raise ValueError("no scheme")
+
+    monkeypatch.setattr("jobagent.discovery.pipeline.enrich_description", explode)
+    report = run_discovery(
+        conn, settings, criteria=criteria, sources=[FakeSource("one", [SNIPPET])], classify=False
+    )
+    assert report.enriched == 0 and report.scored == 1
+
+
 def test_no_model_leaves_survivors_pending(conn, settings, criteria, profile, monkeypatch):
     def unavailable(_settings):
         raise LLMUnavailable("nothing configured")

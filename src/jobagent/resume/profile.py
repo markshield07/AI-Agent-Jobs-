@@ -26,10 +26,14 @@ def profile_tags(conn: sqlite3.Connection) -> set[str]:
 
 
 def _line(fact: Fact) -> str:
-    detail = fact.detail
+    # The API accepts any JSON for detail, so a user-added role may carry a numeric
+    # year or no mapping at all; the profile degrades rather than failing to render.
+    detail = fact.detail if isinstance(fact.detail, dict) else {}
     if fact.kind in ("role", "project"):
-        head = " · ".join(part for part in (detail.get("title"), detail.get("employer")) if part)
-        dates = " – ".join(part for part in (detail.get("start"), detail.get("end")) if part)
+        head = " · ".join(
+            str(part) for part in (detail.get("title"), detail.get("employer")) if part
+        )
+        dates = " – ".join(str(part) for part in (detail.get("start"), detail.get("end")) if part)
         prefix = f"{head} ({dates})" if head and dates else head or ""
         return f"- {prefix}: {fact.text}" if prefix else f"- {fact.text}"
     return f"- {fact.text}"
@@ -52,8 +56,12 @@ def profile_text(conn: sqlite3.Connection) -> str:
         if not items:
             continue
         if kind == "skill":
-            names = sorted({f.text.strip() for f in items}, key=str.lower)
-            sections.append("Skills: " + ", ".join(names))
+            # One entry per skill regardless of case; the first spelling seen wins.
+            seen: dict[str, str] = {}
+            for f in items:
+                name = f.text.strip()
+                seen.setdefault(name.lower(), name)
+            sections.append("Skills: " + ", ".join(sorted(seen.values(), key=str.lower)))
             continue
         heading = {
             "summary": "Summary",

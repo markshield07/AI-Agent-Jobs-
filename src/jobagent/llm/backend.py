@@ -113,9 +113,16 @@ class AnthropicBackend:
             )
         except anthropic.APIError as exc:
             raise LLMError(f"Anthropic API call failed: {exc}") from exc
+        except ValidationError as exc:
+            # The SDK validates the text block against `output` while building the
+            # response, so a truncated or off-schema answer surfaces here, not as
+            # an APIError. Same failure as the CLI backend's, same error type.
+            raise LLMError(f"The model's output did not match {output.__name__}: {exc}") from exc
 
         if response.stop_reason == "refusal":
             raise LLMError("The model declined this request.")
+        if response.stop_reason == "max_tokens":
+            raise LLMError(f"The model ran out of output tokens (max_tokens={max_tokens}).")
         if response.parsed_output is None:
             raise LLMError("The model returned no structured output.")
 
@@ -208,6 +215,8 @@ def _parse_cli_output(proc: subprocess.CompletedProcess, output: type[T], name: 
         envelope = json.loads(stdout)
     except json.JSONDecodeError as exc:
         raise LLMError(f"`claude` returned something other than JSON: {stdout[:300]}") from exc
+    if not isinstance(envelope, dict):
+        raise LLMError(f"`claude` returned JSON that is not a result object: {stdout[:300]}")
 
     if envelope.get("is_error"):
         raise LLMError(f"`claude` reported an error: {str(envelope.get('result', ''))[:500]}")

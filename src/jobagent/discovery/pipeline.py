@@ -190,7 +190,11 @@ def _enrich(
         )
         todo = todo[:max_enrich]
     for job in todo:
-        text = enrich_description(job["url"], client=client, completer=completer)
+        try:
+            text = enrich_description(job["url"], client=client, completer=completer)
+        except Exception as exc:  # one unfetchable page must not end the run
+            log.warning("enrichment of %s failed: %s", job["url"], exc)
+            continue
         if text:
             store.set_description(conn, job["id"], text)
             report.enriched += 1

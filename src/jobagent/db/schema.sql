@@ -1,0 +1,157 @@
+-- Schema for the job application agent.
+--
+-- Two rules shape this file:
+--   1. `application_events` is append-only. An application's status is derived
+--      from its newest event, never written in place, because response rate and
+--      time-to-first-reply are computed from the gaps between events.
+--   2. `resume_facts` is the only source a tailored resume may draw from. A fact
+--      the user typed in is as legitimate as one parsed out of their resume, but
+--      a claim with no fact behind it never reaches a PDF.
+
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS schema_version (
+    version    INTEGER NOT NULL,
+    applied_at TEXT    NOT NULL
+);
+
+-- ---------------------------------------------------------------- discovery --
+
+CREATE TABLE IF NOT EXISTS jobs (
+    id           TEXT PRIMARY KEY,           -- sha256(url + title + company)[:16]
+    url          TEXT NOT NULL UNIQUE,
+    title        TEXT NOT NULL,
+    company      TEXT NOT NULL,
+    source       TEXT NOT NULL,              -- greenhouse | lever | ashby | linkedin | indeed | ...
+    location     TEXT,
+    description  TEXT,
+    ats_type     TEXT,
+    apply_url    TEXT,
+    salary_min   INTEGER,
+    salary_max   INTEGER,
+    score        INTEGER,                    -- 0-100, deterministic pass
+    tier         INTEGER,                    -- 1-4, model pass (NULL if rules-rejected)
+    score_reason TEXT,
+    status       TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','skipped','queued','applied','failed','needs_review')),
+    scraped_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, score DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_scraped ON jobs(scraped_at);
+
+-- ------------------------------------------------------------- the fact base --
+
+CREATE TABLE IF NOT EXISTS resume_base (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename    TEXT NOT NULL,
+    stored_path TEXT NOT NULL,
+    content_sha TEXT NOT NULL UNIQUE,
+    parsed_text TEXT NOT NULL,
+    uploaded_at TEXT NOT NULL
+);
+
+-- One addressable claim. `source` records who put it here; both are equally
+-- usable when tailoring, which is what lets the user add a keyword without
+-- editing their resume.
+CREATE TABLE IF NOT EXISTS resume_facts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    base_id    INTEGER REFERENCES resume_base(id) ON DELETE SET NULL,
+    kind       TEXT NOT NULL
+        CHECK (kind IN ('role','project','skill','education','credential','summary')),
+    text       TEXT NOT NULL,
+    detail     TEXT,                         -- JSON: employer, dates, metrics, tech
+    tags       TEXT,                         -- JSON array of lowercase keywords
+    source     TEXT NOT NULL DEFAULT 'parsed'
+        CHECK (source IN ('parsed','user_added')),
+    active     INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_facts_active ON resume_facts(active, kind);
+
+-- Technologies the user has not used. Excluded from every generated variant.
+CREATE TABLE IF NOT EXISTS never_claim (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    term       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    note       TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS resume_variants (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id           TEXT REFERENCES jobs(id) ON DELETE CASCADE,
+    base_id          INTEGER REFERENCES resume_base(id) ON DELETE SET NULL,
+    facts_used       TEXT NOT NULL,          -- JSON array of resume_facts.id
+    keyword_coverage REAL,
+    pdf_path         TEXT,
+    created_at       TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_variants_job ON resume_variants(job_id);
+
+-- ------------------------------------------------------------- applications --
+
+CREATE TABLE IF NOT EXISTS applications (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id            TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    variant_id        INTEGER REFERENCES resume_variants(id) ON DELETE SET NULL,
+    cover_letter_path TEXT,
+    mode              TEXT NOT NULL CHECK (mode IN ('dry_run','review','auto')),
+    ats               TEXT,
+    screenshot_path   TEXT,
+    submitted_at      TEXT,
+    UNIQUE (job_id)
+);
+
+-- Append-only. Never UPDATE a row here.
+CREATE TABLE IF NOT EXISTS application_events (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    kind           TEXT NOT NULL CHECK (kind IN ('status_change','note','email')),
+    from_status    TEXT,
+    to_status      TEXT
+        CHECK (to_status IS NULL OR to_status IN
+            ('applied','screening','interviewing','offer','rejected','withdrawn')),
+    note           TEXT,
+    source         TEXT CHECK (source IS NULL OR source IN ('manual','email','campaign')),
+    created_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_app ON application_events(application_id, created_at);
+
+-- Current status per application, derived rather than stored.
+CREATE VIEW IF NOT EXISTS application_status AS
+SELECT a.id AS application_id,
+       a.job_id,
+       COALESCE((
+           SELECT e.to_status FROM application_events e
+           WHERE e.application_id = a.id AND e.to_status IS NOT NULL
+           ORDER BY e.created_at DESC, e.id DESC LIMIT 1
+       ), 'applied') AS status,
+       (SELECT MIN(e.created_at) FROM application_events e
+        WHERE e.application_id = a.id AND e.kind = 'email') AS first_reply_at
+FROM applications a;
+
+-- --------------------------------------------------------- answers and runs --
+
+CREATE TABLE IF NOT EXISTS answers (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    key              TEXT NOT NULL UNIQUE,
+    question_pattern TEXT,
+    value            TEXT NOT NULL,
+    confidence       REAL NOT NULL DEFAULT 1.0,
+    updated_at       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS runs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at   TEXT NOT NULL,
+    ended_at     TEXT,
+    found        INTEGER NOT NULL DEFAULT 0,
+    scored       INTEGER NOT NULL DEFAULT 0,
+    applied      INTEGER NOT NULL DEFAULT 0,
+    failed       INTEGER NOT NULL DEFAULT 0,
+    tokens_in    INTEGER NOT NULL DEFAULT 0,
+    tokens_out   INTEGER NOT NULL DEFAULT 0
+);

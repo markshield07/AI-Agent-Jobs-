@@ -12,8 +12,8 @@ Architecture and the reasoning behind each decision:
 | Phase | What it covers | State |
 |---|---|---|
 | 1 | Scaffold, database schema, resume intake, fact base | done |
-| 2 | Discovery, dedupe, enrichment, scoring | **this branch** |
-| 3 | Tailoring and PDF rendering | not started |
+| 2 | Discovery, dedupe, enrichment, scoring | done |
+| 3 | Tailoring and PDF rendering | **this branch** |
 | 4 | Submission | not started |
 | 5 | Response tracking | not started |
 | 6 | Dashboard and scheduling | not started |
@@ -39,6 +39,10 @@ pip install -e ".[dev]"
 cp .env.example .env
 jobagent serve                # http://127.0.0.1:8000
 ```
+
+PDF rendering uses WeasyPrint, which needs Pango and Cairo on the machine
+(`brew install pango` on macOS, `apt install libpango-1.0-0 libpangoft2-1.0-0`
+on Debian and Ubuntu). Everything else is pure Python.
 
 ### Which model bill
 
@@ -92,6 +96,34 @@ Each stage reads its input back from the database, so a run that dies half
 way strands nothing. Without a usable model backend the run still completes
 and the survivors wait, marked pending, for the next one.
 
+### Tailoring the resume
+
+```bash
+jobagent tailor --queued          # every queued job that has no resume yet
+jobagent tailor <job id>          # or one job, from the dashboard's list
+```
+
+For each job this makes a **variant**: a resume built from your fact base for
+that posting, rendered to an ATS-safe PDF under `data/variants/`, with a cover
+letter alongside. The model does not write the resume. It writes a plan: which
+facts to show, in what order, and how each is phrased, and every bullet cites
+the fact it came from. Employers, titles and dates are rendered from the facts
+themselves, so the model cannot touch them.
+
+Before anything is rendered, a validator checks the plan without a model:
+
+- every cited fact exists and is active, and sits in the right section;
+- no bullet names a technology, tool or acronym its fact does not state, and
+  no number appears that the fact does not carry;
+- nothing on your never-claim list appears anywhere;
+- the cover letter is held to the same rule against the whole fact base.
+
+A plan that fails goes back to the model once with the exact objections. A
+second failure is kept as a *rejected* variant with its issues, so you can see
+what the guardrail caught, and nothing is rendered. A keyword-coverage gate
+applies the same discipline to usefulness: a variant that mentions fewer of the
+posting's keywords than your uploaded resume did is sent back too.
+
 Tests and linting:
 
 ```bash
@@ -120,6 +152,12 @@ returns the existing record instead of parsing it again.
 | `GET`/`PATCH` | `/api/jobs/{id}` | One job; `PATCH` to queue or skip it by hand |
 | `GET` | `/api/runs` | Past discovery runs with their counts and token use |
 | `POST` | `/api/runs/discover` | Start a run in the background; `?wait=true` returns the report |
+| `POST` | `/api/jobs/{id}/tailor` | Tailor the resume to this job now; returns the variant, ready or rejected |
+| `GET` | `/api/jobs/{id}/variants` | Every variant made for this job |
+| `GET` | `/api/variants` | Recent variants across jobs |
+| `GET` | `/api/variants/{id}` | One variant: plan, coverage, issues, cover letter |
+| `GET` | `/api/variants/{id}/pdf` | The rendered PDF |
+| `GET` | `/api/variants/{id}/cover-letter` | The cover letter as plain text |
 
 Interactive docs at `/docs` while the server is running.
 
@@ -149,6 +187,14 @@ src/jobagent/
 │   │   └── classify.py The batched model pass that tiers the survivors
 │   ├── store.py        Jobs and runs on disk; dedupe on the way in
 │   └── pipeline.py     One run, stage by stage
+├── tailor/
+│   ├── models.py       The plan the model returns: facts to show, cited per bullet
+│   ├── keywords.py     What the posting asks for; how much of it a text covers
+│   ├── generate.py     The prompts and the two model calls (resume plan, letter)
+│   ├── validate.py     The guardrail: nothing the facts do not state gets through
+│   ├── render.py       Plan + facts to ATS-safe HTML, text and PDF (Jinja2, WeasyPrint)
+│   ├── store.py        Variants on disk, ready or rejected
+│   └── pipeline.py     Plan, check, gate, render, keep
 ├── api/                FastAPI routes
 └── main.py             App factory and the command line
 ```
@@ -159,7 +205,8 @@ Two invariants the schema enforces and the rest of the code assumes:
   from its newest event by the `application_status` view, never written in
   place. Response rate and time-to-first-reply are computed from the gaps
   between events, and a status column overwrites that history.
-- **`resume_facts` is the only source a tailored resume may draw from.**
+- **`resume_facts` is the only source a tailored resume may draw from.** The
+  validator in `tailor/validate.py` is where that is enforced.
 
 ## Prior art
 

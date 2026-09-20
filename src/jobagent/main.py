@@ -20,6 +20,7 @@ from fastapi import FastAPI
 
 from jobagent.api.discovery import router as discovery_router
 from jobagent.api.routes import router
+from jobagent.api.tailoring import router as tailoring_router
 from jobagent.config import Settings, get_settings
 from jobagent.db.database import open_database
 
@@ -38,9 +39,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             app.state.db.close()
 
-    app = FastAPI(title="Job Agent", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="Job Agent", version="0.3.0", lifespan=lifespan)
     app.include_router(router)
     app.include_router(discovery_router)
+    app.include_router(tailoring_router)
     return app
 
 
@@ -84,6 +86,12 @@ def build_parser() -> argparse.ArgumentParser:
     criteria.add_argument(
         "--no-remote", action="store_true", help="Do not count remote as a match."
     )
+
+    tailor = sub.add_parser("tailor", help="Tailor the resume to jobs and render PDFs.")
+    tailor.add_argument("job_ids", nargs="*", help="Job ids to tailor for.")
+    tailor.add_argument("--queued", action="store_true", help="Every queued job without a variant.")
+    tailor.add_argument("--limit", type=int, default=10, help="With --queued: at most this many.")
+    tailor.add_argument("--no-cover-letter", action="store_true")
     return parser
 
 
@@ -177,6 +185,58 @@ def _cmd_criteria(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_tailor(args: argparse.Namespace) -> int:
+    from jobagent.discovery import store as jobs
+    from jobagent.llm.backend import LLMError
+    from jobagent.tailor import store as variants
+    from jobagent.tailor.pipeline import TailorError, tailor_job
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    settings = get_settings()
+    db = open_database(settings.db_path)
+    failures = 0
+    try:
+        conn = db.connection()
+        ids = list(args.job_ids)
+        if args.queued:
+            for job in jobs.list_jobs(conn, status="queued", limit=500):
+                if variants.latest_ready_variant(conn, job["id"]) is None:
+                    ids.append(job["id"])
+                if len(ids) >= args.limit:
+                    break
+        if not ids:
+            print("Nothing to tailor: pass job ids or use --queued.", file=sys.stderr)
+            return 2
+        for jid in ids:
+            try:
+                variant = tailor_job(
+                    conn, jid, settings, with_cover_letter=not args.no_cover_letter
+                )
+            except (TailorError, LLMError) as exc:
+                failures += 1
+                print(f"{jid}: {exc}")
+                continue
+            print(_describe_variant(jid, variant))
+    finally:
+        db.close()
+    return 1 if failures else 0
+
+
+def _describe_variant(jid: str, variant) -> str:
+    cov = f"{variant.keyword_coverage:.0%}" if variant.keyword_coverage is not None else "n/a"
+    base = f"{variant.base_coverage:.0%}" if variant.base_coverage is not None else "n/a"
+    if variant.status == "ready":
+        letter = "with cover letter" if variant.cover_letter else "no cover letter"
+        line = (
+            f"{jid}: ready, keywords {cov} (uploaded resume {base}), {letter}, {variant.pdf_path}"
+        )
+    else:
+        line = f"{jid}: rejected after {variant.attempts} attempts"
+    for issue in variant.issues[:6]:
+        line += f"\n    {issue.where}: {issue.message}" + (f" [{issue.term}]" if issue.term else "")
+    return line
+
+
 def run(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     command = args.command or "serve"
@@ -186,6 +246,8 @@ def run(argv: Sequence[str] | None = None) -> None:
         code = _cmd_serve(args)
     elif command == "discover":
         code = _cmd_discover(args)
+    elif command == "tailor":
+        code = _cmd_tailor(args)
     else:
         code = _cmd_criteria(args)
     if code:

@@ -112,13 +112,26 @@ CREATE TABLE IF NOT EXISTS never_claim (
     created_at TEXT NOT NULL
 );
 
+-- One attempt to tailor the resume to one job. `content` is the model's plan
+-- (which facts, in what order, phrased how); the PDF is rendered from it and
+-- the facts, never from free text. Rejected attempts are kept with their issues.
 CREATE TABLE IF NOT EXISTS resume_variants (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id           TEXT REFERENCES jobs(id) ON DELETE CASCADE,
     base_id          INTEGER REFERENCES resume_base(id) ON DELETE SET NULL,
     facts_used       TEXT NOT NULL,          -- JSON array of resume_facts.id
-    keyword_coverage REAL,
+    keyword_coverage REAL,                   -- share of posting keywords the variant covers
+    base_coverage    REAL,                   -- the same share for the uploaded resume
+    keywords         TEXT,                   -- JSON array: posting keywords considered
+    keywords_missing TEXT,                   -- JSON array: keywords no fact supports
+    content          TEXT,                   -- JSON TailoredResume
+    cover_letter     TEXT,                   -- JSON CoverLetter, or NULL
+    status           TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready','rejected')),
+    issues           TEXT,                   -- JSON array of validator issues
     pdf_path         TEXT,
+    tokens_in        INTEGER NOT NULL DEFAULT 0,
+    tokens_out       INTEGER NOT NULL DEFAULT 0,
+    attempts         INTEGER NOT NULL DEFAULT 1,
     created_at       TEXT NOT NULL
 );
 

@@ -13,11 +13,11 @@ def test_wal_and_foreign_keys_are_on(conn):
 
 
 def test_schema_is_versioned_once(conn):
-    from jobagent.db.database import init_db
+    from jobagent.db.database import SCHEMA_VERSION, init_db
 
     init_db(conn)  # re-applying must not add a second version row
     rows = conn.execute("SELECT version FROM schema_version").fetchall()
-    assert [r["version"] for r in rows] == [1]
+    assert [r["version"] for r in rows] == [SCHEMA_VERSION]
 
 
 def test_transaction_rolls_back(conn):
@@ -118,3 +118,33 @@ def test_each_thread_gets_its_own_connection(db):
     assert db.connection().execute("SELECT COUNT(*) AS n FROM never_claim").fetchone()["n"] == 1, (
         "the write is visible from the original thread"
     )
+
+
+def test_init_db_migrates_a_version_one_database(tmp_path):
+    """A database made before phase 3 gains the variant columns and records version 2."""
+    from jobagent.db.database import SCHEMA_VERSION, connect, init_db
+
+    conn = connect(tmp_path / "old.db")
+    init_db(conn)
+    conn.executescript(
+        """
+        DROP TABLE resume_variants;
+        CREATE TABLE resume_variants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT REFERENCES jobs(id) ON DELETE CASCADE,
+            base_id INTEGER REFERENCES resume_base(id) ON DELETE SET NULL,
+            facts_used TEXT NOT NULL, keyword_coverage REAL, pdf_path TEXT,
+            created_at TEXT NOT NULL
+        );
+        DELETE FROM schema_version;
+        INSERT INTO schema_version (version, applied_at) VALUES (1, 'then');
+        """
+    )
+
+    init_db(conn)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(resume_variants)")}
+    assert {"content", "cover_letter", "status", "issues", "attempts"} <= columns
+    assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == SCHEMA_VERSION
+
+    init_db(conn)  # a second start is a no-op, not a duplicate-column error
+    assert conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 2

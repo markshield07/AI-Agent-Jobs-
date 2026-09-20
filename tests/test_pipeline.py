@@ -26,13 +26,14 @@ STRONG = RawJob(
     salary_min=150_000,
     salary_max=190_000,
 )
+# Clears the rules gate (remote, a few keywords) so the model gets to tier it.
 WEAK = RawJob(
     url="https://jobs.lever.co/beta/2",
     title="Software Engineer",
     company="Beta",
     source="lever",
-    location="Austin, TX",
-    description="We need someone who knows Python. " * 20,
+    location="Remote",
+    description="We need someone who knows Python, Docker and Postgres. " * 20,
 )
 OFF_TOPIC = RawJob(
     url="https://example.com/sales",

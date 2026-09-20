@@ -15,30 +15,64 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at TEXT    NOT NULL
 );
 
+-- ------------------------------------------------------- settings and runs --
+
+-- Small JSON documents the dashboard edits in place: search criteria, later
+-- schedule and apply-mode.
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- One row per discovery run; the dashboard's run feed and cost tiles read this.
+CREATE TABLE IF NOT EXISTS runs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at   TEXT NOT NULL,
+    ended_at     TEXT,
+    found        INTEGER NOT NULL DEFAULT 0,
+    scored       INTEGER NOT NULL DEFAULT 0,
+    applied      INTEGER NOT NULL DEFAULT 0,
+    failed       INTEGER NOT NULL DEFAULT 0,
+    tokens_in    INTEGER NOT NULL DEFAULT 0,
+    tokens_out   INTEGER NOT NULL DEFAULT 0
+);
+
 -- ---------------------------------------------------------------- discovery --
 
 CREATE TABLE IF NOT EXISTS jobs (
-    id           TEXT PRIMARY KEY,           -- sha256(url + title + company)[:16]
-    url          TEXT NOT NULL UNIQUE,
-    title        TEXT NOT NULL,
-    company      TEXT NOT NULL,
-    source       TEXT NOT NULL,              -- greenhouse | lever | ashby | linkedin | indeed | ...
-    location     TEXT,
-    description  TEXT,
-    ats_type     TEXT,
-    apply_url    TEXT,
-    salary_min   INTEGER,
-    salary_max   INTEGER,
-    score        INTEGER,                    -- 0-100, deterministic pass
-    tier         INTEGER,                    -- 1-4, model pass (NULL if rules-rejected)
-    score_reason TEXT,
-    status       TEXT NOT NULL DEFAULT 'pending'
+    id            TEXT PRIMARY KEY,          -- sha256(canonical url + title + company)[:16]
+    url           TEXT NOT NULL UNIQUE,
+    title         TEXT NOT NULL,
+    company       TEXT NOT NULL,
+    source        TEXT NOT NULL,             -- greenhouse | lever | ashby | indeed | linkedin | ...
+    location      TEXT,
+    description   TEXT,
+    ats_type      TEXT,
+    apply_url     TEXT,
+    salary_min    INTEGER,
+    salary_max    INTEGER,
+    posted_at     TEXT,
+    remote        INTEGER,                   -- 1/0, NULL when the source did not say
+    external_id   TEXT,                      -- the source's own id, when it has one
+    score         INTEGER,                   -- 0-100 from the rules pass
+    score_reason  TEXT,
+    tier          INTEGER,                   -- 1-4 from the model pass; NULL if rules rejected it
+    fit_score     INTEGER,                   -- 0-100 from the model pass
+    category      TEXT,                      -- e.g. "Backend Engineering", for the dashboard
+    tier_reason   TEXT,
+    status        TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending','skipped','queued','applied','failed','needs_review')),
-    scraped_at   TEXT NOT NULL
+    run_id        INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+    scraped_at    TEXT NOT NULL,
+    enriched_at   TEXT,
+    scored_at     TEXT,
+    classified_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, score DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_scraped ON jobs(scraped_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_run ON jobs(run_id);
 
 -- ------------------------------------------------------------- the fact base --
 
@@ -133,7 +167,7 @@ SELECT a.id AS application_id,
         WHERE e.application_id = a.id AND e.kind = 'email') AS first_reply_at
 FROM applications a;
 
--- --------------------------------------------------------- answers and runs --
+-- ------------------------------------------------------------------ answers --
 
 CREATE TABLE IF NOT EXISTS answers (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,14 +178,3 @@ CREATE TABLE IF NOT EXISTS answers (
     updated_at       TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS runs (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at   TEXT NOT NULL,
-    ended_at     TEXT,
-    found        INTEGER NOT NULL DEFAULT 0,
-    scored       INTEGER NOT NULL DEFAULT 0,
-    applied      INTEGER NOT NULL DEFAULT 0,
-    failed       INTEGER NOT NULL DEFAULT 0,
-    tokens_in    INTEGER NOT NULL DEFAULT 0,
-    tokens_out   INTEGER NOT NULL DEFAULT 0
-);

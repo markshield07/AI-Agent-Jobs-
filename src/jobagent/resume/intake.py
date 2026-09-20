@@ -9,6 +9,7 @@ from pathlib import Path
 from jobagent.answers import set_answers
 from jobagent.config import Settings
 from jobagent.db.database import transaction, utcnow
+from jobagent.llm.backend import Completer, resolve_backend
 from jobagent.resume import parser as resume_parser
 from jobagent.resume.extract import content_sha, extract_text, suffix_of
 from jobagent.resume.facts import add_facts
@@ -54,16 +55,18 @@ def store_resume(
 
 
 def ingest_resume(
-    conn: sqlite3.Connection, data: bytes, filename: str, settings: Settings
+    conn: sqlite3.Connection,
+    data: bytes,
+    filename: str,
+    settings: Settings,
+    completer: Completer | None = None,
 ) -> IntakeResult:
     """Store an uploaded resume and parse it into the fact base."""
     base_id, text, already = store_resume(conn, data, filename, settings)
     if already:
         return IntakeResult(base_id, filename, [], already_uploaded=True)
 
-    parsed = resume_parser.parse_resume(
-        text, model=settings.model, api_key=settings.anthropic_api_key
-    )
+    parsed = resume_parser.parse_resume(text, completer=completer or resolve_backend(settings))
     fact_ids = add_facts(conn, resume_parser.to_facts(parsed, base_id=base_id))
 
     contact = resume_parser.contact_answers(parsed.contact)

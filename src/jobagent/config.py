@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -12,7 +14,13 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="JOBAGENT_", extra="ignore")
 
     data_dir: Path = Path("./data")
+
+    # Which way model calls go. `auto` uses the API if ANTHROPIC_API_KEY is set,
+    # otherwise the `claude` command line on your subscription login.
+    llm_backend: Literal["auto", "api", "claude-code"] = "auto"
     model: str = "claude-opus-5"
+    claude_code_executable: str = "claude"
+    claude_code_model: str | None = None
 
     # Read without the JOBAGENT_ prefix so it matches what the Anthropic SDK expects.
     anthropic_api_key: str | None = None
@@ -31,8 +39,6 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    import os
-
     settings = Settings()
     if settings.anthropic_api_key is None:
         settings.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")

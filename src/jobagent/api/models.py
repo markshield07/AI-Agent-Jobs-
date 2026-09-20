@@ -46,3 +46,14 @@ class UploadOut(BaseModel):
     filename: str
     facts_created: int
     already_uploaded: bool
+
+
+class JobStatusIn(BaseModel):
+    """A status a person may set by hand. `applied` and `failed` belong to the submitter."""
+
+    status: Literal["pending", "queued", "skipped", "needs_review"]
+
+
+class DiscoverOut(BaseModel):
+    run_id: int
+    report: dict[str, Any] | None = None

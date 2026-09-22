@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Statements that bring a database created at an earlier version up to date.
 # schema.sql creates every table in its newest shape, so a fresh database never
@@ -36,6 +36,10 @@ _MIGRATIONS: dict[int, list[str]] = {
         "ALTER TABLE resume_variants ADD COLUMN tokens_out INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE resume_variants ADD COLUMN attempts INTEGER NOT NULL DEFAULT 1",
     ],
+    # Phase 4: `submission_attempts` is created by schema.sql (IF NOT EXISTS)
+    # and the status view is rebuilt there on every start; only the new
+    # column needs a statement.
+    3: ["ALTER TABLE applications ADD COLUMN created_at TEXT"],
 }
 _SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 

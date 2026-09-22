@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Helios Systems - Backend Engineer</title>
+<!--
+  An Ashby hosted application page (jobs.ashbyhq.com/<company>/<job-id>/application), as
+  the reference repos describe it: _systemfield_name and _systemfield_email, UUID ids
+  bound by label[for], a resume parser that fills the contact boxes itself behind an
+  "Autofilling..." banner, and a Cloudflare Turnstile on some boards.
+
+  The resume parser is the point of this page. Attaching the resume shows the banner for
+  700ms and then writes the name, email and phone from what it "read" - which here is
+  deliberately wrong. A handler that fills the boxes before the file, or does not wait
+  for the banner, ends up submitting the parser's version instead of what is on file.
+
+  Variants, chosen with ?variant=...:
+    apply_button  the form is behind [data-testid="apply-button"]
+    turnstile     a Cloudflare Turnstile challenge appears after the button
+    needs_input   adds a required start-date question that nothing on file answers
+-->
+<style>
+  body { font-family: -apple-system, Helvetica, Arial, sans-serif; margin: 0; color: #16181d; }
+  .hidden { display: none; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px; }
+  ._field { margin: 16px 0; }
+  ._field label { display: block; font-weight: 500; margin-bottom: 4px; }
+  ._field input[type=text], ._field input[type=email], ._field input[type=tel],
+  ._field textarea, ._field select { width: 100%; padding: 7px; box-sizing: border-box; }
+  #file-resume { display: none; }
+  ._attach { display: inline-block; padding: 6px 10px; border: 1px solid #999; cursor: pointer; }
+  #autofill-banner { background: #eef3ff; border: 1px solid #b9ccff; padding: 8px 12px; margin: 12px 0; }
+  fieldset { border: 0; padding: 0; margin: 16px 0; }
+  legend { font-weight: 500; margin-bottom: 4px; }
+  ._submit { padding: 10px 18px; background: #16181d; color: #fff; border: 0; cursor: pointer; }
+  .cf-frame { width: 300px; height: 65px; border: 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Helios Systems</h1>
+  <h2>Backend Engineer</h2>
+  <p>Remote (US)</p>
+
+  <button type="button" data-testid="apply-button" class="hidden" id="apply-button">Apply for this Job</button>
+
+  <div id="autofill-banner" class="hidden">Autofilling your application from your resume…</div>
+
+  <form id="application-form" novalidate>
+    <div class="_field">
+      <label for="f-resume">Resume</label>
+      <span class="_attach" id="attach-resume">Upload File</span>
+      <input type="file" id="file-resume" name="_systemfield_resume" accept=".pdf,.doc,.docx">
+      <span id="resume-name"></span>
+    </div>
+    <div class="_field">
+      <label for="f-name">Name<span aria-hidden="true">*</span></label>
+      <input type="text" id="f-name" name="_systemfield_name" required>
+    </div>
+    <div class="_field">
+      <label for="f-email">Email<span aria-hidden="true">*</span></label>
+      <input type="email" id="f-email" name="_systemfield_email" required>
+    </div>
+    <div class="_field">
+      <label for="f-phone">Phone</label>
+      <input type="tel" id="f-phone" name="_systemfield_phone">
+    </div>
+    <div class="_field">
+      <label for="a3f19c7e-4b2d-4f81-9c0a-7e5d6b3a1f22">LinkedIn</label>
+      <input type="text" id="a3f19c7e-4b2d-4f81-9c0a-7e5d6b3a1f22" name="a3f19c7e-4b2d-4f81-9c0a-7e5d6b3a1f22">
+    </div>
+    <div class="_field">
+      <label for="b7e24d10-9a3c-4e66-8f1b-2c4d5e6f7a80">Cover letter</label>
+      <textarea id="b7e24d10-9a3c-4e66-8f1b-2c4d5e6f7a80" name="b7e24d10-9a3c-4e66-8f1b-2c4d5e6f7a80"></textarea>
+    </div>
+    <div class="_field" data-variant="needs_input">
+      <label for="c8f35e21-0b4d-4f77-9e2c-3d5e6f7a8b91">When can you start?<span aria-hidden="true">*</span></label>
+      <input type="text" id="c8f35e21-0b4d-4f77-9e2c-3d5e6f7a8b91" name="c8f35e21-0b4d-4f77-9e2c-3d5e6f7a8b91" required>
+    </div>
+    <fieldset id="auth-group">
+      <legend>Are you legally authorized to work in the United States?<span aria-hidden="true">*</span></legend>
+      <label><input type="radio" name="d9a46f32-1c5e-4a88-8f3d-4e6f7a8b9c02" value="Yes" required> Yes</label>
+      <label><input type="radio" name="d9a46f32-1c5e-4a88-8f3d-4e6f7a8b9c02" value="No"> No</label>
+    </fieldset>
+    <div id="turnstile-slot"></div>
+    <button type="submit" class="_submit">Submit Application</button>
+  </form>
+
+  <div id="confirmation" class="hidden">
+    <h3>Application received</h3>
+    <p>Thanks for applying to Helios Systems. We will be in touch.</p>
+  </div>
+</main>
+
+<script>
+(function () {
+  var variant = new URLSearchParams(location.search).get('variant') || '';
+  Array.prototype.forEach.call(document.querySelectorAll('[data-variant]'), function (el) {
+    if (el.getAttribute('data-variant') !== variant) el.parentNode.removeChild(el);
+  });
+
+  var form = document.getElementById('application-form');
+  if (variant === 'apply_button') {
+    form.classList.add('hidden');
+    var button = document.getElementById('apply-button');
+    button.classList.remove('hidden');
+    button.addEventListener('click', function () {
+      form.classList.remove('hidden');
+      button.classList.add('hidden');
+    });
+  }
+
+  var banner = document.getElementById('autofill-banner');
+  var resume = document.getElementById('file-resume');
+  document.getElementById('attach-resume').addEventListener('click', function () { resume.click(); });
+  resume.addEventListener('change', function () {
+    if (!resume.files.length) return;
+    document.getElementById('resume-name').textContent = resume.files[0].name;
+    banner.classList.remove('hidden');
+    window.__autofillRan = true;
+    // What Ashby's parser made of the resume. It is wrong on purpose: what is
+    // on file must win, which means it must be written after this.
+    setTimeout(function () {
+      document.getElementById('f-name').value = 'M. SHIELD';
+      document.getElementById('f-email').value = 'parsed@resume.invalid';
+      document.getElementById('f-phone').value = '000';
+      banner.classList.add('hidden');
+      window.__autofillDone = true;
+    }, 700);
+  });
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (variant === 'turnstile') {
+      var frame = document.createElement('iframe');
+      frame.className = 'cf-frame';
+      frame.title = 'Widget containing a Cloudflare security challenge';
+      frame.setAttribute('src', 'https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/rcv0/0/fixture');
+      frame.setAttribute('srcdoc', '<p style="font-family:sans-serif">Verify you are human</p>');
+      document.getElementById('turnstile-slot').appendChild(frame);
+      return;
+    }
+    var record = {};
+    new FormData(form).forEach(function (value, key) {
+      record[key] = (typeof File !== 'undefined' && value instanceof File) ? value.name : value;
+    });
+    window.__submitted = record;
+    form.classList.add('hidden');
+    document.getElementById('confirmation').classList.remove('hidden');
+  });
+})();
+</script>
+</body>
+</html>

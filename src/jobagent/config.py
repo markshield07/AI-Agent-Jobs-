@@ -35,6 +35,20 @@ class Settings(BaseSettings):
     headless: bool = True
     browser_executable: str | None = None  # a Chromium binary, when Playwright's is absent
 
+    # Response tracking. The mailbox is opened read-only and nothing is ever
+    # sent, moved or deleted. The password is read from the environment or
+    # .env at startup and never written to the database.
+    imap_host: str | None = None
+    imap_port: int = 993
+    imap_user: str | None = None
+    imap_password: str | None = None
+    imap_folder: str = "INBOX"
+    imap_ssl: bool = True
+    inbox_lookback_days: int = 30  # how far back a first poll reads
+    inbox_poll_limit: int = 200  # messages per poll
+    inbox_model_triage: bool = True  # ask the model about replies the rules cannot read
+    inbox_min_confidence: float = 0.6  # below this a reply moves no status
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "jobagent.db"

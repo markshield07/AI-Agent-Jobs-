@@ -1,0 +1,23 @@
+Message-ID: <int-003@acmerobotics.com>
+Date: Tue, 22 Sep 2026 11:02:45 +0000
+From: Dana Okafor <dana@acmerobotics.com>
+To: mark@example.com
+Subject: Senior Backend Engineer - next steps
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="b1"
+
+--b1
+Content-Type: text/plain; charset="utf-8"
+
+Hi Mark,
+
+Great news. We would like to invite you to an interview with the platform
+team for the Senior Backend Engineer role. Please book a time that works
+for you here: https://calendly.com/acme-dana/45min
+
+Dana
+--b1
+Content-Type: text/html; charset="utf-8"
+
+<html><body><p>Ignore me, the plain part wins.</p></body></html>
+--b1--

@@ -333,6 +333,36 @@ def validate_cover_letter(
     return report.items
 
 
+def validate_text(
+    text: str,
+    facts: Mapping[int, Fact],
+    never_claim: Iterable[str],
+    *,
+    allow: Iterable[str] = (),
+    where: str = "answer",
+) -> list[Issue]:
+    """C1 to C3 on one piece of free text, such as an answer to a form question.
+
+    Checked the way a cover letter paragraph is: against every active fact plus
+    the strings in `allow`. [] means every term and number in it is on file.
+    """
+    report = _Report()
+    pool = fact_pool_text(fact for fact in facts.values() if fact.active)
+    allowed = "\n".join([pool, *_distinct(allow)])
+    _check_text(
+        report,
+        where,
+        text.strip(),
+        allowed=allowed,
+        numbers=_numbers(allowed),
+        words=_DATE_WORDS | _LETTER_WORDS,
+        forbidden=_distinct(never_claim),
+        lifted=[],
+        unsupported=TERM_NOT_IN_ANY_FACT,
+    )
+    return report.items
+
+
 # ---------------------------------------------------------------- content --
 
 

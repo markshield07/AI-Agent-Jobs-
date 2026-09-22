@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Northwind Analytics - Staff Data Engineer</title>
+<!--
+  A Greenhouse hosted application page (boards.greenhouse.io/<board>/jobs/<id>), as the
+  reference repos describe it: the canonical ids #first_name #last_name #email #phone
+  #resume #cover_letter, a #candidate-location react-select typeahead that lists nothing
+  until something is typed, custom questions named job_application[answers_attributes][N][...],
+  a yes/no group in a fieldset.checkbox, the EEO selects #gender #hispanic_ethnicity
+  #veteran_status #disability_status, and #submit_app.
+
+  Variants, chosen with ?variant=...:
+    apply_button  the form sits behind a#apply_button, as the older layout does
+    security      after the button the board asks for the code it emailed (#security-input-0)
+    needs_input   adds a required salary question that nothing on file answers
+    error         the submit shows a field error in #application_form .error
+-->
+<style>
+  body { font-family: Helvetica, Arial, sans-serif; margin: 0; color: #1a1a1a; }
+  .hidden { display: none; }
+  #header { padding: 20px 24px; border-bottom: 1px solid #ddd; }
+  #content { max-width: 700px; margin: 0 auto; padding: 16px 24px; }
+  .field { margin: 14px 0; }
+  .field label { display: block; font-weight: 600; margin-bottom: 4px; }
+  .field input[type=text], .field input[type=email], .field input[type=tel],
+  .field select, .field textarea { width: 100%; padding: 6px; box-sizing: border-box; }
+  #resume { display: none; }
+  .attach { display: inline-block; padding: 6px 10px; border: 1px solid #888; cursor: pointer; }
+  fieldset.checkbox { border: 0; padding: 0; margin: 14px 0; }
+  fieldset.checkbox legend { font-weight: 600; margin-bottom: 4px; }
+  .select__menu { border: 1px solid #ccc; background: #fff; max-height: 160px; overflow: auto; }
+  .select__option { padding: 4px 8px; cursor: pointer; }
+  .error { color: #b3261e; margin: 8px 0; }
+  #submit_app { padding: 10px 18px; background: #24a47f; color: #fff; border: 0; cursor: pointer; }
+  #security-modal { border: 1px solid #ccc; padding: 16px; margin-top: 16px; }
+</style>
+</head>
+<body>
+
+<div id="header"><h1>Northwind Analytics</h1></div>
+
+<div id="content">
+  <h2 class="app-title">Staff Data Engineer</h2>
+  <div class="location">Remote - United States</div>
+  <div id="content-intro"><p>We keep the warehouse honest. Apply below.</p></div>
+
+  <a id="apply_button" class="hidden" href="#app">Apply for this Job</a>
+
+  <form id="application_form" method="post" action="/northwind/jobs/4102938/applications" enctype="multipart/form-data" novalidate>
+    <div id="application-fields">
+      <div class="field">
+        <label for="first_name">First Name <span class="asterisk">*</span></label>
+        <input type="text" id="first_name" name="job_application[first_name]" autocomplete="given-name" required>
+      </div>
+      <div class="field">
+        <label for="last_name">Last Name <span class="asterisk">*</span></label>
+        <input type="text" id="last_name" name="job_application[last_name]" autocomplete="family-name" required>
+      </div>
+      <div class="field">
+        <label for="email">Email <span class="asterisk">*</span></label>
+        <input type="email" id="email" name="job_application[email]" required>
+      </div>
+      <div class="field">
+        <label for="phone">Phone</label>
+        <input type="tel" id="phone" name="job_application[phone]">
+      </div>
+
+      <div class="field" id="location-field">
+        <label for="candidate-location">Location (City) <span class="asterisk">*</span></label>
+        <!-- react-select: the box lists nothing until something is typed. -->
+        <input type="text" id="candidate-location" class="select__input" role="combobox"
+               aria-autocomplete="list" aria-expanded="false" autocomplete="off" required>
+        <div class="select__menu hidden" id="location-menu"></div>
+      </div>
+
+      <div class="field">
+        <label for="resume">Resume/CV <span class="asterisk">*</span></label>
+        <span class="attach" id="resume-attach">Attach</span>
+        <input type="file" id="resume" name="job_application[resume]" accept=".pdf,.doc,.docx,.txt,.rtf" required>
+        <span id="resume-name"></span>
+      </div>
+      <div class="field">
+        <label for="cover_letter">Cover Letter</label>
+        <span class="attach" id="cover-attach">Attach</span>
+        <input type="file" id="cover_letter" name="job_application[cover_letter]" accept=".pdf,.doc,.docx,.txt,.rtf">
+        <span id="cover-name"></span>
+      </div>
+
+      <div class="field">
+        <label for="job_application_answers_attributes_0_text_value">LinkedIn Profile</label>
+        <input type="text" id="job_application_answers_attributes_0_text_value"
+               name="job_application[answers_attributes][0][text_value]">
+      </div>
+      <div class="field">
+        <label for="job_application_answers_attributes_1_text_value">Website</label>
+        <input type="text" id="job_application_answers_attributes_1_text_value"
+               name="job_application[answers_attributes][1][text_value]">
+      </div>
+      <div class="field">
+        <label for="job_application_answers_attributes_2_text_value">What draws you to Northwind Analytics? <span class="asterisk">*</span></label>
+        <textarea id="job_application_answers_attributes_2_text_value"
+                  name="job_application[answers_attributes][2][text_value]" required></textarea>
+      </div>
+      <div class="field">
+        <label for="job_application_answers_attributes_3_boolean_value">Are you legally authorized to work in the United States? <span class="asterisk">*</span></label>
+        <select id="job_application_answers_attributes_3_boolean_value"
+                name="job_application[answers_attributes][3][boolean_value]" required>
+          <option value="">--</option>
+          <option value="1">Yes</option>
+          <option value="0">No</option>
+        </select>
+      </div>
+      <div class="field" data-variant="needs_input">
+        <label for="job_application_answers_attributes_4_text_value">What are your salary expectations? <span class="asterisk">*</span></label>
+        <input type="text" id="job_application_answers_attributes_4_text_value"
+               name="job_application[answers_attributes][4][text_value]" required>
+      </div>
+      <div class="field">
+        <label for="job_application_answers_attributes_5_text_value">How did you hear about this job?</label>
+        <select id="job_application_answers_attributes_5_text_value"
+                name="job_application[answers_attributes][5][text_value]">
+          <option value="">--</option>
+          <option>LinkedIn</option>
+          <option>Job board</option>
+          <option>A friend</option>
+          <option>Other</option>
+        </select>
+      </div>
+
+      <fieldset class="checkbox">
+        <legend>Which of these have you worked with?</legend>
+        <label><input type="checkbox" name="job_application[answers_attributes][6][array_value][]" value="Python"> Python</label>
+        <label><input type="checkbox" name="job_application[answers_attributes][6][array_value][]" value="Kubernetes"> Kubernetes</label>
+        <label><input type="checkbox" name="job_application[answers_attributes][6][array_value][]" value="dbt"> dbt</label>
+      </fieldset>
+    </div>
+
+    <div id="demographic_questions">
+      <h3>U.S. Standard Demographic Questions</h3>
+      <p>Northwind Analytics is an equal opportunity employer. Completion is voluntary.</p>
+      <div class="field">
+        <label for="gender">Gender</label>
+        <select id="gender" name="job_application[gender]">
+          <option value="">Please select</option>
+          <option>Male</option>
+          <option>Female</option>
+          <option>Decline To Self Identify</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="hispanic_ethnicity">Are you Hispanic/Latino?</label>
+        <select id="hispanic_ethnicity" name="job_application[hispanic_ethnicity]">
+          <option value="">Please select</option>
+          <option>Yes</option>
+          <option>No</option>
+          <option>Decline To Self Identify</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="veteran_status">Veteran Status</label>
+        <select id="veteran_status" name="job_application[veteran_status]">
+          <option value="">Please select</option>
+          <option>I identify as one or more of the classifications of a protected veteran</option>
+          <option>I am not a protected veteran</option>
+          <option>I don't wish to answer</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="disability_status">Disability Status</label>
+        <select id="disability_status" name="job_application[disability_status]">
+          <option value="">Please select</option>
+          <option>Yes, I have a disability, or have had one in the past</option>
+          <option>No, I don't have a disability</option>
+          <option>I don't want to answer</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="field">
+      <label><input type="checkbox" id="marketing_opt_in" name="job_application[marketing_opt_in]"> Keep me updated about future roles at Northwind Analytics.</label>
+    </div>
+
+    <div class="error hidden" id="form-error"></div>
+    <div class="g-recaptcha" data-sitekey="6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI" data-size="invisible"></div>
+    <button type="submit" id="submit_app">Submit Application</button>
+  </form>
+
+  <div id="security-modal" class="hidden">
+    <h3>Confirm your email</h3>
+    <p>We sent a code to your email address. Enter it to finish your application.</p>
+    <input type="text" id="security-input-0" maxlength="6" aria-label="Verification code">
+    <button type="button" id="security-submit">Confirm</button>
+  </div>
+
+  <div id="application_confirmation" class="hidden">
+    <h3>Thank you for applying</h3>
+    <p>Your application has been submitted to Northwind Analytics.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  var variant = new URLSearchParams(location.search).get('variant') || '';
+  Array.prototype.forEach.call(document.querySelectorAll('[data-variant]'), function (el) {
+    if (el.getAttribute('data-variant') !== variant) el.parentNode.removeChild(el);
+  });
+
+  var form = document.getElementById('application_form');
+  if (variant === 'apply_button') {
+    form.classList.add('hidden');
+    var button = document.getElementById('apply_button');
+    button.classList.remove('hidden');
+    button.addEventListener('click', function (e) {
+      e.preventDefault();
+      form.classList.remove('hidden');
+      button.classList.add('hidden');
+    });
+  }
+
+  // #candidate-location: a react-select typeahead. Nothing is listed until
+  // something is typed, and a click on an option fills the box.
+  var loc = document.getElementById('candidate-location');
+  var menu = document.getElementById('location-menu');
+  var places = ['Austin, TX, USA', 'Boston, MA, USA', 'Denver, CO, USA', 'Berlin, Germany'];
+  function render(hits) {
+    menu.innerHTML = '';
+    hits.forEach(function (p) {
+      var d = document.createElement('div');
+      d.className = 'select__option'; d.setAttribute('role', 'option'); d.textContent = p;
+      menu.appendChild(d);
+    });
+    menu.classList.toggle('hidden', hits.length === 0);
+    loc.setAttribute('aria-expanded', hits.length ? 'true' : 'false');
+  }
+  loc.addEventListener('input', function () {
+    var typed = loc.value.trim().toLowerCase();
+    render(typed ? places.filter(function (p) { return p.toLowerCase().indexOf(typed.split(',')[0]) === 0; }) : []);
+  });
+  menu.addEventListener('click', function (e) {
+    if (e.target.classList.contains('select__option')) { loc.value = e.target.textContent; render([]); }
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') render([]); });
+
+  [['resume-attach', 'resume', 'resume-name'], ['cover-attach', 'cover_letter', 'cover-name']].forEach(function (t) {
+    var trigger = document.getElementById(t[0]), input = document.getElementById(t[1]), out = document.getElementById(t[2]);
+    trigger.addEventListener('click', function () { input.click(); });
+    input.addEventListener('change', function () { out.textContent = input.files.length ? input.files[0].name : ''; });
+  });
+
+  var errorBox = document.getElementById('form-error');
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    errorBox.classList.add('hidden'); errorBox.textContent = '';
+    var missing = [];
+    Array.prototype.forEach.call(form.querySelectorAll('[required]'), function (el) {
+      var label = form.querySelector('label[for="' + el.id + '"]');
+      var name = label ? label.textContent.replace('*', '').trim() : (el.name || 'A field');
+      var empty = el.type === 'file' ? el.files.length === 0 : !el.value.trim();
+      if (empty && missing.indexOf(name) < 0) missing.push(name);
+    });
+    if (missing.length) {
+      errorBox.textContent = missing.map(function (m) { return m + ' is required.'; }).join(' ');
+      errorBox.classList.remove('hidden');
+      return;
+    }
+    if (variant === 'error') {
+      errorBox.textContent = 'There was a problem with your application. Please review the fields above.';
+      errorBox.classList.remove('hidden');
+      return;
+    }
+    var record = {};
+    new FormData(form).forEach(function (value, key) {
+      var v = (typeof File !== 'undefined' && value instanceof File) ? value.name : value;
+      if (record[key] === undefined) record[key] = v;
+      else record[key] = [].concat(record[key], v);
+    });
+    window.__submitted = record;
+    if (variant === 'security') {
+      document.getElementById('security-modal').classList.remove('hidden');
+      return;
+    }
+    form.classList.add('hidden');
+    document.getElementById('application_confirmation').classList.remove('hidden');
+  });
+})();
+</script>
+</body>
+</html>

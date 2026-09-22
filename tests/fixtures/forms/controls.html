@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Every control</title>
+<!--
+  One page carrying each kind of control the form reader and filler must handle, with the
+  labelling styles the reference repos found in the wild: label[for], a wrapping label, a
+  sibling div that is the label, aria-label, aria-labelledby, a fieldset legend, a
+  placeholder and nothing at all. Used by the form-reader and filler tests.
+-->
+<style>
+  body { font-family: sans-serif; margin: 16px; }
+  .block { margin: 10px 0; }
+  .block .lbl { font-weight: 600; }
+  #file-hidden { display: none; }
+  .gone { display: none; }
+  .menu { border: 1px solid #ccc; }
+  .menu [role=option] { padding: 3px 6px; cursor: pointer; }
+</style>
+</head>
+<body>
+<form id="f" novalidate>
+  <div class="block"><label for="c-text">Plain text</label><input type="text" id="c-text" name="plain"></div>
+  <div class="block"><label>Wrapped <input type="text" name="wrapped"></label></div>
+  <div class="block"><div class="lbl">Sibling label</div><div><input type="text" name="sibling"></div></div>
+  <div class="block"><input type="text" name="aria" aria-label="By aria-label"></div>
+  <div class="block"><span id="lbl-by">By aria-labelledby</span><input type="text" name="labelledby" aria-labelledby="lbl-by"></div>
+  <div class="block"><input type="text" name="placeheld" placeholder="By placeholder"></div>
+  <div class="block"><input type="text" name="nameless"></div>
+
+  <div class="block"><label for="c-email">Email</label><input type="email" id="c-email" name="mail"></div>
+  <div class="block"><label for="c-tel">Phone</label><input type="tel" id="c-tel" name="tel"></div>
+  <div class="block"><label for="c-num">Years</label><input type="number" id="c-num" name="years"></div>
+  <div class="block"><label for="c-date">Start date</label><input type="date" id="c-date" name="when"></div>
+  <div class="block"><label for="c-area">Tell us more</label><textarea id="c-area" name="story"></textarea></div>
+
+  <div class="block"><label for="c-select">Pick one</label>
+    <select id="c-select" name="pick">
+      <option value="">Please select</option>
+      <option value="a">Apples</option>
+      <option value="b">Bananas</option>
+    </select>
+  </div>
+  <div class="block"><label for="c-multi">Pick many</label>
+    <select id="c-multi" name="many" multiple>
+      <option>Red</option><option>Green</option><option>Blue</option>
+    </select>
+  </div>
+
+  <fieldset class="block"><legend>Shipping speed</legend>
+    <label><input type="radio" name="speed" value="slow"> Slow</label>
+    <label><input type="radio" name="speed" value="fast"> Fast</label>
+  </fieldset>
+  <fieldset class="block"><legend>Toppings</legend>
+    <label><input type="checkbox" name="top" value="Cheese"> Cheese</label>
+    <label><input type="checkbox" name="top" value="Olives"> Olives</label>
+  </fieldset>
+  <div class="block"><label><input type="checkbox" name="agree" required> I agree to the terms</label></div>
+
+  <div class="block"><label for="file-hidden">Resume</label>
+    <span id="attach">Attach</span>
+    <input type="file" id="file-hidden" name="doc" accept=".pdf">
+  </div>
+
+  <div class="block"><label for="c-combo">City</label>
+    <input type="text" id="c-combo" role="combobox" aria-autocomplete="list" autocomplete="off" name="city">
+    <div class="menu gone" id="c-menu"></div>
+  </div>
+
+  <div class="block gone"><label for="c-gone">Not shown</label><input type="text" id="c-gone" name="gone"></div>
+  <input type="hidden" name="token" value="x">
+  <button type="submit" id="go">Send</button>
+</form>
+
+<div class="gone" id="err" role="alert">Something went wrong: the email is not valid.</div>
+<div class="gone" id="ok"><h2>Thank you for applying</h2></div>
+
+<script>
+(function () {
+  var combo = document.getElementById('c-combo'), menu = document.getElementById('c-menu');
+  var cities = ['Austin, TX', 'Boston, MA', 'Denver, CO'];
+  function render(hits) {
+    menu.innerHTML = '';
+    hits.forEach(function (c) {
+      var d = document.createElement('div'); d.setAttribute('role', 'option'); d.textContent = c; menu.appendChild(d);
+    });
+    menu.classList.toggle('gone', hits.length === 0);
+  }
+  combo.addEventListener('click', function () { render(cities); });
+  combo.addEventListener('input', function () {
+    var t = combo.value.trim().toLowerCase();
+    render(t ? cities.filter(function (c) { return c.toLowerCase().indexOf(t.split(',')[0]) === 0; }) : cities);
+  });
+  menu.addEventListener('click', function (e) {
+    if (e.target.getAttribute('role') === 'option') { combo.value = e.target.textContent; render([]); }
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') render([]); });
+  document.getElementById('attach').addEventListener('click', function () { document.getElementById('file-hidden').click(); });
+  document.getElementById('f').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var what = new URLSearchParams(location.search).get('on_submit') || 'ok';
+    if (what === 'error') { document.getElementById('err').classList.remove('gone'); return; }
+    if (what === 'nothing') return;
+    document.getElementById('f').classList.add('gone');
+    document.getElementById('ok').classList.remove('gone');
+  });
+})();
+</script>
+</body>
+</html>

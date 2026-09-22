@@ -148,10 +148,11 @@ def test_init_db_migrates_a_version_one_database(tmp_path):
     assert "created_at" in app_columns, "phase 4 added created_at to applications"
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "submission_attempts" in tables
+    assert "inbox_messages" in tables, "phase 5 added the inbox log"
     assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == SCHEMA_VERSION
 
     init_db(conn)  # a second start is a no-op, not a duplicate-column error
-    assert conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 3
+    assert conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 4
 
 
 def test_unsubmitted_application_status_follows_its_newest_attempt(conn):

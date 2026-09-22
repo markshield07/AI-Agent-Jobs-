@@ -1,0 +1,14 @@
+Message-ID: <scr-004@acmerobotics.com>
+Date: Tue, 22 Sep 2026 08:30:00 +0000
+From: "Dana Okafor (Acme Robotics)" <dana@acmerobotics.com>
+To: mark@example.com
+Subject: Quick chat about your application?
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+
+<html><head><style>p { color: red; }</style>
+<script>alert('no')</script></head>
+<body><p>Hi Mark,</p>
+<p>Your application for Senior Backend Engineer stood out. Are you available
+for a quick call this week to hear more about your background?</p>
+<p>Dana</p></body></html>

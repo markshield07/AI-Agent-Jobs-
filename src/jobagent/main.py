@@ -10,6 +10,8 @@ jobagent applications    list applications and what they wait on
 jobagent answer          answer questions a form asked, then try again
 jobagent approve         submit an application left at the button
 jobagent inbox           read replies from the mailbox and record what they say
+jobagent login           sign in to LinkedIn or Indeed once, in a visible browser
+jobagent run             one full cycle: discover, tailor, apply, read replies
 """
 
 from __future__ import annotations
@@ -21,17 +23,22 @@ import sys
 import threading
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from jobagent.api.applications import router as applications_router
 from jobagent.api.discovery import router as discovery_router
 from jobagent.api.inbox import router as inbox_router
 from jobagent.api.routes import router
 from jobagent.api.sessions import router as sessions_router
+from jobagent.api.stats import router as stats_router
 from jobagent.api.tailoring import router as tailoring_router
 from jobagent.config import Settings, get_settings
 from jobagent.db.database import open_database
+
+DASHBOARD_DIR = Path(__file__).parent / "dashboard"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -52,13 +59,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             app.state.db.close()
 
-    app = FastAPI(title="Job Agent", version="0.5.0", lifespan=lifespan)
+    app = FastAPI(title="Job Agent", version="0.6.0", lifespan=lifespan)
     app.include_router(router)
     app.include_router(discovery_router)
     app.include_router(tailoring_router)
     app.include_router(applications_router)
     app.include_router(inbox_router)
     app.include_router(sessions_router)
+    app.include_router(stats_router)
+    # The dashboard: plain files, no build step, served from the same origin as
+    # the API so it needs no CORS and no configuration.
+    app.mount("/", StaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
     return app
 
 
@@ -165,6 +176,19 @@ def build_parser() -> argparse.ArgumentParser:
     login.add_argument(
         "--timeout", type=int, default=300, help="Seconds to wait for you to sign in."
     )
+
+    cycle = sub.add_parser(
+        "run", help="One full cycle: find jobs, tailor, apply (in the set mode), read replies."
+    )
+    cycle.add_argument(
+        "--every", type=float, metavar="HOURS", help="Keep running, a cycle every this many hours."
+    )
+    cycle.add_argument("--tailor-limit", type=int, default=10)
+    cycle.add_argument("--apply-limit", type=int, default=10)
+    cycle.add_argument(
+        "--skip", action="append", choices=("discover", "tailor", "apply", "inbox"), default=[]
+    )
+    cycle.add_argument("--json", action="store_true", help="Print each cycle's report as JSON.")
     return parser
 
 
@@ -576,6 +600,48 @@ def _cmd_login(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_run(args: argparse.Namespace) -> int:
+    from jobagent.cycle import run_cycle, run_forever
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    settings = get_settings()
+    if args.every is not None and args.every < 0.25:
+        print("--every must be at least 0.25 hours.", file=sys.stderr)
+        return 2
+    last = {"ok": True}
+
+    def once():
+        db = open_database(settings.db_path)
+        try:
+            report = run_cycle(
+                db.connection(),
+                settings,
+                skip=tuple(args.skip),
+                tailor_limit=args.tailor_limit,
+                apply_limit=args.apply_limit,
+            )
+        finally:
+            db.close()
+        last["ok"] = report.ok
+        if args.json:
+            print(json.dumps(report.as_dict(), indent=2, default=str))
+        else:
+            print(f"cycle at {report.started_at}, mode {settings.apply_mode}")
+            for step in report.steps:
+                print(f"  {step.step}: {'' if step.ok else 'FAILED '}{step.summary}")
+        return report
+
+    if args.every is None:
+        once()
+        return 0 if last["ok"] else 1
+    print(f"Running a cycle every {args.every:g} hours. Ctrl-C stops it.")
+    try:
+        run_forever(once, args.every)
+    except KeyboardInterrupt:
+        print("Stopped.")
+    return 0
+
+
 _COMMANDS = {
     "discover": _cmd_discover,
     "criteria": _cmd_criteria,
@@ -586,6 +652,7 @@ _COMMANDS = {
     "approve": _cmd_approve,
     "inbox": _cmd_inbox,
     "login": _cmd_login,
+    "run": _cmd_run,
 }
 
 

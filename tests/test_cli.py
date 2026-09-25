@@ -454,3 +454,48 @@ def test_inbox_json_prints_the_whole_report(cli_settings, an_application, fake_m
     report = json.loads(capsys.readouterr().out)
     assert report["fetched"] == 2 and report["matched"] == 1
     assert report["results"][0]["reading"]["label"] == "rejected"
+
+
+# ----------------------------------------------------------------- login --
+
+
+def test_login_saves_the_session_from_a_visible_browser(
+    cli_settings, settings, monkeypatch, capsys
+):
+    from jobagent.apply import sessions
+
+    seen = {}
+
+    def fake_login(settings_, url, is_done, *, timeout_s):
+        seen.update(url=url, timeout=timeout_s)
+        cookies = [{"name": "li_at", "value": "x", "domain": ".linkedin.com", "expires": -1}]
+        assert not is_done([]) and is_done(cookies)
+        return {"cookies": cookies, "origins": []}
+
+    monkeypatch.setattr("jobagent.apply.browser.session.interactive_login", fake_login)
+    main.run(["login", "linkedin", "--timeout", "60"])
+    out = capsys.readouterr().out
+    assert seen == {"url": "https://www.linkedin.com/login", "timeout": 60}
+    assert "Signed in to LinkedIn" in out and "password goes to LinkedIn only" in out
+    assert sessions.session_status(settings, "linkedin")["signed_in"]
+
+    main.run(["login", "linkedin", "--status"])
+    assert "LinkedIn: signed in" in capsys.readouterr().out
+    main.run(["login", "linkedin", "--forget"])
+    assert "LinkedIn sign-in deleted." in capsys.readouterr().out
+    main.run(["login", "linkedin", "--status"])
+    assert "not signed in. Run: jobagent login linkedin" in capsys.readouterr().out
+
+
+def test_login_that_times_out_saves_nothing(cli_settings, settings, monkeypatch, capsys):
+    from jobagent.apply import sessions
+
+    def fake_login(*a, **k):
+        raise TimeoutError("not signed in after 300 seconds")
+
+    monkeypatch.setattr("jobagent.apply.browser.session.interactive_login", fake_login)
+    with pytest.raises(SystemExit) as exit_:
+        main.run(["login", "indeed"])
+    assert exit_.value.code == 2
+    assert "not signed in after 300 seconds" in capsys.readouterr().err
+    assert not sessions.session_path(settings, "indeed").exists()

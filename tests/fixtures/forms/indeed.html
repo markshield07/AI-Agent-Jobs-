@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Senior Platform Engineer - Acme Robotics - Indeed.com</title>
+<!--
+  An Indeed posting (indeed.com/viewjob?jk=<key>) and the application it opens, as the
+  reference repos describe them. Without ?flow=1 this is the posting: the what/where search
+  boxes in the header and button#indeedApplyButton ("Apply now"). With ?flow=1 it is the
+  smartapply flow: steps drawn one at a time inside #ia-container (contact information
+  prefilled from the profile, resume, employer questions, review), moved with
+  button.ia-continueButton "Continue" and finished with "Submit your application", then
+  "Your application has been submitted!". Errors carry data-testid="...-error".
+
+  Variants, chosen with ?variant=...:
+    needs_input  adds a required years-of-Kubernetes question nothing on file answers
+    signed_out   a Sign in link and "Sign in to apply" instead of Apply now
+    external     "Apply on company site" instead of Apply now
+    newtab       Apply now opens the flow in a new tab, as Indeed sometimes does
+    invalid      the questions step rejects its answers with an error
+-->
+<style>
+  body { font-family: Helvetica, Arial, sans-serif; margin: 0; color: #2d2d2d; }
+  header { display: flex; gap: 8px; padding: 8px 24px; border-bottom: 1px solid #ddd; }
+  .jobsearch-ViewJobLayout { padding: 16px 24px; }
+  #indeedApplyButton { background: #2557a7; color: #fff; border: 0; padding: 10px 16px; border-radius: 8px; }
+  #ia-container { max-width: 600px; margin: 24px auto; }
+  .ia-question { margin: 10px 0; }
+  .ia-question label, .ia-question legend { display: block; font-weight: 600; }
+  .ia-continueButton { background: #2557a7; color: #fff; border: 0; padding: 10px 16px; }
+  [data-testid$="-error"] { color: #b00020; }
+</style>
+</head>
+<body>
+<header>
+  <input id="text-input-what" name="q" type="text" aria-label="What" placeholder="Job title, keywords, or company">
+  <input id="text-input-where" name="l" type="text" aria-label="Where" placeholder="City, state, zip code, or &quot;remote&quot;">
+  <span data-variant="signed_out"><a href="https://secure.indeed.com/auth?continue=x">Sign in</a></span>
+</header>
+
+<div class="jobsearch-ViewJobLayout" id="posting">
+  <h1 class="jobsearch-JobInfoHeader-title">Senior Platform Engineer</h1>
+  <div>Acme Robotics · Austin, TX</div>
+  <div data-variant=",needs_input,newtab,invalid">
+    <button id="indeedApplyButton" class="jobsearch-IndeedApplyButton-newDesign" aria-label="Apply now">Apply now</button>
+  </div>
+  <div data-variant="external">
+    <button aria-label="Apply on company site (opens in a new tab)" id="external">Apply on company site</button>
+  </div>
+  <div data-variant="signed_out">
+    <button id="sign-in-apply">Sign in to apply</button>
+  </div>
+  <p>We build the control plane for warehouse robots.</p>
+</div>
+
+<main id="ia-container" hidden></main>
+
+<template id="step-contact">
+  <h1>Add your contact information</h1>
+  <div class="ia-question">
+    <label for="first-name">First name</label>
+    <input id="first-name" name="firstName" type="text" required value="Mark">
+  </div>
+  <div class="ia-question">
+    <label for="last-name">Last name</label>
+    <input id="last-name" name="lastName" type="text" required value="Shield">
+  </div>
+  <div class="ia-question">
+    <label for="phone">Phone number</label>
+    <input id="phone" name="phoneNumber" type="tel">
+  </div>
+  <div class="ia-question">
+    <label for="city">City, State</label>
+    <input id="city" name="location" type="text" value="Austin, TX">
+  </div>
+  <button class="ia-continueButton" data-next="resume">Continue</button>
+</template>
+
+<template id="step-resume">
+  <h1>Add a resume for the employer</h1>
+  <div class="ia-question">
+    <label for="resume-file">Upload a resume file</label>
+    <input id="resume-file" type="file" name="resume" accept=".pdf,.docx,.txt">
+  </div>
+  <button class="ia-continueButton" data-next="questions">Continue</button>
+</template>
+
+<template id="step-questions">
+  <h1>Answer these questions from the employer</h1>
+  <fieldset class="ia-question">
+    <legend>Are you authorized to work in the United States?</legend>
+    <input type="radio" id="auth-yes" name="auth" value="Yes" required><label for="auth-yes">Yes</label>
+    <input type="radio" id="auth-no" name="auth" value="No" required><label for="auth-no">No</label>
+  </fieldset>
+  <div class="ia-question">
+    <label for="sponsor">Will you now or in the future require visa sponsorship?</label>
+    <select id="sponsor" required>
+      <option value="">Select an option</option>
+      <option value="Yes">Yes</option>
+      <option value="No">No</option>
+    </select>
+  </div>
+  <div class="ia-question" data-only="needs_input">
+    <label for="k8s">How many years of Kubernetes experience do you have?</label>
+    <input id="k8s" type="text" required>
+  </div>
+  <div data-testid="questions-error" id="q-error" hidden></div>
+  <button class="ia-continueButton" data-next="review">Continue</button>
+</template>
+
+<template id="step-review">
+  <h1>Please review your application</h1>
+  <p>You will not be able to make changes after you submit your application.</p>
+  <button class="ia-continueButton" type="submit" id="submit">Submit your application</button>
+</template>
+
+<template id="step-sent">
+  <h1>Your application has been submitted!</h1>
+  <p>You will get an email confirmation at mark@example.com.</p>
+</template>
+
+<script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  var variant = params.get('variant') || '';
+  var flow = params.get('flow') === '1';
+  Array.prototype.forEach.call(document.querySelectorAll('[data-variant]'), function (el) {
+    var wanted = el.getAttribute('data-variant').split(',');
+    if (wanted.indexOf(variant) < 0) el.parentNode.removeChild(el);
+  });
+
+  function record(key, value) { window[key] = value; }
+  function push(name) {
+    var steps = (window.__steps || []).concat([name]);
+    record('__steps', steps);
+  }
+
+  var applyBtn = document.getElementById('indeedApplyButton');
+  if (applyBtn) applyBtn.addEventListener('click', function () {
+    var target = location.href.split('?')[0] + '?variant=' + variant + '&flow=1';
+    if (variant === 'newtab') window.open(target, '_blank');
+    else location.href = target;
+  });
+  var ext = document.getElementById('external');
+  if (ext) ext.addEventListener('click', function () { record('__left', true); });
+
+  if (!flow) return;
+  document.getElementById('posting').hidden = true;
+  var box = document.getElementById('ia-container');
+  box.hidden = false;
+  record('__steps', []);
+
+  function value(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+
+  function show(name) {
+    push(name);
+    box.innerHTML = document.getElementById('step-' + name).innerHTML;
+    Array.prototype.forEach.call(box.querySelectorAll('[data-only]'), function (el) {
+      if (el.getAttribute('data-only') !== variant) el.parentNode.removeChild(el);
+    });
+    var next = box.querySelector('[data-next]');
+    if (next) next.addEventListener('click', function () { advance(name, next.getAttribute('data-next')); });
+    var submit = box.querySelector('#submit');
+    if (submit) submit.addEventListener('click', function () { record('__submitted', true); show('sent'); });
+  }
+
+  function advance(from, to) {
+    if (from === 'contact') {
+      record('__contact', { first: value('first-name'), last: value('last-name'),
+        phone: value('phone'), city: value('city') });
+    }
+    if (from === 'resume') {
+      var f = document.getElementById('resume-file');
+      record('__resume', f.files.length ? f.files[0].name : null);
+    }
+    if (from === 'questions') {
+      var checked = document.querySelector('input[name="auth"]:checked');
+      record('__questions', { auth: checked ? checked.value : null, sponsor: value('sponsor'),
+        k8s: value('k8s') });
+      if (variant === 'invalid') {
+        var err = document.getElementById('q-error');
+        err.textContent = 'Answer this question to continue';
+        err.hidden = false;
+        return;
+      }
+    }
+    show(to);
+  }
+
+  show('contact');
+})();
+</script>
+</body>
+</html>

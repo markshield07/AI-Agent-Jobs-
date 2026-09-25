@@ -1,4 +1,7 @@
-() => {
+(root) => {
+  // `root` narrows the inventory to one element, e.g. a modal over a page
+  // whose own search box would otherwise be read as part of the form.
+  const base = (root && document.querySelector(root)) || document;
   const esc = (s) => (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/([^\w-])/g, '\\$1');
   const cssPath = (el) => {
     if (!el || el.nodeType !== 1) return null;
@@ -133,7 +136,7 @@
   const sel = 'input, select, textarea, [role="combobox"], [role="radio"], [role="checkbox"], [role="switch"], [role="textbox"], [contenteditable="true"]';
   const seen = new Set();
   const out = [];
-  Array.from(document.querySelectorAll(sel)).forEach((el, i) => {
+  Array.from(base.querySelectorAll(sel)).forEach((el, i) => {
     if (seen.has(el)) return;
     seen.add(el);
     const tag = el.tagName.toLowerCase();

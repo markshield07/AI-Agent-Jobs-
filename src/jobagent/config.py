@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # `auto` submits. Nothing is sent unless you change this.
     apply_mode: Literal["dry_run", "review", "auto"] = "dry_run"
     daily_apply_cap: int = 20
+    # LinkedIn and Indeed each get their own, lower cap on top of the daily
+    # one: both watch for accounts that apply faster than a person would.
+    easy_apply_daily_cap: int = 10
     apply_delay_seconds: float = 45.0  # between submissions, with jitter
     apply_model_answers: bool = True  # let the model draft answers from the fact base
     headless: bool = True

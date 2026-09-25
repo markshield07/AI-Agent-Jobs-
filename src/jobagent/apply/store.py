@@ -211,17 +211,27 @@ def needing_input(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return list_applications(conn, status="needs_input")
 
 
-def submitted_since(conn: sqlite3.Connection, since: str) -> int:
-    row = conn.execute(
-        "SELECT COUNT(*) AS n FROM applications WHERE submitted_at >= ?", (since,)
-    ).fetchone()
+def submitted_since(conn: sqlite3.Connection, since: str, *, ats: str | None = None) -> int:
+    """Submissions at or after `since`; only through one site's handler when `ats` is given."""
+    if ats is None:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM applications WHERE submitted_at >= ?", (since,)
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM applications WHERE submitted_at >= ? AND ats = ?",
+            (since, ats),
+        ).fetchone()
     return int(row["n"])
 
 
-def submitted_last_day(conn: sqlite3.Connection, now: datetime | None = None) -> int:
-    """Submissions in the trailing 24 hours: what the daily cap counts."""
+def submitted_last_day(
+    conn: sqlite3.Connection, now: datetime | None = None, *, ats: str | None = None
+) -> int:
+    """Submissions in the trailing 24 hours: what the daily caps count."""
     now = now or datetime.now(UTC)
-    return submitted_since(conn, (now - timedelta(hours=24)).isoformat(timespec="seconds"))
+    since = (now - timedelta(hours=24)).isoformat(timespec="seconds")
+    return submitted_since(conn, since, ats=ats)
 
 
 def list_attempts(conn: sqlite3.Connection, application_id: int) -> list[dict[str, Any]]:

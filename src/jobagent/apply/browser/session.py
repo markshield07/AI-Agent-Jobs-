@@ -58,8 +58,19 @@ def launch_options(settings: Settings) -> dict[str, Any]:
         options["executable_path"] = settings.browser_executable
     proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
     if proxy:
-        options["proxy"] = {"server": proxy}
+        options["proxy"] = {"server": proxy, "bypass": proxy_bypass()}
     return options
+
+
+def proxy_bypass() -> str:
+    """NO_PROXY's hosts, plus this machine's own names: the dashboard and any
+    local page are never sent through a proxy."""
+    listed = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+    hosts = [h.strip() for h in listed.split(",") if h.strip() and h.strip() != "*"]
+    for local in ("localhost", "127.0.0.1", "::1"):
+        if local not in hosts:
+            hosts.append(local)
+    return ",".join(hosts)
 
 
 @contextmanager

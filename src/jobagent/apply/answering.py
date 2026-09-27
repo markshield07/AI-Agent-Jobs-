@@ -188,6 +188,9 @@ def canonical_key(field: FormField) -> str | None:
 
 def answer_key_for(field: FormField) -> str:
     """Where an answer to `field` lives, or would live, in the answer bank."""
+    if field.section == "experience":
+        # "Location" in a job held is not where the person lives.
+        return question_key(field.label)
     if _EEO.search(field.label):
         for key, pattern in _EEO_COMPILED:
             if pattern.search(field.label):
@@ -399,6 +402,14 @@ class _Planner:
         if section == "eeo":
             self._plan_eeo(field)
             return
+        if section == "experience":
+            banked = self._bank(question_key(field.label))
+            if banked is not None:
+                if not self._apply_value(field, banked, "answer_bank"):
+                    self._need(field, NO_OPTION)
+                return
+            self._plan_open(field)
+            return
         key = canonical_key(field)
         if section == "contact":
             self._plan_contact(field, key)
@@ -421,6 +432,10 @@ class _Planner:
         if key == "heard_about":
             self._plan_heard_about(field)
             return
+        self._plan_open(field)
+
+    def _plan_open(self, field: FormField) -> None:
+        """For the model to answer from the facts, else asked (required) or skipped."""
         if self.allow_model and self.completer is not None and field.kind in _ASKABLE:
             self.open.append(field)
             return

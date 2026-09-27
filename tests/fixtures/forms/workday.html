@@ -30,6 +30,8 @@
     invalid      Application Questions will not save and shows an error
     closed       the posting no longer takes applications and has no Apply button
     unconfirmed  Submit shows nothing afterwards
+    draft        an earlier run saved a draft: the posting offers Continue Application, which
+                 opens the first unsaved step (My Information) with no start choice
 -->
 <style>
   body { font-family: -apple-system, Helvetica, Arial, sans-serif; margin: 0; color: #222; }
@@ -59,6 +61,9 @@
   <div data-variant="closed"><p>This job posting is no longer accepting applications.</p></div>
   <div data-variant=",manual,signed_out,needs_input,invalid,unconfirmed">
     <a data-automation-id="adventureButton" role="button" href="#apply">Apply</a>
+  </div>
+  <div data-variant="draft">
+    <a href="#apply" role="button" data-automation-id="continueButton">Continue Application</a>
   </div>
   <p>Lead the team that runs our warehouse robot network.</p>
 </section>
@@ -189,11 +194,110 @@
 <template id="step-experience">
   <div data-automation-id="applyFlowMyExperiencePage">
   <h2>My Experience</h2>
-  <div data-automation-id="formField-resume">
-    <label for="experience-resume">Resume/CV</label>
-    <div data-only-autofill="1"><div data-automation-id="file-upload-successful">mark-shield.pdf</div></div>
-    <input id="experience-resume" class="file-input" type="file" data-automation-id="file-upload-input-ref" accept=".pdf,.doc,.docx">
-    <button type="button" data-automation-id="select-files">Select files</button>
+  <!-- Copied from the live CrowdStrike page (2026-09-27): what autofill read from the resume
+       comes back as one entry per job, with title and company but no dates. -->
+  <div data-only-autofill="1">
+    <h3>Work Experience</h3>
+    <div data-automation-id="workExperienceSection" data-fkit-id="workExperience-6">
+      <h4>Work Experience 1</h4>
+      <div data-automation-id="formField-jobTitle" data-fkit-id="workExperience-6--jobTitle">
+        <label for="workExperience-6--jobTitle"><span>Job Title<abbr>*</abbr></span></label>
+        <input type="text" id="workExperience-6--jobTitle" name="jobTitle" aria-required="true" value="Network Operations Manager">
+      </div>
+      <div data-automation-id="formField-companyName" data-fkit-id="workExperience-6--companyName">
+        <label for="workExperience-6--companyName"><span>Company<abbr>*</abbr></span></label>
+        <input type="text" id="workExperience-6--companyName" name="companyName" aria-required="true" value="Globex">
+      </div>
+      <div data-automation-id="formField-location" data-fkit-id="workExperience-6--location">
+        <label for="workExperience-6--location"><span>Location</span></label>
+        <input type="text" id="workExperience-6--location" name="location" value="">
+      </div>
+      <div data-automation-id="formField-currentlyWorkHere" data-fkit-id="workExperience-6--currentlyWorkHere">
+        <label for="workExperience-6--currentlyWorkHere">I currently work here</label>
+        <input id="workExperience-6--currentlyWorkHere" type="checkbox" name="currentlyWorkHere" aria-required="false">
+      </div>
+      <div data-automation-id="formField-startDate" data-fkit-id="workExperience-6--startDate">
+        <fieldset><legend><label id="workExperience-6-from"><span>From<abbr>*</abbr></span></label></legend>
+        <div aria-hidden="true" id="helpText-workExperience-6--startDate">current value is MM/YYYY</div>
+        <div id="workExperience-6--startDate" role="group" data-automation-id="dateInputWrapper" class="date">
+          <div id="workExperience-6--startDate-dateSectionMonth"><div data-automation-id="dateSectionMonth-display">MM</div>
+            <input role="spinbutton" aria-label="Month" aria-valuemax="12" aria-valuemin="1" id="workExperience-6--startDate-dateSectionMonth-input" data-automation-id="dateSectionMonth-input" value=""></div>
+          <div>/</div>
+          <div id="workExperience-6--startDate-dateSectionYear"><div data-automation-id="dateSectionYear-display">YYYY</div>
+            <input role="spinbutton" aria-label="Year" id="workExperience-6--startDate-dateSectionYear-input" data-automation-id="dateSectionYear-input" value=""></div>
+        </div></fieldset>
+      </div>
+      <div data-automation-id="formField-endDate" data-fkit-id="workExperience-6--endDate">
+        <fieldset><legend><label id="workExperience-6-to"><span>To<abbr>*</abbr></span></label></legend>
+        <div id="workExperience-6--endDate" role="group" data-automation-id="dateInputWrapper" class="date">
+          <div id="workExperience-6--endDate-dateSectionMonth"><div data-automation-id="dateSectionMonth-display">MM</div>
+            <input role="spinbutton" aria-label="Month" aria-valuemax="12" aria-valuemin="1" id="workExperience-6--endDate-dateSectionMonth-input" data-automation-id="dateSectionMonth-input" value=""></div>
+          <div>/</div>
+          <div id="workExperience-6--endDate-dateSectionYear"><div data-automation-id="dateSectionYear-display">YYYY</div>
+            <input role="spinbutton" aria-label="Year" id="workExperience-6--endDate-dateSectionYear-input" data-automation-id="dateSectionYear-input" value=""></div>
+        </div></fieldset>
+      </div>
+      <div data-automation-id="formField-roleDescription" data-fkit-id="workExperience-6--roleDescription">
+        <label for="workExperience-6--roleDescription"><span>Role Description</span></label>
+        <textarea id="workExperience-6--roleDescription" name="roleDescription">Ran the network operations center.</textarea>
+      </div>
+    </div>
+    <div data-automation-id="workExperienceSection" data-fkit-id="workExperience-7">
+      <h4>Work Experience 2</h4>
+      <div data-automation-id="formField-jobTitle" data-fkit-id="workExperience-7--jobTitle">
+        <label for="workExperience-7--jobTitle"><span>Job Title<abbr>*</abbr></span></label>
+        <input type="text" id="workExperience-7--jobTitle" name="jobTitle" aria-required="true" value="Network Engineer">
+      </div>
+      <div data-automation-id="formField-companyName" data-fkit-id="workExperience-7--companyName">
+        <label for="workExperience-7--companyName"><span>Company<abbr>*</abbr></span></label>
+        <input type="text" id="workExperience-7--companyName" name="companyName" aria-required="true" value="Initech">
+      </div>
+      <div data-automation-id="formField-location" data-fkit-id="workExperience-7--location">
+        <label for="workExperience-7--location"><span>Location</span></label>
+        <input type="text" id="workExperience-7--location" name="location" value="">
+      </div>
+      <div data-automation-id="formField-currentlyWorkHere" data-fkit-id="workExperience-7--currentlyWorkHere">
+        <label for="workExperience-7--currentlyWorkHere">I currently work here</label>
+        <input id="workExperience-7--currentlyWorkHere" type="checkbox" name="currentlyWorkHere" aria-required="false">
+      </div>
+      <div data-automation-id="formField-startDate" data-fkit-id="workExperience-7--startDate">
+        <fieldset><legend><label id="workExperience-7-from"><span>From<abbr>*</abbr></span></label></legend>
+        <div aria-hidden="true" id="helpText-workExperience-7--startDate">current value is MM/YYYY</div>
+        <div id="workExperience-7--startDate" role="group" data-automation-id="dateInputWrapper" class="date">
+          <div id="workExperience-7--startDate-dateSectionMonth"><div data-automation-id="dateSectionMonth-display">MM</div>
+            <input role="spinbutton" aria-label="Month" aria-valuemax="12" aria-valuemin="1" id="workExperience-7--startDate-dateSectionMonth-input" data-automation-id="dateSectionMonth-input" value=""></div>
+          <div>/</div>
+          <div id="workExperience-7--startDate-dateSectionYear"><div data-automation-id="dateSectionYear-display">YYYY</div>
+            <input role="spinbutton" aria-label="Year" id="workExperience-7--startDate-dateSectionYear-input" data-automation-id="dateSectionYear-input" value=""></div>
+        </div></fieldset>
+      </div>
+      <div data-automation-id="formField-endDate" data-fkit-id="workExperience-7--endDate">
+        <fieldset><legend><label id="workExperience-7-to"><span>To<abbr>*</abbr></span></label></legend>
+        <div id="workExperience-7--endDate" role="group" data-automation-id="dateInputWrapper" class="date">
+          <div id="workExperience-7--endDate-dateSectionMonth"><div data-automation-id="dateSectionMonth-display">MM</div>
+            <input role="spinbutton" aria-label="Month" aria-valuemax="12" aria-valuemin="1" id="workExperience-7--endDate-dateSectionMonth-input" data-automation-id="dateSectionMonth-input" value=""></div>
+          <div>/</div>
+          <div id="workExperience-7--endDate-dateSectionYear"><div data-automation-id="dateSectionYear-display">YYYY</div>
+            <input role="spinbutton" aria-label="Year" id="workExperience-7--endDate-dateSectionYear-input" data-automation-id="dateSectionYear-input" value=""></div>
+        </div></fieldset>
+      </div>
+      <div data-automation-id="formField-roleDescription" data-fkit-id="workExperience-7--roleDescription">
+        <label for="workExperience-7--roleDescription"><span>Role Description</span></label>
+        <textarea id="workExperience-7--roleDescription" name="roleDescription">Built the campus network.</textarea>
+      </div>
+    </div>
+  </div>
+  <div data-fkit-id="resumeAttachments--null">
+    <h3>Resume/CV</h3>
+    <div data-automation-id="formField-" data-fkit-id="resumeAttachments--attachments">
+      <label id="label7"><span>Upload a file (5MB max)<abbr>*</abbr></span></label>
+      <div data-automation-id="attachments-FileUpload" aria-labelledby="label7">
+        <div data-automation-id="file-upload-drop-zone">
+          <button type="button" data-automation-id="select-files" id="resumeAttachments--attachments">Select files</button>
+        </div>
+        <input data-automation-id="file-upload-input-ref" class="file-input" type="file" multiple="">
+      </div>
+    </div>
   </div>
   <footer><button type="button" data-automation-id="pageFooterNextButton">Save and Continue</button></footer>
   </div>
@@ -300,8 +404,10 @@
     review: 'Review' };
   // How long the step just left stays on screen before the next one is drawn:
   // longer than the handler's settle wait, so a handler that does not wait
-  // for the new step reads the old one.
-  var DRAW_MS = 600;
+  // for the new step reads the old one. Then, as on the live site, a loading
+  // page with the progress bar already on the next step.
+  var DRAW_MS = 500;
+  var LOADING_MS = 400;
   var drawing = false;
 
   // The prompt's lists: the first list, and what each category opens.
@@ -311,6 +417,14 @@
 
   var apply = document.querySelector('[data-automation-id="adventureButton"]');
   if (apply) apply.addEventListener('click', function (e) { e.preventDefault(); start.hidden = false; });
+  var resume = document.querySelector('[data-automation-id="continueButton"]');
+  if (resume) resume.addEventListener('click', function (e) {
+    e.preventDefault();
+    path = 'draft';
+    document.getElementById('posting').hidden = true;
+    document.getElementById('flow-page').hidden = false;
+    later('info');
+  });
   Array.prototype.forEach.call(start.querySelectorAll('a'), function (a) {
     a.addEventListener('click', function (e) {
       e.preventDefault();
@@ -377,7 +491,17 @@
 
   function later(name) {
     drawing = true;
-    setTimeout(function () { drawing = false; show(name); }, DRAW_MS);
+    setTimeout(function () {
+      flow.innerHTML = '<div data-automation-id="applyFlowLoadingPage"><p>Loading</p></div>';
+      progressOn(name);
+      setTimeout(function () { drawing = false; show(name); }, LOADING_MS);
+    }, DRAW_MS);
+  }
+
+  function progressOn(name) {
+    var progress = document.getElementById('progress');
+    progress.innerHTML = TITLES[name] ? '<li data-automation-id="progressBarActiveStep"></li>' : '';
+    if (TITLES[name]) progress.firstChild.textContent = TITLES[name];
   }
 
   function show(name) {
@@ -394,9 +518,7 @@
     });
     wireDropdowns(flow);
     Array.prototype.forEach.call(flow.querySelectorAll('[data-automation-id="multiSelectContainer"]'), wirePrompt);
-    var progress = document.getElementById('progress');
-    progress.innerHTML = TITLES[name] ? '<li data-automation-id="progressBarActiveStep"></li>' : '';
-    if (TITLES[name]) progress.firstChild.textContent = TITLES[name];
+    progressOn(name);
     var next = flow.querySelector('[data-automation-id="pageFooterNextButton"]');
     if (next) next.addEventListener('click', function () { if (!drawing) advance(name); });
   }
@@ -432,9 +554,20 @@
           || i.phoneType === 'Select One' || !code || !i.phone) { error('Errors Found: fill in the required fields'); return; }
     }
     if (from === 'experience') {
-      var r = document.getElementById('experience-resume');
+      var r = flow.querySelector('[data-fkit-id="resumeAttachments--attachments"] input[type="file"]');
       a.experienceResume = r.files.length ? r.files[0].name : null;
-      if (path !== 'autofill' && !r.files.length) { error('Error: Resume/CV is required'); return; }
+      a.jobs = Array.prototype.map.call(flow.querySelectorAll('[data-automation-id="workExperienceSection"]'), function (w) {
+        var f = w.getAttribute('data-fkit-id');
+        var part = function (p) { var el = document.getElementById(f + '--' + p); return el ? el.value : ''; };
+        return { title: part('jobTitle'), company: part('companyName'), location: part('location'),
+          current: document.getElementById(f + '--currentlyWorkHere').checked,
+          from: part('startDate-dateSectionMonth-input') + '/' + part('startDate-dateSectionYear-input'),
+          to: part('endDate-dateSectionMonth-input') + '/' + part('endDate-dateSectionYear-input') };
+      });
+      if (!r.files.length) { error('Error: The field Upload a file (5MB max) is required and must have a value.'); return; }
+      for (var j = 0; j < a.jobs.length; j++) {
+        if (a.jobs[j].from === '/' || (!a.jobs[j].current && a.jobs[j].to === '/')) { error('Errors Found: From and To are required'); return; }
+      }
     }
     if (from === 'questions') {
       a.questions = { auth: shown('q-auth'), sponsor: shown('q-sponsor'), teams: val('q-teams') };

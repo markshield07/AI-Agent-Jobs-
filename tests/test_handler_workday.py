@@ -21,6 +21,7 @@ from jobagent.apply.answering import make_answerer, question_key
 from jobagent.apply.handlers import default_handlers, handler_for
 from jobagent.apply.handlers.workday import WorkdayHandler, parse_date
 from jobagent.apply.models import Packet
+from jobagent.resume.facts import Fact
 
 FIXTURE = Path(__file__).parent / "fixtures" / "forms" / "workday.html"
 POSTING = (
@@ -63,6 +64,30 @@ def packet(tmp_path) -> Packet:
             "address": "1 Congress Ave",
             "postal_code": "78701",
         },
+        facts=[
+            Fact(
+                id=1,
+                kind="role",
+                text="Ran the network operations center at Globex",
+                detail={
+                    "employer": "Globex Corporation",
+                    "title": "Network Operations Manager",
+                    "start": "April 2018",
+                    "end": "Present",
+                },
+            ),
+            Fact(
+                id=2,
+                kind="role",
+                text="Built the campus network at Initech",
+                detail={
+                    "employer": "Initech",
+                    "title": "Network Engineer",
+                    "start": "2012-06",
+                    "end": "March 2018",
+                },
+            ),
+        ],
     )
 
 
@@ -174,8 +199,8 @@ def test_my_information_is_read_once_drawn_and_every_box_filled(page, packet):
 @pytest.mark.usefixtures("page")
 def test_the_unlabelled_autofill_box_takes_the_resume(page, packet):
     result = run(page, packet)
-    resume = [f for f in result.filled if f.source == "resume"]
-    assert [f.label for f in resume] == ["Resume"]
+    uploads = [f for f in result.filled if f.file_path]
+    assert [f.label for f in uploads] == ["Resume", "Resume"], "Autofill, then My Experience"
     assert js(page, "__answers")["autofillResume"] == "mark-shield.pdf"
 
 
@@ -214,7 +239,7 @@ def test_a_category_with_no_known_board_is_asked_not_guessed(page, packet):
 
 
 @pytest.mark.usefixtures("page")
-def test_what_autofill_read_is_kept_and_the_resume_goes_up_once(page, packet):
+def test_what_autofill_read_is_kept_and_my_experience_takes_the_resume_again(page, packet):
     packet.contact["first_name"] = "Marcus"
     result = run(page, packet)
     by_label = {f.label: f for f in result.filled}
@@ -222,8 +247,52 @@ def test_what_autofill_read_is_kept_and_the_resume_goes_up_once(page, packet):
     assert js(page, "__answers")["info"]["first"] == "Mark"
     assert by_label["Country"].value == "United States of America"
     assert js(page, "__answers")["autofillResume"] == "mark-shield.pdf"
-    assert js(page, "__uploads") == 1, "the resume shown under My Experience is not sent again"
-    assert js(page, "__answers")["experienceResume"] is None
+    # Live, the required Resume/CV box on My Experience is empty after autofill.
+    assert js(page, "__answers")["experienceResume"] == "mark-shield.pdf"
+    assert js(page, "__uploads") == 2
+
+
+@pytest.mark.usefixtures("page")
+def test_work_history_dates_come_from_the_role_each_entry_names(page, packet):
+    result = run(page, packet)
+    assert result.outcome == "dry_run", result.error
+    assert js(page, "__answers")["jobs"] == [
+        {
+            "title": "Network Operations Manager",
+            "company": "Globex",
+            "location": "",
+            "current": True,
+            "from": "04/2018",
+            "to": "/",
+        },
+        {
+            "title": "Network Engineer",
+            "company": "Initech",
+            "location": "",
+            "current": False,
+            "from": "06/2012",
+            "to": "03/2018",
+        },
+    ]
+    assert not any(n.label == "Location" for n in result.needed)
+
+
+@pytest.mark.usefixtures("page")
+def test_an_entry_no_role_on_file_names_is_asked_about(page, packet):
+    packet.facts = packet.facts[:1]
+    result = run(page, packet)
+    assert result.outcome == "needs_input"
+    asked = sorted(n.key for n in result.needed if n.required)
+    assert asked == ["workExperience-7--endDate", "workExperience-7--startDate"]
+    assert all(n.answer_key.startswith("q:") for n in result.needed), "never the contact keys"
+
+
+@pytest.mark.usefixtures("page")
+def test_a_saved_draft_is_continued_not_started_again(page, packet):
+    result = run(page, packet, variant="draft")
+    assert result.outcome == "dry_run", result.error
+    assert js(page, "__start") is None, "Continue Application has no start choice"
+    assert js(page, "__steps")[0] == "info"
 
 
 @pytest.mark.usefixtures("page")
@@ -313,3 +382,14 @@ def test_a_closed_posting_says_so(page, packet):
     result = run(page, packet, submit=True, variant="closed")
     assert result.outcome == "blocked"
     assert result.error == "the Workday posting is closed"
+
+
+def test_the_loading_page_between_steps_is_not_the_next_step():
+    from jobagent.apply.handlers.workday import _arrived
+
+    before = "applyFlowAutoFillPage|current step 1 of 7 Autofill with Resume"
+    loading = "applyFlowLoadingPage|current step 2 of 7 My Information"
+    assert not _arrived(loading, before)
+    assert not _arrived("", before)
+    assert not _arrived(before, before)
+    assert _arrived("applyFlowMyInfoPage|current step 2 of 7 My Information", before)

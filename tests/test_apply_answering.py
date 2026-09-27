@@ -200,6 +200,17 @@ def test_each_part_of_an_address_is_its_own_answer(packet):
     }, "street and ZIP are asked for under keys of their own"
 
 
+def test_a_work_history_entry_never_gets_contact_details(packet):
+    """Location in a job held (Workday's My Experience) is where the job was."""
+    fields = [
+        F("loc", "Location", section="experience"),
+        F("title", "Job Title", section="experience", required=True),
+    ]
+    plan = plan_fills(fields, packet)
+    assert fills(plan) == {}
+    assert [(n.key, n.answer_key) for n in plan.needed] == [("title", "q:job title")]
+
+
 def test_full_name_field_and_single_word_names(packet):
     plan = plan_fills([F("name", "Name", required=True)], packet)
     assert fills(plan) == {"name": "Mark Shield"}

@@ -30,8 +30,19 @@ FieldKind = Literal[
     "file",
     "unknown",
 ]
+# "experience": a field of one entry in the work history a form asks for
+# (Workday's My Experience), answered from that role, never from the contact
+# details.
 Section = Literal[
-    "contact", "resume", "cover_letter", "links", "questions", "eeo", "consent", "other"
+    "contact",
+    "resume",
+    "cover_letter",
+    "links",
+    "questions",
+    "eeo",
+    "consent",
+    "experience",
+    "other",
 ]
 Mode = Literal["dry_run", "review", "auto"]
 Outcome = Literal[

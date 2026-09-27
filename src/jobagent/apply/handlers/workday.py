@@ -50,7 +50,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -166,15 +166,16 @@ _FIELD_COUNT_JS = r"""() => document.querySelectorAll(
 ).length"""
 
 # For each file input: whether it is the resume (it sits in Workday's
-# resumeUpload box, or on the Autofill with Resume step, where the box has no
-# label but "Select file"), and the name of a file Workday already holds there.
+# resumeUpload box or on the Autofill with Resume step, where the box has no
+# label but "Select file", or in My Experience's resumeAttachments box, labelled
+# only "Upload a file"), and the name of a file Workday already holds there.
 _FILES_JS = r"""(selectors) => selectors.map((sel) => {
   let el = null;
   try { el = document.querySelector(sel); } catch (e) { return null; }
   if (!el) return null;
   const txt = (n) => n ? (n.innerText || n.textContent || '').replace(/\s+/g, ' ').trim() : '';
-  const resume = !!el.closest(
-    '[data-automation-id="resumeUpload"], [data-automation-id="applyFlowAutoFillPage"]');
+  const resume = !!el.closest('[data-automation-id="resumeUpload"], '
+    + '[data-automation-id="applyFlowAutoFillPage"], [data-fkit-id^="resumeAttachments"]');
   const box = el.closest('[data-automation-id="resumeUpload"]')
     || el.closest('[data-automation-id^="formField-"]')
     || el.closest('[data-automation-id*="attachments" i]') || el.parentElement;
@@ -182,6 +183,33 @@ _FILES_JS = r"""(selectors) => selectors.map((sel) => {
     + '[data-automation-id="fileName"], [data-automation-id="file-upload-item"]');
   return { resume, uploaded: done ? txt(done) : '' };
 })"""
+
+# For each control, the Workday field id of the box it sits in, such as
+# "workExperience-6--startDate": an entry of the work history, then the part.
+_FKIT_JS = r"""(selectors) => selectors.map((sel) => {
+  let el = null;
+  try { el = document.querySelector(sel); } catch (e) { return ''; }
+  const box = el && el.closest('[data-fkit-id]');
+  return box ? box.getAttribute('data-fkit-id') : '';
+})"""
+
+# The boxes a checkbox "group" selector finds, one per work-history entry when
+# the entries share the box's name: each box's id, selector and own label.
+_SPLIT_JS = r"""(sel) => {
+  const esc = (s) => (window.CSS && CSS.escape) ? CSS.escape(s) : s;
+  const txt = (n) => n ? (n.innerText || n.textContent || '').replace(/\s+/g, ' ').trim() : '';
+  let found = [];
+  try { found = Array.from(document.querySelectorAll(sel)); } catch (e) { return []; }
+  const entries = new Set(found.map((el) => {
+    const box = el.closest('[data-fkit-id]');
+    return box ? box.getAttribute('data-fkit-id') : '';
+  }));
+  if (found.length < 2 || entries.size !== found.length || entries.has('')) return [];
+  return found.map((el) => {
+    const label = el.id ? document.querySelector('label[for="' + esc(el.id) + '"]') : null;
+    return { id: el.id, selector: el.id ? '#' + esc(el.id) : '', label: txt(label) };
+  });
+}"""
 
 # Whether the question box around each control says it is required, for a
 # radio group whose aria-required sits on the group and whose star sits in
@@ -248,6 +276,9 @@ class WorkdayHandler(WizardHandler):
     easy_apply_selectors = (
         "a[data-automation-id='adventureButton']",
         "button[data-automation-id='adventureButton']",
+        # A draft saved by an earlier run: straight back to its first unsaved step.
+        "a[data-automation-id='continueButton']",
+        "button[data-automation-id='continueButton']",
         "a[role='button']:text-is('Apply')",
         "button:text-is('Apply')",
     )
@@ -317,6 +348,11 @@ class WorkdayHandler(WizardHandler):
         self._uploaded: dict[str, str] = {}
         self._source = ""
         self._full_name = ""
+        self._roles: list[Any] = []
+        # Work-history entry and part of each field, by key: ("workExperience-6", "startDate").
+        self._entries: dict[str, tuple[str, str]] = {}
+        # What each field of the step held when read, by key.
+        self._values: dict[str, str] = {}
 
     # -- the flow ------------------------------------------------------------
 
@@ -334,6 +370,7 @@ class WorkdayHandler(WizardHandler):
         )
         self._source = _SOURCE_LABELS.get(str(packet.job.get("source") or "").lower(), "")
         self._full_name = str(packet.contact.get("full_name") or "").strip()
+        self._roles = [f for f in packet.facts if getattr(f, "kind", "") == "role"]
         return super().apply(page, packet, answerer, submit=submit, screenshot_path=screenshot_path)
 
     def open_flow(self, page: Any) -> Any:
@@ -343,11 +380,19 @@ class WorkdayHandler(WizardHandler):
             flow = super().open_flow(page)
             if flow is None:
                 return None
+            # Apply opens the start choice; Continue Application a step itself.
+            self._wait_until(
+                flow, lambda: self._any_visible(flow, self.start_selectors) or self._at_step(flow)
+            )
         if click_first_visible(flow, self.start_selectors):
             wait_settled(flow, self.settle_ms)
-            self._wait_until(flow, lambda: bool(self.step_marker(flow)) or self.signed_out(flow))
+            self._wait_until(flow, lambda: self._at_step(flow))
+        if _arrived(self.step_marker(flow), ""):
             self._wait_drawn(flow)
         return flow
+
+    def _at_step(self, page: Any) -> bool:
+        return _arrived(self.step_marker(page), "") or self.signed_out(page)
 
     def _in_flow(self, page: Any) -> bool:
         return (
@@ -400,9 +445,7 @@ class WorkdayHandler(WizardHandler):
         # A step that will not save shows its errors and stays; the loop reports them.
         self._wait_until(
             page,
-            lambda: (
-                self.step_marker(page) not in ("", before) or bool(self._step_errors(page, root))
-            ),
+            lambda: _arrived(self.step_marker(page), before) or bool(self._step_errors(page, root)),
         )
         self._wait_drawn(page)
 
@@ -417,14 +460,19 @@ class WorkdayHandler(WizardHandler):
         return False
 
     def _wait_drawn(self, page: Any) -> None:
-        """Until the number of questions on screen stops growing."""
+        """Until the step's footer button shows and the number of questions on
+        screen has stopped growing: Workday draws a step's wrapper first and
+        its questions over the next moments."""
         last, steady, waited = -1, 0, 0
-        while steady < 2 and waited < self.step_timeout_ms:
+        while steady < 3 and waited < self.step_timeout_ms:
             try:
                 count = int(page.evaluate(_FIELD_COUNT_JS) or 0)
             except Exception:
                 return
-            steady = steady + 1 if count == last else 0
+            footer = self._any_visible(page, self.next_selectors) or self._any_visible(
+                page, self.submit_selectors
+            )
+            steady = steady + 1 if footer and count == last else 0
             last = count
             page.wait_for_timeout(self.poll_ms)
             waited += self.poll_ms
@@ -446,6 +494,7 @@ class WorkdayHandler(WizardHandler):
                 covered = []
         covered += [False] * (len(generic) - len(covered))
         fields = [f for f, hidden in zip(generic, covered, strict=True) if not hidden]
+        fields = self._one_per_entry(page, fields)
         self._uploaded = self._read_files(page, fields)
         self._mark_required(page, fields)
         for field in fields:
@@ -482,7 +531,60 @@ class WorkdayHandler(WizardHandler):
             parts = tuple((raw.get("parts") or []) + [None, None, None])[:3]
             self._widgets[field.key] = _Widget(kind=kind, value=value, parts=parts)
             fields.append(field)
+        self._read_entries(page, fields)
         return self._in_page_order(page, fields)
+
+    @staticmethod
+    def _one_per_entry(page: Any, fields: list[FormField]) -> list[FormField]:
+        """Give each work-history entry its own fields.
+
+        Every entry's controls share names (jobTitle, currentlyWorkHere), so
+        the inventory keys two entries' job titles alike and reads their "I
+        currently work here" boxes as one checkbox group. Each becomes its
+        own field, keyed by its id."""
+        out: list[FormField] = []
+        seen: dict[str, int] = {}
+        for field in fields:
+            seen[field.key] = seen.get(field.key, 0) + 1
+        for field in fields:
+            if field.kind == "checkbox" and field.name and field.selector.startswith("input["):
+                try:
+                    boxes = list(page.evaluate(_SPLIT_JS, field.selector) or [])
+                except Exception:
+                    boxes = []
+                if len(boxes) > 1 and all(b.get("id") for b in boxes):
+                    for box in boxes:
+                        out.append(
+                            replace(
+                                field,
+                                key=box["id"],
+                                label=clean_label(box.get("label") or field.label),
+                                options=[],
+                                selector=box["selector"],
+                            )
+                        )
+                    continue
+            if seen[field.key] > 1 and field.selector.startswith("#"):
+                field.key = field.selector[1:].replace("\\", "")
+            out.append(field)
+        return out
+
+    def _read_entries(self, page: Any, fields: list[FormField]) -> None:
+        """Mark the fields of each work-history entry (My Experience) as that
+        entry's: their Location is where the job was, not where the person lives."""
+        self._entries = {}
+        if not fields:
+            return
+        try:
+            ids = list(page.evaluate(_FKIT_JS, [f.selector for f in fields]) or [])
+        except Exception:
+            return
+        for field, fkit in zip(fields, ids, strict=False):
+            found = _ENTRY.match(str(fkit or ""))
+            if found is None or field.kind == "file":
+                continue
+            field.section = "experience"
+            self._entries[field.key] = (found.group(1), found.group(2))
 
     def _read_files(self, page: Any, fields: list[FormField]) -> dict[str, str]:
         """Label the resume upload as the resume; return the files Workday holds, by selector."""
@@ -528,6 +630,7 @@ class WorkdayHandler(WizardHandler):
                 values[field.key] = widget.value
             if field.kind == "file" and field.selector in self._uploaded:
                 values[field.key] = self._uploaded[field.selector]
+        self._values = dict(values)
         return values
 
     def _options(self, page: Any, selector: str) -> list[str]:
@@ -565,6 +668,7 @@ class WorkdayHandler(WizardHandler):
 
     def _add_defaults(self, fields: list[FormField], plan: FillPlan) -> None:
         """Answer the housekeeping questions the answerer would otherwise ask about."""
+        self._add_history(fields, plan)
         planned = {f.key for f in plan.fills}
         for field in fields:
             if field.key in planned:
@@ -585,6 +689,58 @@ class WorkdayHandler(WizardHandler):
                 continue
             plan.fills.append(Fill(key=field.key, value=value, source=source, label=field.label))
             plan.needed[:] = [n for n in plan.needed if n.key != field.key]
+
+    def _add_history(self, fields: list[FormField], plan: FillPlan) -> None:
+        """The dates of each work-history entry, from the role it names.
+
+        Workday's autofill makes an entry per job with its title and company
+        but leaves From and To empty. The role fact with that employer (else
+        that title) gives them: From as MM/YYYY, and "I currently work here"
+        ticked, To left empty, when the role runs to the present."""
+        if not self._roles or not self._entries:
+            return
+        values = dict(self._values)
+        values.update({f.key: str(f.value) for f in plan.fills if isinstance(f.value, str)})
+        parts: dict[str, dict[str, str]] = {}
+        for key, (entry, part) in self._entries.items():
+            parts.setdefault(entry, {})[part] = key
+
+        def named(entry: str, pattern: str) -> str:
+            keys = [k for p, k in parts[entry].items() if re.search(pattern, p, re.I)]
+            return next((values[k] for k in keys if values.get(k)), "")
+
+        planned = {f.key for f in plan.fills}
+        for entry in parts:
+            role = _match_role(
+                self._roles, named(entry, r"title"), named(entry, r"company|employer")
+            )
+            if role is None:
+                continue
+            detail = getattr(role, "detail", {}) or {}
+            end = str(detail.get("end") or "")
+            current = bool(_PRESENT.fullmatch(end.strip()))
+            for field in fields:
+                spot = self._entries.get(field.key)
+                if spot is None or spot[0] != entry or field.key in planned:
+                    continue
+                part = spot[1]
+                value: Any = None
+                if field.kind == "date" and re.search(r"start|from", part, re.I):
+                    value = _month_year(detail.get("start"))
+                elif field.kind == "date" and re.search(r"end|to$", part, re.I):
+                    value = None if current else _month_year(end)
+                    if current:
+                        # Not asked once "I currently work here" is ticked.
+                        plan.needed[:] = [n for n in plan.needed if n.key != field.key]
+                elif field.kind == "checkbox" and re.search(r"current", part, re.I):
+                    plan.needed[:] = [n for n in plan.needed if n.key != field.key]
+                    value = True if current else None
+                if value is None:
+                    continue
+                plan.fills.append(
+                    Fill(key=field.key, value=value, source="resume", label=field.label)
+                )
+                plan.needed[:] = [n for n in plan.needed if n.key != field.key]
 
     def _fill_one(self, page: Any, field: FormField, fill: Fill) -> str | None:
         widget = self._widgets.get(field.key)
@@ -665,6 +821,50 @@ class WorkdayHandler(WizardHandler):
             control.click(timeout=3000)
             page.keyboard.type(part)
             page.wait_for_timeout(100)
+
+
+def _arrived(marker: str, before: str) -> bool:
+    """True once a new step is on screen. Between steps Workday shows
+    applyFlowLoadingPage with the next step already active in the progress bar,
+    and that is not the step yet."""
+    return marker not in ("", before) and not marker.startswith("applyFlowLoadingPage")
+
+
+# A work-history field: "workExperience-6--startDate" is entry workExperience-6, part startDate.
+_ENTRY = re.compile(r"^((?:workExperience|education)-\d+)--(\w+)$")
+_PRESENT = re.compile(r"present|current|now|today|ongoing", re.I)
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def _match_role(roles: list[Any], title: str, company: str) -> Any:
+    """The role fact a work-history entry names: by employer first, then by title."""
+    best, best_score = None, 0
+    want_title, want_company = _norm(title), _norm(company)
+    for role in roles:
+        detail = getattr(role, "detail", {}) or {}
+        employer, held = (
+            _norm(str(detail.get("employer") or "")),
+            _norm(str(detail.get("title") or "")),
+        )
+        score = 0
+        if want_company and employer and (want_company in employer or employer in want_company):
+            score += 2
+        if want_title and held and (want_title == held):
+            score += 1
+        if score > best_score:
+            best, best_score = role, score
+    return best
+
+
+def _month_year(value: Any) -> str | None:
+    """MM/YYYY for a work-history date, from the shapes a role fact keeps it in."""
+    parsed = parse_date(str(value or ""))
+    if parsed is None or parsed[0] is None:
+        return None
+    return f"{parsed[0]:02d}/{parsed[2]:04d}"
 
 
 def parse_date(value: str) -> tuple[int | None, int | None, int] | None:

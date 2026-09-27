@@ -200,6 +200,14 @@ def test_a_company_site_posting_is_blocked_not_followed(page, packet):
 
 
 @pytest.mark.usefixtures("page")
+def test_a_company_website_link_reports_where_it_goes(page, packet):
+    result = run(page, packet, submit=True, variant="external_link")
+    assert result.outcome == "blocked"
+    assert "company's own site" in result.error
+    assert result.external_url == "https://jobs.lever.co/acme/123?source=LinkedIn"
+
+
+@pytest.mark.usefixtures("page")
 def test_a_step_that_rejects_its_answers_stops_with_the_message(page, packet):
     result = run(page, packet, submit=True, variant="invalid")
     assert result.outcome == "blocked"

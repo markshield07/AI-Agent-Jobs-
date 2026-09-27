@@ -20,7 +20,7 @@ import sqlite3
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import nullcontext
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -257,17 +257,36 @@ def apply_to_job(
     screenshot.parent.mkdir(parents=True, exist_ok=True)
 
     started = utcnow()
+    first_ats = handler.ats
     try:
         session_cm = nullcontext(browser) if browser is not None else open_browser(settings)
         with session_cm as session, session.new_page() as page:
             result = handler.apply(
                 page, packet, answerer, submit=submit, screenshot_path=str(screenshot)
             )
+            onward = _company_site_handler(result, handler, handlers)
+            if onward is not None:
+                notes.append(f"{handler.ats} sends this job to {result.external_url}")
+                handler = onward
+                packet = replace(packet, job={**packet.job, "apply_url": result.external_url})
+                result = handler.apply(
+                    page, packet, answerer, submit=submit, screenshot_path=str(screenshot)
+                )
     except BrowserUnavailable as exc:  # not the job's fault: nothing is recorded
         raise ApplyError(str(exc)) from exc
     except Exception as exc:  # a handler bug is a failed attempt, not a dead run
         log.exception("handler %s failed on %s", handler.ats, job_id)
         result = HandlerResult(outcome="failed", error=f"{type(exc).__name__}: {exc}")
+
+    if handler.ats != first_ats:
+        # Sent on to the company's site: it no longer counts toward the site's own cap.
+        onward_url = packet.job.get("apply_url") or ""
+        store.get_or_create_application(
+            conn,
+            job_id,
+            mode=mode,
+            ats=handler.ats if handler.ats != "generic" else detect_ats(onward_url),
+        )
 
     if result.outcome == "dry_run" and mode == "review":
         result.outcome = "review"
@@ -295,6 +314,19 @@ def apply_to_job(
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
     }
+
+
+def _company_site_handler(
+    result: HandlerResult, handler: Handler, handlers: Sequence[Handler]
+) -> Handler | None:
+    """The handler for the company's own form, when a LinkedIn or Indeed posting
+    sends the applicant there; None when there is nowhere to go or nothing
+    that fills that site's form."""
+    url = result.external_url
+    if result.outcome != "blocked" or not url or handler.ats not in SITES:
+        return None
+    others = [h for h in handlers if h.ats not in SITES]
+    return handler_for(url, detect_ats(url), others)
 
 
 def _candidates(conn: sqlite3.Connection, job_ids: Iterable[str] | None, limit: int) -> list[str]:

@@ -166,6 +166,9 @@ class HandlerResult:
     error: str | None = None
     screenshot_path: str | None = None
     final_url: str | None = None
+    # Set by a site handler (LinkedIn, Indeed) when the posting applies on the
+    # company's own site: where that application is, for another handler.
+    external_url: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
 

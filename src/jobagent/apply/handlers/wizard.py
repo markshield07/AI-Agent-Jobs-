@@ -34,7 +34,7 @@ import logging
 import re
 from collections.abc import Sequence
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 from jobagent.apply.browser.dom import current_values, discover_fields
 from jobagent.apply.browser.fill import (
@@ -168,6 +168,7 @@ class WizardHandler(BaseHandler):
                 screenshot_path,
                 error=f"the apply button leads to the company's own site ({page.url}); "
                 "apply there by hand or add it as a career-page job",
+                external_url=page.url,
             )
         if self.signed_out(page):
             return self._stop(page, "blocked", screenshot_path, error=self.login_hint())
@@ -313,15 +314,38 @@ class WizardHandler(BaseHandler):
     def _no_button(self, page: Any, screenshot_path: str | None) -> HandlerResult:
         label = site_info(self.site).label
         if self._any_visible(page, self.external_apply_selectors):
+            external = self.external_url(page)
             error = (
                 f"this posting applies on the company's own site, not through {label}; "
                 "apply there by hand or add it as a career-page job"
             )
-        elif not self._has_session(page):
+            return self._result(
+                page, "blocked", screenshot_path, error=error, external_url=external
+            )
+        if not self._has_session(page):
             error = self.login_hint()
         else:
             error = f"no {label} apply button on the posting; it may be closed or already applied"
         return self._result(page, "blocked", screenshot_path, error=error)
+
+    def external_url(self, page: Any) -> str | None:
+        """The company's application page behind the company-site button.
+
+        Read from the link's href, unwrapping the site's own click-out
+        redirect (LinkedIn's /safety/go/?url=...). The button is never
+        pressed, so a button with no href gives None.
+        """
+        for selector in self.external_apply_selectors:
+            try:
+                control = page.locator(selector).first
+                if not control.is_visible():
+                    continue
+                href = control.get_attribute("href")
+            except Exception:
+                continue
+            if href:
+                return _unwrap_redirect(urljoin(page.url or "", href))
+        return None
 
     def _has_session(self, page: Any) -> bool:
         from jobagent.apply.sessions import signed_in
@@ -417,6 +441,15 @@ def _context(page: Any) -> Any:
         return page.context
     except Exception:
         return None
+
+
+def _unwrap_redirect(url: str) -> str:
+    """The destination of a site's click-out redirect, else `url` itself."""
+    parsed = urlparse(url)
+    target = (parse_qs(parsed.query).get("url") or [""])[0]
+    if target.startswith(("http://", "https://")):
+        return target
+    return url
 
 
 def _close(page: Any) -> None:

@@ -316,6 +316,41 @@ def test_the_url_picks_the_handler_and_the_generic_one_keeps_the_jobs_ats(
     assert record["handler"] == "lever" and len(lever.calls) == 1
 
 
+def test_a_company_site_posting_goes_on_to_that_sites_handler(conn, settings, ready_job):
+    jid = ready_job("https://www.linkedin.com/jobs/view/1/")
+    outward = "https://jobs.lever.co/acme/1"
+    linkedin = FakeHandler(
+        _result("blocked", error="company's own site", external_url=outward),
+        ats="linkedin",
+        hosts=("linkedin.com",),
+    )
+    lever = FakeHandler(ats="lever", hosts=("lever.co",))
+
+    record = apply_to_job(
+        conn,
+        jid,
+        settings,
+        handlers=[linkedin, lever],
+        completer=NeverCalled(),
+        browser=FakeBrowser(),
+    )
+    assert record["outcome"] == "dry_run" and record["handler"] == "lever"
+    assert lever.calls[0]["packet"].job["apply_url"] == outward
+    assert store.get_application(conn, record["application_id"])["ats"] == "lever"
+    assert any(outward in note for note in record["notes"])
+
+
+def test_a_company_site_with_no_handler_stays_blocked(conn, settings, ready_job):
+    jid = ready_job("https://www.linkedin.com/jobs/view/1/")
+    linkedin = FakeHandler(
+        _result("blocked", error="company's own site", external_url="https://x.example/job"),
+        ats="linkedin",
+        hosts=("linkedin.com",),
+    )
+    record = _apply(conn, jid, settings, linkedin)
+    assert record["outcome"] == "blocked" and record["handler"] == "linkedin"
+
+
 def test_attempts_are_numbered_in_the_screenshot_name(conn, settings, ready_job):
     jid = ready_job()
     handler = FakeHandler()

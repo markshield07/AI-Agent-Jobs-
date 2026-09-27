@@ -167,8 +167,8 @@ agent opens the form, fills every field it can, takes a screenshot to
 parks the application for your approval. Only `auto` presses the button, and
 only under a daily cap with a jittered pause between submissions.
 
-Greenhouse, Lever, Ashby, LinkedIn Easy Apply and Indeed's own application
-have a handler each, and anything else falls to a generic filler that works
+Greenhouse, Lever, Ashby, Workday, LinkedIn Easy Apply and Indeed's own
+application have a handler each, and anything else falls to a generic filler that works
 from what the page shows. The
 generic one refuses to fill a form that is not an application: a careers page's
 search box is a form too.
@@ -226,8 +226,10 @@ stops, and closes the form unsent (LinkedIn: Dismiss, then Discard, so no draft
 is left in your account), when:
 
 - you are not signed in (`blocked`, with the `login` command to run);
-- the posting applies on the company's site instead (`blocked`; add that site as
-  a career-page job);
+- the posting applies on the company's site instead: the agent follows the
+  link to that site's form and fills it with that site's handler (Greenhouse,
+  Lever, Ashby, Workday, or the generic filler), and the application counts
+  against that site, not LinkedIn's cap;
 - a question has no answer on file (`needs_input`, as with any form);
 - a step will not accept an answer, or Next does nothing (`blocked`, with the
   site's message and a screenshot);
@@ -236,6 +238,41 @@ is left in your account), when:
 In `auto` mode each of the two sites has its own cap, 10 a day by default, on
 top of the overall one. See [the warning below](#before-you-turn-submission-on)
 before turning it on.
+
+### Workday
+
+Many large companies take applications on their own Workday site
+(`<company>.wd5.myworkdayjobs.com`), and every one of them keeps its own
+candidate accounts. So sign in once per company, with a link to one of its
+postings:
+
+```bash
+jobagent login workday https://crowdstrike.wd5.myworkdayjobs.com/crowdstrikecareers/job/...
+jobagent login workday --status             # every company you are signed in to
+jobagent login workday <posting URL> --forget
+```
+
+A browser window opens on that company's site. Sign in, or use Create Account
+if you have never applied there, and finish any email check it sends; then
+press Enter in the terminal. As with LinkedIn, **the password is never seen or
+kept**: the company's Workday cookies are, in
+`data/sessions/workday/<host>.json`, readable by your user only.
+
+The agent presses Apply, picks **Autofill with Resume** (Workday reads the
+tailored resume into My Experience) or **Apply Manually** where that is all
+there is, and then goes step by step: My Information, My Experience,
+Application Questions, Voluntary Disclosures, Self Identify, Review. It reads
+Workday's own controls (dropdown buttons, the "How did you hear about us?"
+search box, dates in three boxes) and fills them the way you would. "How did
+you hear about us?" gets the board the job was found on; phone device type is
+Mobile; the self-identify form is signed with your name and today's date; the
+demographic questions are declined unless your answer bank says otherwise.
+
+Workday saves a draft at every "Save and Continue". A dry run therefore leaves
+the application in that company's account, filled in and unsent, at the
+Review step; you can open it there, read it, and press Submit yourself. It
+stops as `blocked` at a sign-in page (with the `login` command to run), and
+as `needs_input` at a question nothing on file answers, like any other form.
 
 ### Playwright
 
@@ -426,9 +463,10 @@ src/jobagent/
 │   │   ├── session.py  Launching Chromium; the only place Playwright is imported
 │   │   ├── dom.py      Reading a form: what each control is and what it is called
 │   │   └── fill.py     Putting the plan on the page, and reading what it says back
-│   ├── handlers/       One per ATS (Greenhouse, Lever, Ashby) plus the generic filler;
-│   │                   wizard.py is the step loop LinkedIn and Indeed share
-│   ├── sessions.py     Saved LinkedIn and Indeed sign-ins: cookies only, owner-readable
+│   ├── handlers/       One per ATS (Greenhouse, Lever, Ashby, Workday) plus the generic
+│   │                   filler; wizard.py is the step loop LinkedIn, Indeed and Workday share
+│   ├── sessions.py     Saved LinkedIn, Indeed and per-company Workday sign-ins: cookies
+│   │                   only, owner-readable
 │   ├── store.py        Applications and attempts on disk; status derived from events
 │   └── pipeline.py     One apply pass: job, variant, packet, handler, attempt
 ├── inbox/

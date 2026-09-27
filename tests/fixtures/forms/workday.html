@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Network Engineering Manager | Acme Robotics Careers</title>
+<!--
+  A posting on a company's Workday site (<company>.wd5.myworkdayjobs.com/...), drawn with the
+  data-automation-id values Workday uses: the job search box and Sign In in the header, the
+  "Apply" adventureButton, the start choice (autofillWithResume, applyManually), and the steps
+  in <main data-automation-id="applyFlowPage">: Autofill with Resume, My Information, My
+  Experience, Application Questions, Voluntary Disclosures, Self Identify, Review. Each step
+  ends with bottom-navigation-next-button ("Continue", "Save and Continue", then "Submit" on
+  Review). Its controls are Workday's own: dropdowns are <button aria-haspopup="listbox">
+  opening role=option items; "How Did You Hear About Us?" is a prompt, a searchBox whose
+  categories open further lists and whose pick shows as a selectedItem pill; the signature
+  date is three spin buttons (dateSectionMonth/Day/Year-input). Errors show as errorMessage.
+
+  Variants, chosen with ?variant=...:
+    manual       the start choice offers Apply Manually only; My Experience has no resume yet
+    signed_out   choosing how to start leads to Workday's sign-in page
+    needs_input  Application Questions adds a required question nothing on file answers
+    invalid      Application Questions will not save and shows an error
+    closed       the posting no longer takes applications and has no Apply button
+    unconfirmed  Submit shows nothing afterwards
+-->
+<style>
+  body { font-family: -apple-system, Helvetica, Arial, sans-serif; margin: 0; color: #222; }
+  header { display: flex; gap: 12px; padding: 8px 24px; border-bottom: 1px solid #ddd; }
+  section, main { padding: 16px 24px; }
+  [data-automation-id^="formField-"] { margin: 12px 0; position: relative; }
+  [data-automation-id^="formField-"] > label, legend { display: block; font-weight: 600; }
+  [role="listbox"] { border: 1px solid #999; background: #fff; margin: 0; padding: 0; list-style: none; width: 320px; }
+  [role="option"] { padding: 4px 8px; cursor: pointer; }
+  [data-automation-id="errorMessage"] { color: #b00020; }
+  [data-automation-id="selectedItem"] { display: inline-block; background: #eef; padding: 2px 6px; border-radius: 10px; }
+  .file-input { position: absolute; left: -9999px; }
+  .date input { width: 48px; }
+  footer { margin-top: 16px; }
+  #start { border: 1px solid #999; padding: 16px; width: 360px; }
+</style>
+</head>
+<body>
+<header data-automation-id="header">
+  <input data-automation-id="keywordSearchInput" id="job-search" type="text" placeholder="Search for jobs" aria-label="Search for jobs">
+  <button data-automation-id="utilityButtonSignIn" type="button">Sign In</button>
+</header>
+
+<section id="posting">
+  <h2 data-automation-id="jobPostingHeader">Network Engineering Manager</h2>
+  <div>Remote, USA</div>
+  <div data-variant="closed"><p>This job posting is no longer accepting applications.</p></div>
+  <div data-variant=",manual,signed_out,needs_input,invalid,unconfirmed">
+    <a data-automation-id="adventureButton" role="button" href="#apply">Apply</a>
+  </div>
+  <p>Lead the team that runs our warehouse robot network.</p>
+</section>
+
+<div id="start" role="dialog" hidden>
+  <h3>Start Your Application</h3>
+  <div data-variant=",signed_out,needs_input,invalid,unconfirmed">
+    <a data-automation-id="autofillWithResume" role="button" href="#autofill">Autofill with Resume</a>
+  </div>
+  <a data-automation-id="applyManually" role="button" href="#manual">Apply Manually</a>
+</div>
+
+<main data-automation-id="applyFlowPage" id="flow" hidden></main>
+
+<template id="step-signin">
+  <div data-automation-id="signInContent">
+    <h2>Sign In</h2>
+    <div data-automation-id="formField-email"><label for="si-email">Email Address</label><input id="si-email" type="text" data-automation-id="email"></div>
+    <div data-automation-id="formField-password"><label for="si-password">Password</label><input id="si-password" type="password" data-automation-id="password"></div>
+    <button type="button" data-automation-id="signInSubmitButton">Sign In</button>
+    <a data-automation-id="createAccountLink" href="#create">Create Account</a>
+  </div>
+</template>
+
+<template id="step-autofill">
+  <h2>Autofill with Resume</h2>
+  <div data-automation-id="formField-resume">
+    <label for="autofill-resume">Upload a file (5MB max)<abbr title="required">*</abbr></label>
+    <input id="autofill-resume" class="file-input" type="file" data-automation-id="file-upload-input-ref" accept=".pdf,.doc,.docx">
+    <button type="button" data-automation-id="select-files">Select files</button>
+  </div>
+  <footer><button type="button" data-automation-id="bottom-navigation-next-button">Continue</button></footer>
+</template>
+
+<template id="step-info">
+  <h2>My Information</h2>
+  <div data-automation-id="formField-source">
+    <label for="source--source">How Did You Hear About Us?<abbr title="required">*</abbr></label>
+    <div data-automation-id="multiselectInputContainer">
+      <input id="source--source" type="text" data-automation-id="searchBox" placeholder="Search">
+    </div>
+    <div data-automation-id="selectedItemList"></div>
+  </div>
+  <div data-automation-id="formField-previousWorker">
+    <fieldset>
+      <legend>Have you previously worked for Acme Robotics?<abbr title="required">*</abbr></legend>
+      <input type="radio" id="prev-yes" name="candidateIsPreviousWorker" value="true"><label for="prev-yes">Yes</label>
+      <input type="radio" id="prev-no" name="candidateIsPreviousWorker" value="false"><label for="prev-no">No</label>
+    </fieldset>
+  </div>
+  <div data-automation-id="formField-country">
+    <label for="country--country">Country<abbr title="required">*</abbr></label>
+    <button type="button" id="country--country" aria-haspopup="listbox" data-options="Canada|United States of America">United States of America</button>
+  </div>
+  <div data-automation-id="formField-legalName--firstName">
+    <label for="legalNameSection_firstName">Given Name(s)<abbr title="required">*</abbr></label>
+    <input id="legalNameSection_firstName" type="text" value="Mark">
+  </div>
+  <div data-automation-id="formField-legalName--lastName">
+    <label for="legalNameSection_lastName">Family Name<abbr title="required">*</abbr></label>
+    <input id="legalNameSection_lastName" type="text" value="Shield">
+  </div>
+  <div data-automation-id="formField-email">
+    <label for="email--email">Email Address<abbr title="required">*</abbr></label>
+    <input id="email--email" type="text" value="mark@example.com">
+  </div>
+  <div data-automation-id="formField-phoneType">
+    <label for="phoneNumber--phoneType">Phone Device Type<abbr title="required">*</abbr></label>
+    <button type="button" id="phoneNumber--phoneType" aria-haspopup="listbox" data-options="Home|Mobile|Work">Select One</button>
+  </div>
+  <div data-automation-id="formField-phoneNumber">
+    <label for="phoneNumber--phoneNumber">Phone Number<abbr title="required">*</abbr></label>
+    <input id="phoneNumber--phoneNumber" type="text">
+  </div>
+  <footer><button type="button" data-automation-id="bottom-navigation-next-button">Save and Continue</button></footer>
+</template>
+
+<template id="step-experience">
+  <h2>My Experience</h2>
+  <div data-automation-id="formField-resume">
+    <label for="experience-resume">Resume/CV</label>
+    <div data-only-autofill="1"><div data-automation-id="file-upload-successful">mark-shield.pdf</div></div>
+    <input id="experience-resume" class="file-input" type="file" data-automation-id="file-upload-input-ref" accept=".pdf,.doc,.docx">
+    <button type="button" data-automation-id="select-files">Select files</button>
+  </div>
+  <footer><button type="button" data-automation-id="bottom-navigation-next-button">Save and Continue</button></footer>
+</template>
+
+<template id="step-questions">
+  <h2>Application Questions</h2>
+  <div data-automation-id="formField-auth">
+    <label for="q-auth">Are you legally authorized to work in the United States?<abbr title="required">*</abbr></label>
+    <button type="button" id="q-auth" aria-haspopup="listbox" data-options="Yes|No">Select One</button>
+  </div>
+  <div data-automation-id="formField-sponsor">
+    <label for="q-sponsor">Will you now or in the future require sponsorship for employment visa status?<abbr title="required">*</abbr></label>
+    <button type="button" id="q-sponsor" aria-haspopup="listbox" data-options="Yes|No">Select One</button>
+  </div>
+  <div data-automation-id="formField-teams" data-only="needs_input">
+    <label for="q-teams">How many years have you managed network engineering teams?<abbr title="required">*</abbr></label>
+    <input id="q-teams" type="text">
+  </div>
+  <footer><button type="button" data-automation-id="bottom-navigation-next-button">Save and Continue</button></footer>
+</template>
+
+<template id="step-disclosures">
+  <h2>Voluntary Disclosures</h2>
+  <div data-automation-id="formField-gender">
+    <label for="d-gender">Gender</label>
+    <button type="button" id="d-gender" aria-haspopup="listbox" data-options="Female|Male|I do not wish to self-identify">Select One</button>
+  </div>
+  <div data-automation-id="formField-veteran">
+    <label for="d-veteran">Veteran Status<abbr title="required">*</abbr></label>
+    <button type="button" id="d-veteran" aria-haspopup="listbox" data-options="I am a protected veteran|I am not a protected veteran|I don't wish to answer">Select One</button>
+  </div>
+  <div data-automation-id="formField-acceptTermsAndAgreements">
+    <input type="checkbox" id="termsAndConditions--acceptTermsAndAgreements" required>
+    <label for="termsAndConditions--acceptTermsAndAgreements">I have read and consent to the terms and conditions<abbr title="required">*</abbr></label>
+  </div>
+  <footer><button type="button" data-automation-id="bottom-navigation-next-button">Save and Continue</button></footer>
+</template>
+
+<template id="step-selfid">
+  <h2>Self Identify</h2>
+  <div data-automation-id="selfIdentifiedDisabilityData">
+    <div data-automation-id="formField-name">
+      <label for="selfId-name">Name<abbr title="required">*</abbr></label>
+      <input id="selfId-name" type="text">
+    </div>
+    <div data-automation-id="formField-dateSignedOn">
+      <label for="selfId-date-month">Date<abbr title="required">*</abbr></label>
+      <div data-automation-id="dateInputWrapper" class="date">
+        <input id="selfId-date-month" type="text" role="spinbutton" aria-label="Month" data-automation-id="dateSectionMonth-input">
+        <input id="selfId-date-day" type="text" role="spinbutton" aria-label="Day" data-automation-id="dateSectionDay-input">
+        <input id="selfId-date-year" type="text" role="spinbutton" aria-label="Year" data-automation-id="dateSectionYear-input">
+      </div>
+    </div>
+    <div data-automation-id="formField-disabilityStatus">
+      <fieldset>
+        <legend>Please check one of the boxes below<abbr title="required">*</abbr></legend>
+        <input type="checkbox" id="dis-yes" name="disabilityStatus" value="yes"><label for="dis-yes">Yes, I have a disability (or previously had a disability)</label>
+        <input type="checkbox" id="dis-no" name="disabilityStatus" value="no"><label for="dis-no">No, I do not have a disability and have not had one in the past</label>
+        <input type="checkbox" id="dis-decline" name="disabilityStatus" value="decline"><label for="dis-decline">I do not want to answer</label>
+      </fieldset>
+    </div>
+  </div>
+  <footer><button type="button" data-automation-id="bottom-navigation-next-button">Save and Continue</button></footer>
+</template>
+
+<template id="step-review">
+  <h2>Review</h2>
+  <p>Network Engineering Manager, Acme Robotics</p>
+  <footer><button type="button" data-automation-id="bottom-navigation-next-button">Submit</button></footer>
+</template>
+
+<template id="step-sent">
+  <div data-automation-id="congratulationsPopup">
+    <h2>Application Submitted</h2>
+    <p>Congratulations, your application has been submitted. You can check its status in My Applications.</p>
+  </div>
+</template>
+
+<script>
+(function () {
+  var variant = new URLSearchParams(location.search).get('variant') || '';
+  Array.prototype.forEach.call(document.querySelectorAll('[data-variant]'), function (el) {
+    var wanted = el.getAttribute('data-variant').split(',');
+    if (wanted.indexOf(variant) < 0) el.parentNode.removeChild(el);
+  });
+  window.__steps = [];
+  window.__answers = {};
+  window.__uploads = 0;
+  var flow = document.getElementById('flow');
+  var start = document.getElementById('start');
+  var path = 'autofill';
+  var order = ['info', 'experience', 'questions', 'disclosures', 'selfid', 'review'];
+
+  // The prompt's lists: the first list, and what each category opens.
+  var TOP = ['Company Website', 'Job Board', 'Referral'];
+  var UNDER = { 'Job Board': ['Glassdoor', 'Indeed', 'LinkedIn'] };
+
+  var apply = document.querySelector('[data-automation-id="adventureButton"]');
+  if (apply) apply.addEventListener('click', function (e) { e.preventDefault(); start.hidden = false; });
+  Array.prototype.forEach.call(start.querySelectorAll('a'), function (a) {
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      path = a.getAttribute('data-automation-id') === 'autofillWithResume' ? 'autofill' : 'manual';
+      window.__start = path;
+      start.hidden = true;
+      document.getElementById('posting').hidden = true;
+      flow.hidden = false;
+      if (variant === 'signed_out') { show('signin'); return; }
+      show(path === 'autofill' ? 'autofill' : 'info');
+    });
+  });
+
+  function text(el) { return (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim(); }
+  function val(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+  function shown(id) { var el = document.getElementById(id); return el ? text(el) : ''; }
+  function closeLists() { Array.prototype.forEach.call(document.querySelectorAll('[role="listbox"]'), function (l) { l.remove(); }); }
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeLists(); });
+
+  function listUnder(anchor, items, onPick) {
+    closeLists();
+    var list = document.createElement('ul');
+    list.setAttribute('role', 'listbox');
+    list.setAttribute('data-automation-id', 'activeListContainer');
+    items.forEach(function (item) {
+      var li = document.createElement('li');
+      li.setAttribute('role', 'option');
+      li.setAttribute('data-automation-id', 'promptOption');
+      li.textContent = item;
+      li.addEventListener('click', function () { onPick(item); });
+      list.appendChild(li);
+    });
+    anchor.insertAdjacentElement('afterend', list);
+  }
+
+  function wireDropdowns(root) {
+    Array.prototype.forEach.call(root.querySelectorAll('button[aria-haspopup="listbox"]'), function (b) {
+      b.addEventListener('click', function () {
+        listUnder(b, b.getAttribute('data-options').split('|'), function (item) { b.textContent = item; closeLists(); });
+      });
+    });
+  }
+
+  function wirePrompt(root) {
+    var input = root.querySelector('[data-automation-id="searchBox"]');
+    if (!input) return;
+    var pills = root.querySelector('[data-automation-id="selectedItemList"]');
+    function pick(item) {
+      if (UNDER[item]) { listUnder(input.parentNode, UNDER[item], pick); return; }
+      pills.innerHTML = '';
+      var pill = document.createElement('div');
+      pill.setAttribute('data-automation-id', 'selectedItem');
+      pill.textContent = item;
+      pills.appendChild(pill);
+      input.value = '';
+      closeLists();
+    }
+    input.addEventListener('click', function () { listUnder(input.parentNode, TOP, pick); });
+    input.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') return;
+      var q = input.value.toLowerCase();
+      var all = TOP.concat(UNDER['Job Board']);
+      listUnder(input.parentNode, all.filter(function (t) { return t.toLowerCase().indexOf(q) >= 0; }), pick);
+    });
+  }
+
+  function show(name) {
+    window.__steps.push(name);
+    flow.innerHTML = document.getElementById('step-' + name).innerHTML;
+    Array.prototype.forEach.call(flow.querySelectorAll('[data-only]'), function (el) {
+      if (el.getAttribute('data-only') !== variant) el.parentNode.removeChild(el);
+    });
+    Array.prototype.forEach.call(flow.querySelectorAll('[data-only-autofill]'), function (el) {
+      if (path !== 'autofill') el.parentNode.removeChild(el);
+    });
+    Array.prototype.forEach.call(flow.querySelectorAll('input[type="file"]'), function (f) {
+      f.addEventListener('change', function () { window.__uploads += f.files.length; });
+    });
+    wireDropdowns(flow);
+    wirePrompt(flow);
+    var next = flow.querySelector('[data-automation-id="bottom-navigation-next-button"]');
+    if (next) next.addEventListener('click', function () { advance(name); });
+  }
+
+  function error(message) {
+    var el = document.createElement('div');
+    el.setAttribute('data-automation-id', 'errorMessage');
+    el.textContent = message;
+    flow.insertBefore(el, flow.firstChild);
+  }
+
+  function advance(from) {
+    var a = window.__answers;
+    if (from === 'autofill') {
+      var f = document.getElementById('autofill-resume');
+      if (!f.files.length) { error('Error: Upload a file'); return; }
+      a.autofillResume = f.files[0].name;
+      show('info');
+      return;
+    }
+    if (from === 'info') {
+      var pill = flow.querySelector('[data-automation-id="selectedItem"]');
+      var prev = flow.querySelector('input[name="candidateIsPreviousWorker"]:checked');
+      a.info = { source: pill ? text(pill) : '', previous: prev ? prev.value : '', country: shown('country--country'),
+        first: val('legalNameSection_firstName'), last: val('legalNameSection_lastName'), email: val('email--email'),
+        phoneType: shown('phoneNumber--phoneType'), phone: val('phoneNumber--phoneNumber') };
+      if (!pill || !prev || a.info.phoneType === 'Select One' || !a.info.phone) { error('Errors Found: fill in the required fields'); return; }
+    }
+    if (from === 'experience') {
+      var r = document.getElementById('experience-resume');
+      a.experienceResume = r.files.length ? r.files[0].name : null;
+      if (path !== 'autofill' && !r.files.length) { error('Error: Resume/CV is required'); return; }
+    }
+    if (from === 'questions') {
+      a.questions = { auth: shown('q-auth'), sponsor: shown('q-sponsor'), teams: val('q-teams') };
+      if (variant === 'invalid') { error('Error: The field Sponsorship could not be saved'); return; }
+      if (a.questions.auth === 'Select One' || a.questions.sponsor === 'Select One') { error('Errors Found'); return; }
+    }
+    if (from === 'disclosures') {
+      a.disclosures = { gender: shown('d-gender'), veteran: shown('d-veteran'),
+        terms: document.getElementById('termsAndConditions--acceptTermsAndAgreements').checked };
+    }
+    if (from === 'selfid') {
+      var dis = Array.prototype.map.call(flow.querySelectorAll('input[name="disabilityStatus"]:checked'), function (c) { return c.value; });
+      a.selfid = { name: val('selfId-name'), month: val('selfId-date-month'), day: val('selfId-date-day'),
+        year: val('selfId-date-year'), disability: dis };
+    }
+    if (from === 'review') {
+      window.__submitted = true;
+      if (variant === 'unconfirmed') { flow.innerHTML = ''; return; }
+      show('sent');
+      return;
+    }
+    show(order[order.indexOf(from) + 1]);
+  }
+})();
+</script>
+</body>
+</html>

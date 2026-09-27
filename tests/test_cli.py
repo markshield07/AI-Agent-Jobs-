@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -485,6 +486,51 @@ def test_login_saves_the_session_from_a_visible_browser(
     assert "LinkedIn sign-in deleted." in capsys.readouterr().out
     main.run(["login", "linkedin", "--status"])
     assert "not signed in. Run: jobagent login linkedin" in capsys.readouterr().out
+
+
+def test_login_workday_waits_for_enter_and_saves_that_company(
+    cli_settings, settings, monkeypatch, capsys
+):
+    import io
+
+    from jobagent.apply import sessions
+
+    posting = "https://acme.wd5.myworkdayjobs.com/careers/job/Remote/Engineer_R1"
+    seen = {}
+
+    def fake_login(settings_, url, is_done, *, timeout_s, confirmed):
+        seen.update(url=url, timeout=timeout_s)
+        cookies = [{"name": "PLAY_SESSION", "value": "x", "domain": "acme.wd5.myworkdayjobs.com"}]
+        assert not is_done(cookies), "Workday has no known sign-in cookie"
+        for _ in range(200):
+            if confirmed():
+                break
+            time.sleep(0.01)
+        assert confirmed(), "Enter in the terminal ends the wait"
+        return {"cookies": cookies, "origins": []}
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("\n"))
+    monkeypatch.setattr("jobagent.apply.browser.session.interactive_login", fake_login)
+    main.run(["login", "workday", posting, "--timeout", "90"])
+    out = capsys.readouterr().out
+    assert seen == {"url": posting, "timeout": 90}
+    assert "press Enter" in out and "password goes to Workday only" in out
+    assert sessions.workday_hosts(settings) == ["acme.wd5.myworkdayjobs.com"]
+
+    main.run(["login", "workday", "--status"])
+    assert "Workday acme.wd5.myworkdayjobs.com: saved" in capsys.readouterr().out
+    main.run(["login", "workday", posting, "--forget"])
+    assert "deleted" in capsys.readouterr().out
+    assert sessions.workday_hosts(settings) == []
+
+
+def test_login_workday_needs_a_workday_posting(cli_settings, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main.run(["login", "workday"])
+    assert exc.value.code == 2 and "posting's link" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as exc:
+        main.run(["login", "workday", "https://www.linkedin.com/jobs/view/1/"])
+    assert exc.value.code == 2 and "not a Workday posting" in capsys.readouterr().err
 
 
 def test_login_that_times_out_saves_nothing(cli_settings, settings, monkeypatch, capsys):

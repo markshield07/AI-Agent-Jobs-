@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -267,10 +267,16 @@ def fill_field(page: Any, field: FormField, fill: Fill) -> str | None:
 
 
 def fill_plan(
-    page: Any, fields: Sequence[FormField], plan: FillPlan
+    page: Any,
+    fields: Sequence[FormField],
+    plan: FillPlan,
+    fill_one: Callable[[Any, FormField, Fill], str | None] | None = None,
 ) -> tuple[list[Fill], list[NeededInput], list[str]]:
     """Apply every fill. Returns what went on, what a required field still
-    needs (with the page's reason), and notes about optional fields skipped."""
+    needs (with the page's reason), and notes about optional fields skipped.
+    `fill_one` puts one value on the page, for a site with controls of its own;
+    it defaults to `fill_field`."""
+    fill_one = fill_one or fill_field
     by_key = {f.key: f for f in fields}
     done: list[Fill] = []
     needed: list[NeededInput] = []
@@ -280,7 +286,7 @@ def fill_plan(
         if field is None:
             notes.append(f"plan names {fill.key!r}, which the form does not have")
             continue
-        error = fill_field(page, field, fill)
+        error = fill_one(page, field, fill)
         if error is None:
             done.append(fill)
             continue

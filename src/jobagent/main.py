@@ -10,7 +10,7 @@ jobagent applications    list applications and what they wait on
 jobagent answer          answer questions a form asked, then try again
 jobagent approve         submit an application left at the button
 jobagent inbox           read replies from the mailbox and record what they say
-jobagent login           sign in to LinkedIn or Indeed once, in a visible browser
+jobagent login           sign in to LinkedIn, Indeed or a company's Workday, once
 jobagent run             one full cycle: discover, tailor, apply, read replies
 """
 
@@ -168,9 +168,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     login = sub.add_parser(
         "login",
-        help="Sign in to LinkedIn or Indeed once, in a visible browser; the password is not kept.",
+        help="Sign in to LinkedIn, Indeed or a company's Workday once, in a visible browser; "
+        "the password is not kept.",
     )
-    login.add_argument("site", choices=("linkedin", "indeed"))
+    login.add_argument("site", choices=("linkedin", "indeed", "workday"))
+    login.add_argument(
+        "url",
+        nargs="?",
+        help="Workday only: a posting on the company's Workday site "
+        "(https://<company>.wd5.myworkdayjobs.com/...). Each company has its own account.",
+    )
     login.add_argument("--status", action="store_true", help="Show whether a sign-in is saved.")
     login.add_argument("--forget", action="store_true", help="Delete the saved sign-in.")
     login.add_argument(
@@ -561,6 +568,8 @@ def _cmd_login(args: argparse.Namespace) -> int:
     from jobagent.apply.browser.session import BrowserUnavailable, interactive_login
 
     settings = get_settings()
+    if args.site == "workday":
+        return _login_workday(args, settings)
     site = sessions.site(args.site)
     if args.forget:
         gone = sessions.forget_session(settings, site.name)
@@ -597,6 +606,76 @@ def _cmd_login(args: argparse.Namespace) -> int:
         print(exc, file=sys.stderr)
         return 2
     print(f"Signed in to {site.label}. Saved to {path}.")
+    return 0
+
+
+def _login_workday(args: argparse.Namespace, settings: Settings) -> int:
+    from jobagent.apply import sessions
+    from jobagent.apply.browser.session import BrowserUnavailable, interactive_login
+
+    if args.status and not args.url:
+        hosts = sessions.workday_hosts(settings)
+        if not hosts:
+            print("Workday: no company sign-ins saved. Run: jobagent login workday <posting URL>")
+        for host in hosts:
+            status = sessions.workday_status(settings, host)
+            print(f"Workday {host}: saved {status['saved_at']}, {status['cookies']} live cookies.")
+        return 0
+    if not args.url:
+        print(
+            "Give the posting's link: jobagent login workday "
+            "https://<company>.wd5.myworkdayjobs.com/...",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        host = sessions.workday_host(args.url)
+    except sessions.UnknownSite as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    if args.forget:
+        gone = sessions.forget_workday_session(settings, host)
+        print(f"Workday sign-in for {host} deleted." if gone else f"No sign-in saved for {host}.")
+        return 0
+    if args.status:
+        status = sessions.workday_status(settings, host)
+        if not status["saved"]:
+            print(f"Workday {host}: not signed in. Run: jobagent login workday {args.url}")
+        else:
+            print(f"Workday {host}: saved {status['saved_at']}, {status['cookies']} live cookies.")
+        return 0
+
+    print(
+        f"A browser window will open at {host}. Each company on Workday has its own account: "
+        "use Sign In at the top of the page, or Create Account if you have never applied "
+        "there, and finish any email check it asks for. The password goes to Workday only; "
+        f"what is kept is this company's cookies, in "
+        f"{sessions.workday_session_path(settings, host)} (readable by you only).\n"
+        "When you are signed in, come back here and press Enter."
+    )
+    pressed = threading.Event()
+
+    def wait_for_enter() -> None:
+        try:
+            sys.stdin.readline()
+        except (OSError, ValueError):
+            return
+        pressed.set()
+
+    threading.Thread(target=wait_for_enter, daemon=True).start()
+    try:
+        state = interactive_login(
+            settings,
+            args.url,
+            lambda cookies: False,
+            timeout_s=args.timeout,
+            confirmed=pressed.is_set,
+        )
+        path = sessions.save_workday_session(settings, host, state)
+    except (BrowserUnavailable, TimeoutError, ValueError) as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    print(f"Saved the Workday sign-in for {host} to {path}.")
     return 0
 
 

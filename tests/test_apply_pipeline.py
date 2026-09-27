@@ -721,3 +721,16 @@ def test_linkedin_and_indeed_each_have_their_own_lower_cap(conn, settings, ready
     assert store.submitted_last_day(conn, ats="linkedin") == 1
     assert store.submitted_last_day(conn, ats="indeed") == 1
     assert store.submitted_last_day(conn) == 2
+
+
+def test_a_linkedin_posting_that_sends_you_to_workday_gets_the_workday_handler():
+    from jobagent.apply.handlers import default_handlers
+    from jobagent.apply.pipeline import _company_site_handler
+
+    handlers = default_handlers()
+    linkedin = next(h for h in handlers if h.ats == "linkedin")
+    outward = (
+        "https://crowdstrike.wd5.myworkdayjobs.com/crowdstrikecareers/job/USA-Remote/Manager_R1"
+    )
+    onward = _company_site_handler(_result("blocked", external_url=outward), linkedin, handlers)
+    assert onward is not None and onward.ats == "workday"

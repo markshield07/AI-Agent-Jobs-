@@ -103,6 +103,10 @@ class WizardHandler(BaseHandler):
     # Hosts that are still the site's own flow after the apply button.
     own_hosts: tuple[str, ...] = ()
     max_steps: int = 12
+    # Upload the tailored resume even where the site shows one already. True
+    # where that one is the account's old resume (LinkedIn); False where it
+    # is the one this run uploaded a step earlier (Workday).
+    refill_files: bool = True
 
     # -- what subclasses may override --------------------------------------
 
@@ -124,6 +128,15 @@ class WizardHandler(BaseHandler):
 
     def discard(self, page: Any) -> None:
         """Close the form without sending it. The default leaves the page as it is."""
+
+    def discover_step(self, page: Any, root: str | None) -> list[FormField]:
+        """The fields of the step on screen. A site with controls of its own
+        (Workday's dropdown buttons) adds them here."""
+        return discover_fields(page, root=root)
+
+    def prefilled(self, page: Any, fields: list[FormField]) -> dict[str, str]:
+        """What the site already put in the step's fields, by field key."""
+        return current_values(page, fields)
 
     # -- the shared flow ---------------------------------------------------
 
@@ -184,7 +197,7 @@ class WizardHandler(BaseHandler):
         for step in range(1, self.max_steps + 1):
             root = self._mark_root(page)
             try:
-                fields = discover_fields(page, root=root)
+                fields = self.discover_step(page, root)
             except Exception as exc:
                 return self._stop(
                     page,
@@ -194,9 +207,9 @@ class WizardHandler(BaseHandler):
                     **common(),
                 )
             seen.extend(fields)
-            prefilled = current_values(page, fields)
+            prefilled = self.prefilled(page, fields)
             for field in fields:
-                if field.key in prefilled and field.kind != "file":
+                if field.key in prefilled and (field.kind != "file" or not self.refill_files):
                     filled.append(
                         Fill(
                             key=field.key,
@@ -205,7 +218,11 @@ class WizardHandler(BaseHandler):
                             label=field.label,
                         )
                     )
-            todo = [f for f in fields if f.key not in prefilled or f.kind == "file"]
+            todo = [
+                f
+                for f in fields
+                if f.key not in prefilled or (f.kind == "file" and self.refill_files)
+            ]
             if todo:
                 plan = answerer(todo)
                 done, unfilled, notes = self.fill(page, todo, plan)

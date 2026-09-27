@@ -92,3 +92,53 @@ def test_status_and_forget(settings):
     assert sessions.forget_session(settings, "linkedin") is True
     assert sessions.forget_session(settings, "linkedin") is False
     assert sessions.saved_cookies(settings) == []
+
+
+# ------------------------------------------------------------------ workday --
+
+WORKDAY_POSTING = "https://acme.wd5.myworkdayjobs.com/careers/job/Remote/Engineer_R1"
+
+
+def test_a_workday_sign_in_is_per_company(settings):
+    assert sessions.workday_host(WORKDAY_POSTING) == "acme.wd5.myworkdayjobs.com"
+    assert sessions.workday_host("globex.wd1.myworkdaysite.com/recruiting") == (
+        "globex.wd1.myworkdaysite.com"
+    )
+    with pytest.raises(sessions.UnknownSite):
+        sessions.workday_host("https://www.linkedin.com/jobs/view/1/")
+    with pytest.raises(sessions.UnknownSite):
+        sessions.workday_session_path(settings, "../../etc/passwd")
+
+
+def test_saving_a_workday_sign_in_keeps_that_companys_cookies_only(settings):
+    host = "acme.wd5.myworkdayjobs.com"
+    state = _state(
+        _cookie("PLAY_SESSION", "acme.wd5.myworkdayjobs.com"),
+        _cookie("wd-browser-id", ".myworkdayjobs.com"),
+        _cookie("PLAY_SESSION", "globex.wd1.myworkdayjobs.com"),
+        _cookie("li_at", ".linkedin.com"),
+        _cookie("tracker", ".com"),
+    )
+    path = sessions.save_workday_session(settings, host, state)
+
+    assert path == settings.data_dir / "sessions" / "workday" / f"{host}.json"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    kept = sessions.load_workday_session(settings, host)
+    assert sorted(c["domain"] for c in kept) == [".myworkdayjobs.com", "acme.wd5.myworkdayjobs.com"]
+    assert "globex" not in path.read_text() and "li_at" not in path.read_text()
+    assert sessions.workday_hosts(settings) == [host]
+    assert sessions.workday_status(settings, host)["cookies"] == 2
+    assert {c["domain"] for c in sessions.saved_cookies(settings)} >= {"acme.wd5.myworkdayjobs.com"}
+
+    assert sessions.forget_workday_session(settings, host)
+    assert sessions.workday_hosts(settings) == []
+    assert not sessions.forget_workday_session(settings, host)
+
+
+def test_a_workday_browser_with_no_cookies_for_the_company_saves_nothing(settings):
+    with pytest.raises(ValueError, match="no cookies"):
+        sessions.save_workday_session(
+            settings, "acme.wd5.myworkdayjobs.com", _state(_cookie("li_at", ".linkedin.com"))
+        )
+    assert sessions.workday_hosts(settings) == []

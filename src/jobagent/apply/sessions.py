@@ -13,6 +13,14 @@ That file is as good as being signed in, which is why it lives under `data/`
 `jobagent login <site> --forget`. Signing out of the site in any browser, or
 changing the password, ends it.
 
+Workday is different in one way: there is no Workday account, only one per
+company that uses it (crowdstrike.wd5.myworkdayjobs.com, nvidia.wd5...). So
+`jobagent login workday <posting URL>` signs in to that company's site and
+keeps its cookies in `data/sessions/workday/<host>.json`, one file per
+company, under the same rules. Workday does not name a sign-in cookie the
+agent could check, so the person says when they are signed in (Enter in the
+terminal), and a stale file shows up as a sign-in page during the next run.
+
 Nothing here imports Playwright; the visible browser is opened by
 `browser.session.interactive_login`.
 """
@@ -21,10 +29,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from jobagent.config import Settings
@@ -134,6 +144,8 @@ def saved_cookies(settings: Settings) -> list[dict[str, Any]]:
     cookies: list[dict[str, Any]] = []
     for name in SITES:
         cookies.extend(load_session(settings, name))
+    for host in workday_hosts(settings):
+        cookies.extend(load_workday_session(settings, host))
     return cookies
 
 
@@ -173,6 +185,115 @@ def session_status(settings: Settings, name: str) -> dict[str, Any]:
             else None
         ),
     }
+
+
+# ------------------------------------------------------------------ workday --
+
+WORKDAY_DOMAINS = ("myworkdayjobs.com", "myworkdaysite.com", "myworkday.com")
+
+
+def workday_host(url: str) -> str:
+    """The company's Workday host in a posting URL. Raises UnknownSite for anything else."""
+    host = (urlparse(url if "//" in url else f"https://{url}").hostname or "").lower()
+    if not any(host.endswith("." + d) for d in WORKDAY_DOMAINS):
+        raise UnknownSite(
+            f"{url!r} is not a Workday posting; give the job's own link, e.g. "
+            "https://acme.wd5.myworkdayjobs.com/careers/job/..."
+        )
+    return host
+
+
+def _workday_file(host: str) -> str:
+    if not re.fullmatch(r"[a-z0-9.-]+", host) or ".." in host:
+        raise UnknownSite(f"not a Workday host: {host!r}")
+    return f"{host}.json"
+
+
+def workday_dir(settings: Settings) -> Path:
+    return sessions_dir(settings) / "workday"
+
+
+def workday_session_path(settings: Settings, host: str) -> Path:
+    return workday_dir(settings) / _workday_file(host)
+
+
+def workday_cookies(state: dict[str, Any], host: str) -> list[dict[str, Any]]:
+    """The cookies in a browser state that this company's Workday site can read:
+    its own host's, and those set for a parent of it short of the bare suffix."""
+    out = []
+    for cookie in state.get("cookies") or []:
+        domain = (cookie.get("domain") or "").lstrip(".").lower()
+        if "." in domain and (host == domain or host.endswith("." + domain)):
+            out.append(cookie)
+    return out
+
+
+def save_workday_session(settings: Settings, host: str, state: dict[str, Any]) -> Path:
+    """Keep one company's Workday cookies, readable by the owner only."""
+    cookies = workday_cookies(state, host)
+    if not cookies:
+        raise ValueError(f"the browser holds no cookies for {host}; sign in there first")
+    path = workday_session_path(settings, host)
+    _write_private(path, {"site": "workday", "host": host, "saved_at": _now(), "cookies": cookies})
+    return path
+
+
+def load_workday_session(settings: Settings, host: str) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(workday_session_path(settings, host).read_text())
+    except (OSError, ValueError, UnknownSite):
+        return []
+    return workday_cookies(payload, host)
+
+
+def workday_hosts(settings: Settings) -> list[str]:
+    """The companies with a saved Workday sign-in."""
+    folder = workday_dir(settings)
+    if not folder.is_dir():
+        return []
+    return sorted(p.stem for p in folder.glob("*.json") if re.fullmatch(r"[a-z0-9.-]+", p.stem))
+
+
+def forget_workday_session(settings: Settings, host: str) -> bool:
+    path = workday_session_path(settings, host)
+    if path.exists():
+        path.unlink()
+        return True
+    return False
+
+
+def workday_status(settings: Settings, host: str) -> dict[str, Any]:
+    path = workday_session_path(settings, host)
+    cookies = load_workday_session(settings, host)
+    now = datetime.now(UTC).timestamp()
+    live = [c for c in cookies if c.get("expires") in (None, -1) or float(c["expires"]) > now]
+    saved_at = None
+    if path.exists():
+        try:
+            saved_at = json.loads(path.read_text()).get("saved_at")
+        except (OSError, ValueError):
+            saved_at = None
+    return {
+        "site": "workday",
+        "host": host,
+        "saved": path.exists(),
+        "saved_at": saved_at,
+        "cookies": len(live),
+    }
+
+
+def _write_private(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for folder in (path.parent, path.parent.parent):
+        if folder.name in ("sessions", "workday"):
+            try:
+                os.chmod(folder, 0o700)
+            except OSError:
+                pass
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        json.dump(payload, handle)
+    os.chmod(path, 0o600)
 
 
 def _now() -> str:

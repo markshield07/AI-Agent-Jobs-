@@ -131,7 +131,7 @@ _EEO_KEYS: tuple[tuple[str, str], ...] = (
 _EEO_COMPILED = tuple((key, re.compile(p, re.IGNORECASE)) for key, p in _EEO_KEYS)
 _DECLINE = re.compile(
     r"decline|prefer not|don'?t wish|do not wish|rather not|not to (?:answer|say|disclose)"
-    r"|choose not|i don'?t want",
+    r"|choose not|i don'?t want|(?:do not|don'?t) want to (?:answer|disclose|say)",
     re.IGNORECASE,
 )
 _CONSENT = re.compile(

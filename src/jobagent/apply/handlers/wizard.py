@@ -169,7 +169,13 @@ class WizardHandler(BaseHandler):
         click_first_visible(page, COOKIE_BUTTON_SELECTORS)
 
         if self.signed_out(page):
-            return self._result(page, "blocked", screenshot_path, error=self.login_hint())
+            return self._result(
+                page,
+                "blocked",
+                screenshot_path,
+                error=self.login_hint(),
+                sign_in=self.sign_in_target(),
+            )
         flow = self.open_flow(page)
         if flow is None:
             return self._no_button(page, screenshot_path)
@@ -193,7 +199,13 @@ class WizardHandler(BaseHandler):
                 external_url=page.url,
             )
         if self.signed_out(page):
-            return self._stop(page, "blocked", screenshot_path, error=self.login_hint())
+            return self._stop(
+                page,
+                "blocked",
+                screenshot_path,
+                error=self.login_hint(),
+                sign_in=self.sign_in_target(),
+            )
 
         filled: list[Fill] = []
         needed: list[NeededInput] = []
@@ -332,6 +344,10 @@ class WizardHandler(BaseHandler):
             return True
         return self._any_visible(page, self.signed_out_selectors)
 
+    def sign_in_target(self) -> str:
+        """What to sign in to again when the run meets a sign-in page."""
+        return self.site
+
     def login_hint(self) -> str:
         label = site_info(self.site).label
         return (
@@ -351,9 +367,14 @@ class WizardHandler(BaseHandler):
                 page, "blocked", screenshot_path, error=error, external_url=external
             )
         if not self._has_session(page):
-            error = self.login_hint()
-        else:
-            error = f"no {label} apply button on the posting; it may be closed or already applied"
+            return self._result(
+                page,
+                "blocked",
+                screenshot_path,
+                error=self.login_hint(),
+                sign_in=self.sign_in_target(),
+            )
+        error = f"no {label} apply button on the posting; it may be closed or already applied"
         return self._result(page, "blocked", screenshot_path, error=error)
 
     def external_url(self, page: Any) -> str | None:

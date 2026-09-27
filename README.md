@@ -248,7 +248,7 @@ postings:
 
 ```bash
 jobagent login workday https://crowdstrike.wd5.myworkdayjobs.com/crowdstrikecareers/job/...
-jobagent login workday --status             # every company you are signed in to
+jobagent login workday --status             # every company: does its sign-in still work?
 jobagent login workday <posting URL> --forget
 ```
 
@@ -257,6 +257,17 @@ if you have never applied there, and finish any email check it sends; then
 press Enter in the terminal. As with LinkedIn, **the password is never seen or
 kept**: the company's Workday cookies are, in
 `data/sessions/workday/<host>.json`, readable by your user only.
+
+**A Workday sign-in does not last.** The company's site ends it after a while
+(about an hour on CrowdStrike's) while its cookies still look valid, so the
+cookies cannot tell you whether it works. `--status` opens each company's
+posting, presses Apply and Apply Manually, and reports what comes up: still
+signed in, or the sign-in page (add `--no-check` to skip that). A run that
+meets the sign-in page marks that company as needing a new sign-in; its
+other jobs then wait without opening the site, the run output and the
+dashboard say which company and how many applications are waiting, and the
+next `jobagent login workday <posting URL>` runs them straight after you
+press Enter (`--no-retry` to leave them).
 
 The agent presses Apply, picks **Autofill with Resume** (Workday reads the
 tailored resume into My Experience) or **Apply Manually** where that is all
@@ -270,8 +281,10 @@ demographic questions are declined unless your answer bank says otherwise.
 
 Workday saves a draft at every "Save and Continue". A dry run therefore leaves
 the application in that company's account, filled in and unsent, at the
-Review step; you can open it there, read it, and press Submit yourself. It
-stops as `blocked` at a sign-in page (with the `login` command to run), and
+Review step; you can open it there, read it, and press Submit yourself. A
+later run finds that draft behind "Continue Application" and carries on from
+its first unsaved step. It stops as `blocked` at a sign-in page (with the
+`login` command to run), and
 as `needs_input` at a question nothing on file answers, like any other form.
 
 ### Playwright

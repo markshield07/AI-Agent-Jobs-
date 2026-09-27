@@ -136,11 +136,12 @@
   // ------------------------------------------------------------ overview --
 
   LOADERS.overview = async function () {
-    const [stats, activity] = await Promise.all([
+    const [stats, activity, signIns] = await Promise.all([
       api(`/api/stats?days=${state.days}&tz_offset_minutes=${TZ}`),
       api('/api/activity?limit=12'),
+      api('/api/sessions').catch(() => []),
     ]);
-    renderAttention(stats.attention);
+    renderAttention(stats.attention, signIns);
     renderKpis(stats);
     renderPerDay(stats.per_day);
     const w = stats.window_totals;
@@ -152,10 +153,14 @@
     renderActivity(activity);
   };
 
-  function renderAttention(a) {
+  function renderAttention(a, signIns = []) {
     const box = document.getElementById('attention');
     box.replaceChildren();
+    // Workday companies whose sign-in ended, with applications waiting on it.
+    const lapsed = signIns.filter((s) => s.site === 'workday' && s.state === 'needs_sign_in');
+    const waiting = lapsed.reduce((n, s) => n + (s.waiting || 0), 0);
     const items = [
+      [lapsed.length, `Workday sign-in${lapsed.length === 1 ? '' : 's'} to renew${waiting ? ` (${waiting} waiting)` : ''}`, '#settings'],
       [a.needs_input, 'need your answers', '#applications?status=needs_input'],
       [a.to_approve, 'waiting for approval', '#applications?status=review'],
       [a.to_check, 'to check (blocked or unconfirmed)', '#applications?status=blocked'],
@@ -580,6 +585,7 @@
       api('/api/sessions'), api('/api/search-criteria'), loadConfig(),
     ]);
     document.getElementById('sessions').replaceChildren(...sessions.map((s) => {
+      if (s.site === 'workday') return workdaySession(s);
       const status = s.signed_in
         ? el('span', { class: 'badge good' }, s.expires_at ? `Signed in until ${new Date(s.expires_at).toLocaleDateString()}` : 'Signed in')
         : el('span', { class: 'badge warn' }, s.saved ? 'Expired' : 'Not signed in');
@@ -615,6 +621,26 @@
     badgeEl.textContent = { dry_run: 'Dry run', review: 'Review', auto: 'Auto-submit' }[state.config.apply_mode] || state.config.apply_mode;
     badgeEl.classList.toggle('auto', state.config.apply_mode === 'auto');
     return state.config;
+  }
+
+  // A Workday sign-in: its cookies cannot say whether it still works, so the
+  // badge says what the last run or check met on the company's site.
+  function workdaySession(s) {
+    const when = (iso) => iso ? new Date(iso).toLocaleString() : '';
+    const badge = {
+      signed_in: ['good', `Working at ${when(s.checked_at)}`],
+      needs_sign_in: ['warn', 'Sign in again'],
+      not_signed_in: ['warn', 'Not signed in'],
+      unchecked: ['', `Saved ${when(s.saved_at)}, not checked`],
+    }[s.state] || ['', s.state];
+    const waiting = s.waiting ? ` ${s.waiting} application${s.waiting === 1 ? '' : 's'} wait for it and run right after.` : '';
+    const action = s.saved
+      ? el('button', { type: 'button', class: 'danger', onclick: (e) => forgetSession(`workday/${encodeURIComponent(s.host)}`, e.currentTarget) }, 'Forget')
+      : null;
+    return el('div', { class: 'session' },
+      el('div', {}, el('b', {}, s.label), ' ', el('span', { class: `badge ${badge[0]}` }, badge[1]),
+        el('div', { class: 'job-meta' }, 'Run ', el('code', {}, s.login_command), ' in a terminal on your machine.' + waiting)),
+      action);
   }
 
   async function forgetSession(site, button) {

@@ -228,13 +228,38 @@ def workday_cookies(state: dict[str, Any], host: str) -> list[dict[str, Any]]:
     return out
 
 
-def save_workday_session(settings: Settings, host: str, state: dict[str, Any]) -> Path:
-    """Keep one company's Workday cookies, readable by the owner only."""
+def _workday_payload(settings: Settings, host: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(workday_session_path(settings, host).read_text())
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def save_workday_session(
+    settings: Settings, host: str, state: dict[str, Any], *, url: str | None = None
+) -> Path:
+    """Keep one company's Workday cookies, readable by the owner only.
+
+    `url` is the posting signed in from, kept so the sign-in can be checked
+    later. The applications waiting on this sign-in are kept too; a fresh
+    sign-in clears any earlier "signed out" mark."""
     cookies = workday_cookies(state, host)
     if not cookies:
         raise ValueError(f"the browser holds no cookies for {host}; sign in there first")
+    old = _workday_payload(settings, host)
     path = workday_session_path(settings, host)
-    _write_private(path, {"site": "workday", "host": host, "saved_at": _now(), "cookies": cookies})
+    _write_private(
+        path,
+        {
+            "site": "workday",
+            "host": host,
+            "saved_at": _now_exact(),
+            "url": url or old.get("url"),
+            "waiting": list(old.get("waiting") or []),
+            "cookies": cookies,
+        },
+    )
     return path
 
 
@@ -247,7 +272,7 @@ def load_workday_session(settings: Settings, host: str) -> list[dict[str, Any]]:
 
 
 def workday_hosts(settings: Settings) -> list[str]:
-    """The companies with a saved Workday sign-in."""
+    """The companies with a saved Workday sign-in, or with applications waiting for one."""
     folder = workday_dir(settings)
     if not folder.is_dir():
         return []
@@ -262,23 +287,102 @@ def forget_workday_session(settings: Settings, host: str) -> bool:
     return False
 
 
+def mark_workday_signed_out(
+    settings: Settings, host: str, *, job_id: str | None = None, url: str | None = None
+) -> None:
+    """A run met this company's sign-in page: the saved sign-in no longer works.
+
+    Workday ends a session on the company's side after about an hour, while
+    its cookies still look valid, so this is the only sure sign. The job is
+    kept as waiting, to be tried again right after the next sign-in."""
+    payload = _workday_payload(settings, host)
+    waiting = list(payload.get("waiting") or [])
+    if job_id and job_id not in waiting:
+        waiting.append(job_id)
+    payload.update(
+        {
+            "site": "workday",
+            "host": host,
+            "signed_out_at": _now_exact(),
+            "url": payload.get("url") or url,
+            "waiting": waiting,
+            "cookies": payload.get("cookies") or [],
+        }
+    )
+    _write_private(workday_session_path(settings, host), payload)
+
+
+def record_workday_check(settings: Settings, host: str, state: str) -> None:
+    """What opening the company's site with the saved sign-in showed:
+    signed_in or signed_out. Nothing is recorded for a host never signed in to."""
+    payload = _workday_payload(settings, host)
+    if not payload:
+        return
+    payload["checked_at"] = _now_exact()
+    payload["checked"] = state
+    if state == "signed_out":
+        payload["signed_out_at"] = payload["checked_at"]
+    _write_private(workday_session_path(settings, host), payload)
+
+
+def workday_waiting(settings: Settings, host: str) -> list[str]:
+    """Jobs whose application stopped at this company's sign-in page."""
+    return [str(j) for j in _workday_payload(settings, host).get("waiting") or []]
+
+
+def clear_workday_waiting(settings: Settings, host: str, job_ids: list[str]) -> None:
+    payload = _workday_payload(settings, host)
+    if not payload:
+        return
+    payload["waiting"] = [j for j in payload.get("waiting") or [] if j not in set(job_ids)]
+    _write_private(workday_session_path(settings, host), payload)
+
+
 def workday_status(settings: Settings, host: str) -> dict[str, Any]:
-    path = workday_session_path(settings, host)
+    """Where one company's Workday sign-in stands.
+
+    `state` is not_signed_in (nothing saved), needs_sign_in (a run or a check
+    met the sign-in page after the last sign-in), signed_in (a run or a check
+    got past it since), or unchecked (saved, not tried since). Cookies alone
+    cannot tell: Workday ends the session on its side while they still look
+    valid."""
+    payload = _workday_payload(settings, host)
     cookies = load_workday_session(settings, host)
     now = datetime.now(UTC).timestamp()
     live = [c for c in cookies if c.get("expires") in (None, -1) or float(c["expires"]) > now]
-    saved_at = None
-    if path.exists():
-        try:
-            saved_at = json.loads(path.read_text()).get("saved_at")
-        except (OSError, ValueError):
-            saved_at = None
+    saved_at = payload.get("saved_at") if cookies else None
+    signed_out_at = payload.get("signed_out_at")
+    checked_at = payload.get("checked_at")
+    # The latest word since the last sign-in decides.
+    since = [
+        (at, verdict)
+        for at, verdict in (
+            (signed_out_at, "needs_sign_in"),
+            (checked_at, "signed_in" if payload.get("checked") == "signed_in" else ""),
+        )
+        if at and verdict and (not saved_at or at >= saved_at)
+    ]
+    if not cookies:
+        state = "not_signed_in"
+    elif since:
+        state = max(since)[1]
+    else:
+        state = "unchecked"
+    url = payload.get("url")
     return {
         "site": "workday",
         "host": host,
-        "saved": path.exists(),
+        "label": f"Workday: {host.split('.')[0]}",
+        "saved": bool(cookies),
         "saved_at": saved_at,
         "cookies": len(live),
+        "state": state,
+        "signed_in": state == "signed_in",
+        "checked_at": checked_at,
+        "signed_out_at": signed_out_at,
+        "url": url,
+        "waiting": len(payload.get("waiting") or []),
+        "login_command": f"jobagent login workday {url or '<posting URL>'}",
     }
 
 
@@ -298,3 +402,8 @@ def _write_private(path: Path, payload: dict[str, Any]) -> None:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _now_exact() -> str:
+    # Workday's sign-in, sign-out and check times are compared to tell which came last.
+    return datetime.now(UTC).isoformat(timespec="microseconds")

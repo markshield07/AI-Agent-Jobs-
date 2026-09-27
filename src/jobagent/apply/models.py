@@ -180,6 +180,9 @@ class HandlerResult:
     # Set by a site handler (LinkedIn, Indeed) when the posting applies on the
     # company's own site: where that application is, for another handler.
     external_url: str | None = None
+    # Set when the run stopped at a sign-in page: the site to sign in to again
+    # (linkedin, indeed, or a company's Workday host).
+    sign_in: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
 

@@ -178,7 +178,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Workday only: a posting on the company's Workday site "
         "(https://<company>.wd5.myworkdayjobs.com/...). Each company has its own account.",
     )
-    login.add_argument("--status", action="store_true", help="Show whether a sign-in is saved.")
+    login.add_argument(
+        "--status",
+        action="store_true",
+        help="Show whether a sign-in is saved. For Workday it also opens each company's "
+        "site to see whether the sign-in still works (skip that with --no-check).",
+    )
+    login.add_argument(
+        "--no-check", action="store_true", help="Workday --status: don't open the sites."
+    )
+    login.add_argument(
+        "--no-retry",
+        action="store_true",
+        help="Workday: after signing in, don't run the applications waiting on it.",
+    )
     login.add_argument("--forget", action="store_true", help="Delete the saved sign-in.")
     login.add_argument(
         "--timeout", type=int, default=300, help="Seconds to wait for you to sign in."
@@ -617,9 +630,10 @@ def _login_workday(args: argparse.Namespace, settings: Settings) -> int:
         hosts = sessions.workday_hosts(settings)
         if not hosts:
             print("Workday: no company sign-ins saved. Run: jobagent login workday <posting URL>")
+        if hosts and not args.no_check:
+            _check_workday(settings, hosts)
         for host in hosts:
-            status = sessions.workday_status(settings, host)
-            print(f"Workday {host}: saved {status['saved_at']}, {status['cookies']} live cookies.")
+            print(_workday_line(sessions.workday_status(settings, host)))
         return 0
     if not args.url:
         print(
@@ -638,11 +652,9 @@ def _login_workday(args: argparse.Namespace, settings: Settings) -> int:
         print(f"Workday sign-in for {host} deleted." if gone else f"No sign-in saved for {host}.")
         return 0
     if args.status:
-        status = sessions.workday_status(settings, host)
-        if not status["saved"]:
-            print(f"Workday {host}: not signed in. Run: jobagent login workday {args.url}")
-        else:
-            print(f"Workday {host}: saved {status['saved_at']}, {status['cookies']} live cookies.")
+        if not args.no_check and sessions.workday_status(settings, host)["saved"]:
+            _check_workday(settings, [host], url=args.url)
+        print(_workday_line(sessions.workday_status(settings, host)))
         return 0
 
     print(
@@ -671,11 +683,79 @@ def _login_workday(args: argparse.Namespace, settings: Settings) -> int:
             timeout_s=args.timeout,
             confirmed=pressed.is_set,
         )
-        path = sessions.save_workday_session(settings, host, state)
+        path = sessions.save_workday_session(settings, host, state, url=args.url)
     except (BrowserUnavailable, TimeoutError, ValueError) as exc:
         print(exc, file=sys.stderr)
         return 2
     print(f"Saved the Workday sign-in for {host} to {path}.")
+    waiting = sessions.workday_waiting(settings, host)
+    if waiting and args.no_retry:
+        print(
+            f"{len(waiting)} application(s) wait on this sign-in; run them with: jobagent apply "
+            + " ".join(waiting)
+        )
+    elif waiting:
+        # Straight away: the sign-in only lasts so long (about an hour on CrowdStrike's).
+        print(f"Running the {len(waiting)} application(s) that were waiting on it now.")
+        return _run_waiting(settings, waiting)
+    return 0
+
+
+def _workday_line(status: dict[str, object]) -> str:
+    host = status["host"]
+    state = status["state"]
+    if state == "not_signed_in":
+        text = f"not signed in. Run: {status['login_command']}"
+    elif state == "needs_sign_in":
+        text = f"the sign-in has ended; sign in again: {status['login_command']}"
+    elif state == "signed_in":
+        text = f"signed in (saved {status['saved_at']}, working at {status['checked_at']})"
+    else:
+        text = f"saved {status['saved_at']}, not checked since"
+    if status.get("waiting"):
+        text += f"; {status['waiting']} application(s) waiting on it"
+    return f"Workday {host}: {text}."
+
+
+def _check_workday(settings: Settings, hosts: list[str], url: str | None = None) -> None:
+    """Open each company's posting with the saved sign-in and record what shows."""
+    from jobagent.apply import sessions
+    from jobagent.apply.browser.session import BrowserUnavailable, open_browser
+    from jobagent.apply.handlers.workday import WorkdayHandler
+
+    try:
+        with open_browser(settings) as browser:
+            for host in hosts:
+                where = url or sessions.workday_status(settings, host)["url"]
+                if not where:
+                    print(f"Workday {host}: no posting on file to check it with.")
+                    continue
+                with browser.new_page() as page:
+                    state = WorkdayHandler().check_session(page, where)
+                if state == "unknown":
+                    print(f"Workday {host}: could not tell from {where} (closed posting?).")
+                    continue
+                sessions.record_workday_check(settings, host, state)
+    except BrowserUnavailable as exc:
+        print(f"Could not open a browser to check: {exc}", file=sys.stderr)
+
+
+def _run_waiting(settings: Settings, job_ids: list[str]) -> int:
+    from jobagent.apply.pipeline import ApplyError, run_apply
+
+    db = open_database(settings.db_path)
+    try:
+        report = run_apply(db.connection(), settings, job_ids=job_ids, limit=len(job_ids))
+    except ApplyError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    finally:
+        db.close()
+    print(report.summary())
+    for record in report.results:
+        print(_describe_result(record))
+    for note in report.notes:
+        print(f"  note: {note}")
     return 0
 
 

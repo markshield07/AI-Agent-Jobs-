@@ -734,3 +734,82 @@ def test_a_linkedin_posting_that_sends_you_to_workday_gets_the_workday_handler()
     )
     onward = _company_site_handler(_result("blocked", external_url=outward), linkedin, handlers)
     assert onward is not None and onward.ats == "workday"
+
+
+# ------------------------------------------------------- workday sign-in --
+
+WD_HOST = "acme.wd5.myworkdayjobs.com"
+WD_POSTING = f"https://{WD_HOST}/careers/job/Remote/Engineer_R1"
+
+
+def _workday_signed_in(settings):
+    from jobagent.apply import sessions
+
+    cookie = {"name": "PLAY_SESSION", "value": "x", "domain": WD_HOST, "path": "/", "expires": -1}
+    sessions.save_workday_session(settings, WD_HOST, {"cookies": [cookie]}, url=WD_POSTING)
+
+
+def test_a_workday_sign_in_page_parks_the_job_until_the_next_sign_in(conn, settings, ready_job):
+    from jobagent.apply import sessions
+
+    _workday_signed_in(settings)
+    first, second = ready_job(WD_POSTING), ready_job(f"https://{WD_HOST}/careers/job/Remote/B_R2")
+    workday = FakeHandler(
+        _result("blocked", error="not signed in", sign_in=WD_HOST), ats="workday", hosts=(WD_HOST,)
+    )
+    report = run_apply(
+        conn,
+        settings,
+        job_ids=[first, second],
+        handlers=[workday],
+        completer=NeverCalled(),
+        browser=FakeBrowser(),
+    )
+    # The first run meets the sign-in page; the second job does not open the site at all.
+    assert len(workday.calls) == 1
+    assert [r["outcome"] for r in report.results] == ["blocked", "skipped"]
+    assert report.results[1]["sign_in"] == WD_HOST
+    assert f"jobagent login workday {WD_POSTING}" in report.results[1]["reason"]
+    assert report.sign_ins == {WD_HOST: 2}
+    assert "needs sign-in: acme.wd5.myworkdayjobs.com (2 waiting)" in report.summary()
+    assert any("sign in again" in n and "2 application(s) wait" in n for n in report.notes)
+    status = sessions.workday_status(settings, WD_HOST)
+    assert status["state"] == "needs_sign_in"
+    assert sessions.workday_waiting(settings, WD_HOST) == [first, second]
+
+
+def test_a_workday_run_that_gets_into_the_form_proves_the_sign_in(conn, settings, ready_job):
+    from jobagent.apply import sessions
+
+    _workday_signed_in(settings)
+    jid = ready_job(WD_POSTING)
+    sessions.mark_workday_signed_out(settings, WD_HOST, job_id=jid)
+    _workday_signed_in(settings)  # signed in again
+    workday = FakeHandler(ats="workday", hosts=(WD_HOST,))
+    record = _apply(conn, jid, settings, workday)
+    assert record["outcome"] == "dry_run"
+    assert sessions.workday_status(settings, WD_HOST)["state"] == "signed_in"
+    assert sessions.workday_waiting(settings, WD_HOST) == []
+
+
+def test_a_linkedin_job_sent_to_a_lapsed_workday_waits_for_it(conn, settings, ready_job):
+    from jobagent.apply import sessions
+
+    jid = ready_job("https://www.linkedin.com/jobs/view/1/")
+    linkedin = FakeHandler(
+        _result("blocked", error="company's own site", external_url=WD_POSTING),
+        ats="linkedin",
+        hosts=("linkedin.com",),
+    )
+    workday = FakeHandler(ats="workday", hosts=(WD_HOST,))
+    record = apply_to_job(
+        conn,
+        jid,
+        settings,
+        handlers=[linkedin, workday],
+        completer=NeverCalled(),
+        browser=FakeBrowser(),
+    )
+    assert workday.calls == [], "never signed in there: the form is not opened"
+    assert record["outcome"] == "blocked" and record["sign_in"] == WD_HOST
+    assert sessions.workday_waiting(settings, WD_HOST) == [jid]

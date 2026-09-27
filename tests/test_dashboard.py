@@ -208,6 +208,30 @@ def test_the_page_renders_the_numbers_and_every_tab(page, server):
 
 
 @pytest.mark.usefixtures("page")
+def test_a_lapsed_workday_sign_in_is_flagged_with_its_waiting_jobs(page, server, settings):
+    from jobagent.apply import sessions
+
+    host = "crowdstrike.wd5.myworkdayjobs.com"
+    posting = f"https://{host}/crowdstrikecareers/job/USA-Remote/Manager_R1"
+    cookie = {"name": "PLAY_SESSION", "value": "x", "domain": host, "expires": -1}
+    sessions.save_workday_session(settings, host, {"cookies": [cookie]}, url=posting)
+    sessions.mark_workday_signed_out(settings, host, job_id="j1")
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+
+    page.goto(server["url"] + "/#overview")
+    page.wait_for_selector("#attention a[href='#settings']")
+    assert "Workday sign-in to renew (1 waiting)" in page.inner_text("#attention")
+
+    page.click("#attention a[href='#settings']")
+    page.wait_for_selector("#sessions .session:has-text('crowdstrike')")
+    row = page.inner_text("#sessions .session:has-text('crowdstrike')")
+    assert "Sign in again" in row and f"jobagent login workday {posting}" in row
+    assert "1 application wait" in row
+    assert errors == [], errors
+
+
+@pytest.mark.usefixtures("page")
 def test_recording_an_interview_updates_the_application(page, server):
     page.goto(server["url"] + f"/#applications?id={server['apps'][1]}")
     page.wait_for_selector("#app-detail:not([hidden]) select")

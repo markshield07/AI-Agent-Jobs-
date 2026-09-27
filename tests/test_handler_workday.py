@@ -343,6 +343,38 @@ def test_a_sign_in_page_stops_and_names_the_login_command(page, packet):
     assert js(page, "__submitted") is None
 
 
+@pytest.mark.usefixtures("page")
+def test_a_sign_in_page_names_the_company_to_sign_in_to_again(page, packet):
+    result = run(page, packet, variant="signed_out")
+    assert result.outcome == "blocked"
+    assert result.sign_in == "workday", "the fixture is a file, with no host to name"
+    handler = WorkdayHandler()
+    handler._posting = POSTING
+    assert handler.sign_in_target() == "acme.wd5.myworkdayjobs.com"
+
+
+@pytest.mark.usefixtures("page")
+@pytest.mark.parametrize(
+    ("variant", "state"),
+    [
+        ("", "signed_in"),
+        ("draft", "signed_in"),
+        ("signed_out", "signed_out"),
+        ("closed", "unknown"),
+    ],
+)
+def test_the_sign_in_check_opens_the_posting_and_reads_what_comes_up(page, variant, state):
+    handler = WorkdayHandler()
+    handler.settle_ms = 500
+    handler.pause_ms = 100
+    handler.step_timeout_ms = 5_000
+    handler.poll_ms = 50
+    assert handler.check_session(page, fixture_url(variant)) == state
+    if variant == "":
+        assert js(page, "__start") == "manual", "the check uploads nothing"
+    assert js(page, "__submitted") is None
+
+
 def test_the_login_hint_names_the_companys_site():
     handler = WorkdayHandler()
     handler._posting = POSTING

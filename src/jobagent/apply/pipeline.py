@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from jobagent.answers import list_answers, set_answer
-from jobagent.apply import store
+from jobagent.apply import sessions, store
 from jobagent.apply.answering import make_answerer
 from jobagent.apply.browser.session import BrowserSession, BrowserUnavailable, open_browser
 from jobagent.apply.handlers import default_handlers, handler_for
@@ -80,6 +80,8 @@ class ApplyReport:
     failed: int = 0
     skipped: int = 0
     cap_hit: bool = False
+    # Sites and Workday companies whose sign-in a run met, with how many jobs wait on each.
+    sign_ins: dict[str, int] = field(default_factory=dict)
     input_tokens: int = 0
     output_tokens: int = 0
     results: list[dict[str, Any]] = field(default_factory=list)
@@ -106,6 +108,8 @@ class ApplyReport:
             parts.append(f"skipped {self.skipped}")
         if self.cap_hit:
             parts.append("daily cap reached")
+        for where, count in self.sign_ins.items():
+            parts.append(f"needs sign-in: {where} ({count} waiting)")
         if self.input_tokens or self.output_tokens:
             parts.append(f"tokens {self.input_tokens} in / {self.output_tokens} out")
         return ", ".join(parts)
@@ -196,6 +200,26 @@ def _skipped(job_id: str, reason: str, application_id: int | None = None) -> dic
     }
 
 
+def _workday_signed_out(settings: Settings, url: str) -> str | None:
+    """The company's Workday host when its sign-in is known not to work (never
+    made, or met a sign-in page since): its jobs wait instead of opening a
+    browser only to stop at the same page."""
+    try:
+        host = sessions.workday_host(url)
+    except sessions.UnknownSite:
+        return None
+    state = sessions.workday_status(settings, host)["state"]
+    return host if state in ("not_signed_in", "needs_sign_in") else None
+
+
+def _workday_wait_note(settings: Settings, host: str) -> str:
+    command = sessions.workday_status(settings, host)["login_command"]
+    return (
+        f"waiting for a Workday sign-in at {host}; run `{command}` on your own machine "
+        "and it is tried again right after"
+    )
+
+
 def apply_to_job(
     conn: sqlite3.Connection,
     job_id: str,
@@ -230,6 +254,16 @@ def apply_to_job(
     handler = handler_for(url, ats, handlers)
     if handler is None:
         return _skipped(job_id, f"no handler for {ats or 'this site'}")
+    waiting_on = _workday_signed_out(settings, url) if handler.ats == "workday" else None
+    if waiting_on:
+        sessions.mark_workday_signed_out(settings, waiting_on, job_id=job_id, url=url)
+        app = store.application_for_job(conn, job_id)
+        return {
+            **_skipped(
+                job_id, _workday_wait_note(settings, waiting_on), app["id"] if app else None
+            ),
+            "sign_in": waiting_on,
+        }
     submit = mode == "auto"
     if submit and handler.ats in SITES:
         sent = store.submitted_last_day(conn, ats=handler.ats)
@@ -266,12 +300,23 @@ def apply_to_job(
             )
             onward = _company_site_handler(result, handler, handlers)
             if onward is not None:
-                notes.append(f"{handler.ats} sends this job to {result.external_url}")
+                onward_url = result.external_url or ""
+                notes.append(f"{handler.ats} sends this job to {onward_url}")
                 handler = onward
-                packet = replace(packet, job={**packet.job, "apply_url": result.external_url})
-                result = handler.apply(
-                    page, packet, answerer, submit=submit, screenshot_path=str(screenshot)
+                packet = replace(packet, job={**packet.job, "apply_url": onward_url})
+                waiting_on = (
+                    _workday_signed_out(settings, onward_url) if handler.ats == "workday" else None
                 )
+                if waiting_on:
+                    result = HandlerResult(
+                        outcome="blocked",
+                        error=_workday_wait_note(settings, waiting_on),
+                        sign_in=waiting_on,
+                    )
+                else:
+                    result = handler.apply(
+                        page, packet, answerer, submit=submit, screenshot_path=str(screenshot)
+                    )
     except BrowserUnavailable as exc:  # not the job's fault: nothing is recorded
         raise ApplyError(str(exc)) from exc
     except Exception as exc:  # a handler bug is a failed attempt, not a dead run
@@ -292,6 +337,8 @@ def apply_to_job(
         result.outcome = "review"
     if result.outcome == "submitted" and not submit:
         notes.append("the handler reported a submission in a mode that does not submit")
+    if handler.ats == "workday":
+        _note_workday_sign_in(settings, job_id, packet.job.get("apply_url") or url, result)
     attempt_id = store.record_attempt(
         conn, application_id, result, mode=mode, handler=handler.ats, started_at=started
     )
@@ -310,10 +357,28 @@ def apply_to_job(
         "needed": [n.as_dict() for n in result.needed],
         "filled": len(result.filled),
         "screenshot_path": result.screenshot_path,
+        "sign_in": result.sign_in,
         "notes": notes,
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
     }
+
+
+def _note_workday_sign_in(settings: Settings, job_id: str, url: str, result: HandlerResult) -> None:
+    """What a Workday run showed about the company's sign-in: a sign-in page
+    marks it expired and parks the job until the next sign-in; getting into
+    the form proves it still works."""
+    if result.sign_in:
+        if _is_workday_host(result.sign_in):
+            sessions.mark_workday_signed_out(settings, result.sign_in, job_id=job_id, url=url)
+        return
+    if result.outcome in ("dry_run", "review", "needs_input", "submitted", "unconfirmed"):
+        try:
+            host = sessions.workday_host(url)
+        except sessions.UnknownSite:
+            return
+        sessions.record_workday_check(settings, host, "signed_in")
+        sessions.clear_workday_waiting(settings, host, [job_id])
 
 
 def _company_site_handler(
@@ -398,6 +463,8 @@ def run_apply(
     except BrowserUnavailable as exc:
         report.notes.append(str(exc))
     finally:
+        for where in report.sign_ins:
+            report.notes.append(_sign_in_note(settings, where))
         jobs.finish_run(
             conn,
             report.run_id,
@@ -409,8 +476,30 @@ def run_apply(
     return report
 
 
+def _is_workday_host(host: str) -> bool:
+    try:
+        return sessions.workday_host(f"https://{host}/") == host
+    except sessions.UnknownSite:
+        return False
+
+
+def _sign_in_note(settings: Settings, where: str) -> str:
+    if where in SITES:
+        return f"{SITES[where].label} needs you to sign in again: run `jobagent login {where}`"
+    if not _is_workday_host(where):
+        return f"{where} needs you to sign in again"
+    status = sessions.workday_status(settings, where)
+    return (
+        f"Workday at {where} needs you to sign in again: run `{status['login_command']}`; "
+        f"{status['waiting']} application(s) wait for it and run right after"
+    )
+
+
 def _tally(report: ApplyReport, record: Mapping[str, Any]) -> None:
     report.results.append(dict(record))
+    if record.get("sign_in"):
+        where = str(record["sign_in"])
+        report.sign_ins[where] = report.sign_ins.get(where, 0) + 1
     outcome = record["outcome"]
     if outcome == "skipped":
         report.skipped += 1

@@ -517,11 +517,86 @@ def test_login_workday_waits_for_enter_and_saves_that_company(
     assert "press Enter" in out and "password goes to Workday only" in out
     assert sessions.workday_hosts(settings) == ["acme.wd5.myworkdayjobs.com"]
 
-    main.run(["login", "workday", "--status"])
-    assert "Workday acme.wd5.myworkdayjobs.com: saved" in capsys.readouterr().out
+    main.run(["login", "workday", "--status", "--no-check"])
+    out = capsys.readouterr().out
+    assert "Workday acme.wd5.myworkdayjobs.com: saved" in out and "not checked since" in out
     main.run(["login", "workday", posting, "--forget"])
     assert "deleted" in capsys.readouterr().out
     assert sessions.workday_hosts(settings) == []
+
+
+def test_login_workday_status_opens_the_site_to_see_if_the_sign_in_works(
+    cli_settings, settings, monkeypatch, capsys
+):
+    """Cookies said "11 live" while CrowdStrike had ended the session: the
+    status comes from opening the posting."""
+    from contextlib import contextmanager
+
+    from jobagent.apply import sessions
+    from jobagent.apply.handlers.workday import WorkdayHandler
+
+    host = "acme.wd5.myworkdayjobs.com"
+    posting = f"https://{host}/careers/job/Remote/Engineer_R1"
+    cookie = {"name": "PLAY_SESSION", "value": "x", "domain": host, "path": "/", "expires": -1}
+    sessions.save_workday_session(settings, host, {"cookies": [cookie]}, url=posting)
+    sessions.mark_workday_signed_out(settings, host, job_id="j1")
+    sessions.save_workday_session(settings, host, {"cookies": [cookie]})
+
+    class Browser:
+        @contextmanager
+        def new_page(self):
+            yield object()
+
+    @contextmanager
+    def fake_open(settings_):
+        yield Browser()
+
+    checked = []
+    monkeypatch.setattr("jobagent.apply.browser.session.open_browser", fake_open)
+    monkeypatch.setattr(
+        WorkdayHandler, "check_session", lambda self, page, url: checked.append(url) or "signed_out"
+    )
+    main.run(["login", "workday", "--status"])
+    out = capsys.readouterr().out
+    assert checked == [posting]
+    assert f"Workday {host}: the sign-in has ended; sign in again: jobagent login workday" in out
+    assert "1 application(s) waiting on it" in out
+
+
+def test_login_workday_runs_the_applications_waiting_on_it(
+    cli_settings, settings, monkeypatch, capsys
+):
+    import io
+
+    from jobagent.apply import sessions
+    from jobagent.apply.pipeline import ApplyReport
+
+    host = "acme.wd5.myworkdayjobs.com"
+    posting = f"https://{host}/careers/job/Remote/Engineer_R1"
+    sessions.mark_workday_signed_out(settings, host, job_id="j1", url=posting)
+    sessions.mark_workday_signed_out(settings, host, job_id="j2")
+
+    def fake_login(settings_, url, is_done, *, timeout_s, confirmed):
+        return {"cookies": [{"name": "PLAY_SESSION", "value": "x", "domain": host}]}
+
+    ran = {}
+
+    def fake_run_apply(conn, settings_, *, job_ids, limit):
+        ran.update(job_ids=job_ids, limit=limit)
+        return ApplyReport(run_id=1, mode="dry_run", considered=2)
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("\n"))
+    monkeypatch.setattr("jobagent.apply.browser.session.interactive_login", fake_login)
+    monkeypatch.setattr("jobagent.apply.pipeline.run_apply", fake_run_apply)
+    main.run(["login", "workday", posting])
+    out = capsys.readouterr().out
+    assert ran == {"job_ids": ["j1", "j2"], "limit": 2}
+    assert "Running the 2 application(s) that were waiting on it now." in out
+
+    ran.clear()
+    main.run(["login", "workday", posting, "--no-retry"])
+    assert ran == {}
+    assert "jobagent apply j1 j2" in capsys.readouterr().out
 
 
 def test_login_workday_needs_a_workday_posting(cli_settings, capsys):

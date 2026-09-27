@@ -35,3 +35,22 @@ def test_delete_forgets_a_sign_in(client, settings):
     assert client.delete("/api/sessions/indeed").json() == {"site": "indeed", "deleted": True}
     assert client.delete("/api/sessions/indeed").json() == {"site": "indeed", "deleted": False}
     assert client.delete("/api/sessions/monster").status_code == 404
+
+
+def test_each_workday_company_shows_whether_its_sign_in_still_works(client, settings):
+    host = "acme.wd5.myworkdayjobs.com"
+    posting = f"https://{host}/careers/job/Remote/Engineer_R1"
+    cookie = {"name": "PLAY_SESSION", "value": "wd-secret", "domain": host, "expires": -1}
+    sessions.save_workday_session(settings, host, {"cookies": [cookie]}, url=posting)
+    sessions.mark_workday_signed_out(settings, host, job_id="j1")
+
+    response = client.get("/api/sessions")
+    row = next(r for r in response.json() if r["site"] == "workday")
+    assert row["host"] == host and row["state"] == "needs_sign_in" and row["waiting"] == 1
+    assert row["signed_in"] is False
+    assert row["login_command"] == f"jobagent login workday {posting}"
+    assert "wd-secret" not in response.text
+
+    assert client.delete(f"/api/sessions/workday/{host}").json()["deleted"] is True
+    assert all(r["site"] != "workday" for r in client.get("/api/sessions").json())
+    assert client.delete("/api/sessions/workday/..%2Fetc").status_code in (404, 405)

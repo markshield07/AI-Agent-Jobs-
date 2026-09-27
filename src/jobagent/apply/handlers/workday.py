@@ -70,6 +70,7 @@ from jobagent.apply.browser.fill import (
     page_text,
     wait_settled,
 )
+from jobagent.apply.handlers.base import COOKIE_BUTTON_SELECTORS
 from jobagent.apply.handlers.wizard import WizardHandler
 from jobagent.apply.models import Fill, FillPlan, FormField, HandlerResult, Packet
 from jobagent.apply.sessions import WORKDAY_DOMAINS
@@ -401,13 +402,52 @@ class WorkdayHandler(WizardHandler):
             or self._any_visible(page, self.next_selectors)
         )
 
+    def sign_in_target(self) -> str:
+        return (urlparse(self._posting).hostname or "").lower() or self.site
+
+    def check_session(self, page: Any, url: str) -> str:
+        """Whether the saved sign-in still works on this company's site:
+        signed_in, signed_out, or unknown (the posting is closed, or the page
+        showed neither). Opens the posting, presses Apply and "Apply Manually",
+        and looks at what comes up; nothing is saved on the site."""
+        self._posting = self.application_url(url)
+        # Apply Manually first: it opens the same sign-in without uploading anything.
+        self.start_selectors = tuple(
+            sorted(type(self).start_selectors, key=lambda sel: "applyManually" not in sel)
+        )
+        try:
+            page.goto(self._posting, wait_until="domcontentloaded", timeout=self.settle_ms * 3)
+        except Exception as exc:
+            log.info("workday: could not open %s: %s", self._posting, exc)
+            return "unknown"
+        wait_settled(page, self.settle_ms)
+        click_first_visible(page, COOKIE_BUTTON_SELECTORS)
+        if self.signed_out(page):
+            return "signed_out"
+        flow = self.open_flow(page)
+        if flow is None:
+            return "unknown"
+        try:
+            if self.signed_out(flow):
+                return "signed_out"
+            if _arrived(self.step_marker(flow), "") or self._in_flow(flow):
+                return "signed_in"
+            return "unknown"
+        finally:
+            if flow is not page:
+                try:
+                    flow.close()
+                except Exception:
+                    pass
+
     def login_hint(self) -> str:
         host = urlparse(self._posting).hostname or ""
         where = f"{host}'s Workday site" if host else "this company's Workday site"
         return (
-            f"not signed in to {where}; each company on Workday has its own account. Run "
+            f"not signed in to {where}: Workday ends a sign-in after a while (about an hour "
+            "on CrowdStrike's), and each company on Workday has its own account. Run "
             f"`jobagent login workday {self._posting or '<posting URL>'}` on your own machine "
-            "to sign in (or create the account) once, then try again"
+            "to sign in (or create the account); the applications waiting on it run right after"
         )
 
     def _no_button(self, page: Any, screenshot_path: str | None) -> HandlerResult:

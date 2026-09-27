@@ -3,9 +3,11 @@
 The fixture draws the posting and the application with the data-automation-id
 values Workday uses, and with its own controls: dropdowns that are buttons, a
 "How did you hear about us?" prompt whose categories open further lists, and
-a date in three spin buttons. Its variants prove the stops: a sign-in page, a
-question nobody on file answers, a step that will not save, a closed posting,
-a Submit with no confirmation.
+a date in three spin buttons. Like the live site it draws each step a while
+after Save and Continue, and its first two steps copy a live posting's markup.
+Its variants prove the stops: a sign-in page, a question nobody on file
+answers, a step that will not save, a closed posting, a Submit with no
+confirmation.
 """
 
 from __future__ import annotations
@@ -50,14 +52,16 @@ def packet(tmp_path) -> Packet:
             "last_name": "Shield",
             "email": "mark@example.com",
             "phone": "+1 555 0100",
-            "location": "Austin",
+            "location": "Austin, Texas, United States",
         },
         resume_path=str(resume),
         cover_letter="I run networks.",
         answers={
             "work_authorization": "Yes",
             "visa_sponsorship": "No",
-            question_key("Have you previously worked for Acme Robotics?"): "No",
+            "previously_employed": "No",
+            "address": "1 Congress Ave",
+            "postal_code": "78701",
         },
     )
 
@@ -68,6 +72,8 @@ def run(page, packet, *, submit=False, variant="", shot=None):
     handler = WorkdayHandler()
     handler.settle_ms = 500
     handler.pause_ms = 100
+    handler.step_timeout_ms = 5_000
+    handler.poll_ms = 50
     return handler.apply(page, packet, answerer, submit=submit, screenshot_path=shot)
 
 
@@ -142,6 +148,53 @@ def test_workdays_own_controls_are_filled_like_a_person_would(page, packet):
 
 
 @pytest.mark.usefixtures("page")
+def test_my_information_is_read_once_drawn_and_every_box_filled(page, packet):
+    """The live run read My Information before Workday drew it and pressed
+    Save and Continue on an empty form."""
+    result = run(page, packet)
+    assert result.outcome == "dry_run", result.error
+    assert js(page, "__answers")["info"] == {
+        "source": "LinkedIn",
+        "previous": "false",
+        "country": "United States of America",
+        "first": "Mark",
+        "last": "Shield",
+        "preferred": False,
+        "street": "1 Congress Ave",
+        "city": "Austin",
+        "state": "Texas",
+        "zip": "78701",
+        "phoneType": "Mobile",
+        "code": "United States of America (+1)",
+        "phone": "+1 555 0100",
+        "extension": "",
+    }
+
+
+@pytest.mark.usefixtures("page")
+def test_the_unlabelled_autofill_box_takes_the_resume(page, packet):
+    result = run(page, packet)
+    resume = [f for f in result.filled if f.source == "resume"]
+    assert [f.label for f in resume] == ["Resume"]
+    assert js(page, "__answers")["autofillResume"] == "mark-shield.pdf"
+
+
+@pytest.mark.usefixtures("page")
+def test_my_information_is_read_as_the_page_means_it(page, packet):
+    result = run(page, packet)
+    info = {f.key: f for f in result.fields if f.key != "input-0"}
+    keys = [f.key for f in result.fields]
+    assert keys.count("source--source") == 1
+    assert keys.count("phoneNumber--countryPhoneCode") == 1
+    assert info["candidateIsPreviousWorker"].required, "required on its group and in its legend"
+    state = info["address--countryRegion"]
+    assert state.options == ["Arizona", "California", "Texas"], "a picked pill is not an option"
+    assert info["phoneNumber--phoneType"].options == ["Home", "Mobile", "Work"]
+    code = {f.key: f for f in result.filled}["phoneNumber--countryPhoneCode"]
+    assert code.source == "prefilled"
+
+
+@pytest.mark.usefixtures("page")
 def test_how_did_you_hear_follows_the_board_the_job_came_from(page, packet):
     result = run(page, packet)
     assert js(page, "__answers")["info"]["source"] == "LinkedIn"
@@ -165,7 +218,7 @@ def test_what_autofill_read_is_kept_and_the_resume_goes_up_once(page, packet):
     packet.contact["first_name"] = "Marcus"
     result = run(page, packet)
     by_label = {f.label: f for f in result.filled}
-    assert by_label["Given Name(s)"].source == "prefilled"
+    assert by_label["First Name"].source == "prefilled"
     assert js(page, "__answers")["info"]["first"] == "Mark"
     assert by_label["Country"].value == "United States of America"
     assert js(page, "__answers")["autofillResume"] == "mark-shield.pdf"

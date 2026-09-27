@@ -167,6 +167,39 @@ def test_contact_resume_links_and_letter_come_from_the_packet(packet):
     assert any("Website" in n for n in plan.notes), "an optional link not on file is skipped"
 
 
+def test_each_part_of_an_address_is_its_own_answer(packet):
+    """Workday asks for street, city, state and ZIP in separate boxes, beside
+    a phone number split into code, number and extension."""
+    packet.contact["location"] = "Menifee, California, United States"
+    packet.answers = {"address": "1 Main St", "postal_code": "92584"}
+    fields = [
+        F("street", "Address Line 1", required=True),
+        F("street2", "Address Line 2"),
+        F("city", "City", required=True),
+        F("state", "State", kind="select", options=["Arizona", "California"], required=True),
+        F("zip", "Postal Code", required=True),
+        F("code", "Country Phone Code", required=True),
+        F("phone", "Phone Number", required=True),
+        F("ext", "Phone Extension"),
+        F("preferred", "I have a preferred name", kind="checkbox"),
+    ]
+    plan = plan_fills(fields, packet)
+    assert fills(plan) == {
+        "street": "1 Main St",
+        "city": "Menifee",
+        "state": "California",
+        "zip": "92584",
+        "phone": "+1 555 0100",
+    }
+    assert [(n.key, n.answer_key) for n in plan.needed] == [("code", "phone_country")]
+    packet.answers = {}
+    plan = plan_fills(fields[:5], packet)
+    assert {n.key: n.answer_key for n in plan.needed} == {
+        "street": "address",
+        "zip": "postal_code",
+    }, "street and ZIP are asked for under keys of their own"
+
+
 def test_full_name_field_and_single_word_names(packet):
     plan = plan_fills([F("name", "Name", required=True)], packet)
     assert fills(plan) == {"name": "Mark Shield"}

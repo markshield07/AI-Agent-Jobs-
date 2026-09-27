@@ -138,6 +138,15 @@ class WizardHandler(BaseHandler):
         """What the site already put in the step's fields, by field key."""
         return current_values(page, fields)
 
+    def step_marker(self, page: Any) -> str:
+        """Which step is on screen, where the site names it. Empty means unknown."""
+        return ""
+
+    def wait_for_step(self, page: Any, before: str) -> None:
+        """After Next, wait until the step after `before` is drawn. A site that
+        swaps steps without a page load (Workday) keeps the old one on screen
+        for a while, and reading it then reads the step just left."""
+
     # -- the shared flow ---------------------------------------------------
 
     def apply(
@@ -241,6 +250,7 @@ class WizardHandler(BaseHandler):
                 return self._send(page, root, screenshot_path, common())
 
             before = self._signature(page, root)
+            marker = self.step_marker(page)
             if not click_first_visible(page, self._scoped(root, self.next_selectors)):
                 captcha = detect_captcha(page)
                 error = (
@@ -250,6 +260,7 @@ class WizardHandler(BaseHandler):
                 )
                 return self._stop(page, "blocked", screenshot_path, error=error, **common())
             wait_settled(page, self.settle_ms)
+            self.wait_for_step(page, marker)
             errors = self._step_errors(page, root)
             if errors:
                 return self._stop(

@@ -38,8 +38,18 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     ("preferred_name", r"\bpreferred\s+(?:first\s+)?name\b|\bnickname\b"),
     ("full_name", r"^\W*(?:full\s+|legal\s+|your\s+)?name\W*$|\bfull\s+name\b"),
     ("email", r"\be-?mail\b"),
+    # Before "phone": the other boxes a phone number comes with (Workday).
+    ("phone_country", r"\bphone\s+code\b|\bcountry\s+(?:calling\s+|dialing\s+)?code\b"),
+    ("phone_extension", r"\bextension\b|\bext\b"),
     ("phone", r"\b(?:phone|mobile|telephone|cell)\b"),
-    ("address", r"\b(?:street\s+)?address\b|\bpostal|\bzip\b|\bpost\s*code\b"),
+    # The parts of a postal address each have a key of their own, so a form
+    # that asks for street, city, state and ZIP separately (Workday) does not
+    # get the same answer four times, and each answer is kept apart.
+    ("postal_code", r"\bpostal|\bzip\b|\bpost\s*code\b"),
+    ("address_line_2", r"\baddress\s+line\s*2\b|\bapartment\b|\bapt\b|\bsuite\b"),
+    ("address", r"\b(?:street\s+)?address\b"),
+    ("city", r"^\W*(?:city|town|city\s*/\s*town)\W*$"),
+    ("state", r"^\W*(?:state|province|region|state\s*/\s*province)\W*$"),
     ("country", r"\bcountry\b"),
     ("location", r"\blocation\b|\bcity\b|\bwhere (?:are|do) you (?:based|located|live)\b"),
     ("linkedin", r"\blinkedin\b"),
@@ -185,6 +195,26 @@ def answer_key_for(field: FormField) -> str:
     return canonical_key(field) or question_key(field.label)
 
 
+_CONTACT_KEYS = frozenset(
+    {
+        "first_name",
+        "last_name",
+        "full_name",
+        "preferred_name",
+        "email",
+        "phone",
+        "phone_country",
+        "location",
+        "address",
+        "address_line_2",
+        "city",
+        "state",
+        "postal_code",
+        "country",
+    }
+)
+
+
 def _section(field: FormField) -> str:
     if field.section not in ("other", "questions"):
         return field.section
@@ -193,10 +223,11 @@ def _section(field: FormField) -> str:
             return "consent"
     if _EEO.search(field.label):
         return "eeo"
+    if field.kind == "checkbox" and not field.options:
+        # A lone box ("I have a preferred name") holds no contact detail.
+        return "questions"
     key = canonical_key(field)
-    if key in ("first_name", "last_name", "full_name", "preferred_name", "email", "phone"):
-        return "contact"
-    if key in ("location", "address", "country"):
+    if key in _CONTACT_KEYS:
         return "contact"
     if key in ("linkedin", "github", "website"):
         return "links"
@@ -457,14 +488,24 @@ class _Planner:
             value = self._bank("preferred_name") or contact.get("first_name")
             value = value or _split_name(contact.get("full_name"))[0]
             source = "default"
-        elif key == "phone" and field.kind in ("select", "radio"):
+        elif key == "phone_country" or (key == "phone" and field.kind in ("select", "radio")):
             self._value_or_need(field, self._bank("phone_country"), "answer_bank", NOT_ON_FILE)
             return
         elif key in ("email", "phone", "location"):
             value = contact.get(key)
-        elif key in ("address", "country"):
+        elif key in ("address", "address_line_2", "postal_code", "country"):
             value = self._bank(key)
             source = "answer_bank"
+        elif key in ("city", "state"):
+            # From the answer bank, else from the location on file when it
+            # reads "City, State, ...".
+            value = self._bank(key)
+            source = "answer_bank"
+            if value is None:
+                parts = [p.strip() for p in (contact.get("location") or "").split(",")]
+                index = 0 if key == "city" else 1
+                if len(parts) >= 2 and parts[index]:
+                    value, source = parts[index], "contact"
         if value is None and key:
             value = self._bank(key)
             source = "answer_bank"

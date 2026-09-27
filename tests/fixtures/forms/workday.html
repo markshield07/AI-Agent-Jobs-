@@ -9,11 +9,19 @@
   "Apply" adventureButton, the start choice (autofillWithResume, applyManually), and the steps
   in <main data-automation-id="applyFlowPage">: Autofill with Resume, My Information, My
   Experience, Application Questions, Voluntary Disclosures, Self Identify, Review. Each step
-  ends with bottom-navigation-next-button ("Continue", "Save and Continue", then "Submit" on
-  Review). Its controls are Workday's own: dropdowns are <button aria-haspopup="listbox">
-  opening role=option items; "How Did You Hear About Us?" is a prompt, a searchBox whose
-  categories open further lists and whose pick shows as a selectedItem pill; the signature
+  is drawn in a wrapper named for it (applyFlowAutoFillPage, applyFlowMyInfoPage, ...) and
+  ends with pageFooterNextButton ("Continue", "Save and Continue", then "Submit" on Review).
+  Like the live site, it is one page: after Save and Continue the step just left stays on
+  screen for a while before the next is drawn. Its controls are Workday's own: dropdowns are
+  <button aria-haspopup="listbox"> opening role=option items; "How Did You Hear About Us?" is
+  a prompt, a searchBox whose categories open further lists and whose pick shows as a
+  selectedItem pill (itself role=option, in a role=listbox of picked items); the signature
   date is three spin buttons (dateSectionMonth/Day/Year-input). Errors show as errorMessage.
+
+  The Autofill and My Information markup is copied from a live CrowdStrike posting
+  (2026-09-27): the resume box with no label but "Select file", ids such as
+  name--legalName--firstName, the previous-worker radio marked required only on its group
+  and in its legend, and the country phone code prefilled as a pill.
 
   Variants, chosen with ?variant=...:
     manual       the start choice offers Apply Manually only; My Experience has no resume yet
@@ -63,7 +71,10 @@
   <a data-automation-id="applyManually" role="button" href="#manual">Apply Manually</a>
 </div>
 
-<main data-automation-id="applyFlowPage" id="flow" hidden></main>
+<main data-automation-id="applyFlowPage" id="flow-page" hidden>
+  <ol data-automation-id="progressBar" id="progress"></ol>
+  <div id="flow"></div>
+</main>
 
 <template id="step-signin">
   <div data-automation-id="signInContent">
@@ -76,59 +87,107 @@
 </template>
 
 <template id="step-autofill">
+  <div data-automation-id="applyFlowAutoFillPage">
   <h2>Autofill with Resume</h2>
-  <div data-automation-id="formField-resume">
-    <label for="autofill-resume">Upload a file (5MB max)<abbr title="required">*</abbr></label>
-    <input id="autofill-resume" class="file-input" type="file" data-automation-id="file-upload-input-ref" accept=".pdf,.doc,.docx">
-    <button type="button" data-automation-id="select-files">Select files</button>
+  <p>Upload either DOC, DOCX, HTML, PDF, or TXT file types (5MB max)</p>
+  <div data-automation-id="formField-">
+    <div data-automation-id="resumeUpload">
+      <div data-automation-id="file-upload-drop-zone">
+        <p>Drop file here</p>
+        <button type="button" data-automation-id="select-files" id="input-4">Select file</button>
+      </div>
+      <input data-automation-id="file-upload-input-ref" class="file-input" type="file" accept=".pdf,.doc,.docx">
+    </div>
   </div>
-  <footer><button type="button" data-automation-id="bottom-navigation-next-button">Continue</button></footer>
+  <footer><button type="button" data-automation-id="pageFooterNextButton">Continue</button></footer>
+  </div>
 </template>
 
 <template id="step-info">
+  <div data-automation-id="applyFlowMyInfoPage">
   <h2>My Information</h2>
-  <div data-automation-id="formField-source">
-    <label for="source--source">How Did You Hear About Us?<abbr title="required">*</abbr></label>
-    <div data-automation-id="multiselectInputContainer">
-      <input id="source--source" type="text" data-automation-id="searchBox" placeholder="Search">
+  <div data-automation-id="formField-source" data-fkit-id="source--source">
+    <label for="source--source"><span>How Did You Hear About Us?<abbr>*</abbr></span></label>
+    <div data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
+      <ul data-automation-id="selectedItemList" role="listbox"></ul>
+      <div data-automation-id="multiselectInputContainer">
+        <div data-automation-hiddensearch="true" data-automation-id="monikerSearchBox">
+          <input placeholder="Search" aria-required="true" id="source--source" data-automation-id="searchBox" data-uxi-widget-type="selectinput" type="text">
+        </div>
+      </div>
     </div>
-    <div data-automation-id="selectedItemList"></div>
   </div>
-  <div data-automation-id="formField-previousWorker">
+  <div data-automation-id="formField-candidateIsPreviousWorker">
     <fieldset>
-      <legend>Have you previously worked for Acme Robotics?<abbr title="required">*</abbr></legend>
-      <input type="radio" id="prev-yes" name="candidateIsPreviousWorker" value="true"><label for="prev-yes">Yes</label>
-      <input type="radio" id="prev-no" name="candidateIsPreviousWorker" value="false"><label for="prev-no">No</label>
+      <legend><label id="radio-label1"><span>Do you now or have you previously worked for Acme Robotics, Inc. or any of its subsidiaries?<abbr>*</abbr></span></label></legend>
+      <div name="candidateIsPreviousWorker" aria-labelledby="radio-label1" aria-required="true">
+        <input id="fhkka" name="candidateIsPreviousWorker" type="radio" value="true"><label for="fhkka">Yes</label>
+        <input id="fhkkb" name="candidateIsPreviousWorker" type="radio" value="false"><label for="fhkkb">No</label>
+      </div>
     </fieldset>
   </div>
-  <div data-automation-id="formField-country">
-    <label for="country--country">Country<abbr title="required">*</abbr></label>
-    <button type="button" id="country--country" aria-haspopup="listbox" data-options="Canada|United States of America">United States of America</button>
+  <div data-automation-id="formField-country" data-fkit-id="country--country">
+    <label for="country--country"><span>Country<abbr>*</abbr></span></label>
+    <button type="button" id="country--country" name="country" aria-haspopup="listbox" aria-label="Country United States of America Required" data-options="Canada|United States of America">United States of America</button>
   </div>
-  <div data-automation-id="formField-legalName--firstName">
-    <label for="legalNameSection_firstName">Given Name(s)<abbr title="required">*</abbr></label>
-    <input id="legalNameSection_firstName" type="text" value="Mark">
+  <div data-automation-id="formField-legalName--firstName" data-fkit-id="name--legalName--firstName">
+    <label for="name--legalName--firstName"><span>First Name<abbr>*</abbr></span></label>
+    <input type="text" id="name--legalName--firstName" name="legalName--firstName" aria-required="true" value="Mark">
   </div>
-  <div data-automation-id="formField-legalName--lastName">
-    <label for="legalNameSection_lastName">Family Name<abbr title="required">*</abbr></label>
-    <input id="legalNameSection_lastName" type="text" value="Shield">
+  <div data-automation-id="formField-legalName--lastName" data-fkit-id="name--legalName--lastName">
+    <label for="name--legalName--lastName"><span>Last Name<abbr>*</abbr></span></label>
+    <input type="text" id="name--legalName--lastName" name="legalName--lastName" aria-required="true" value="Shield">
   </div>
-  <div data-automation-id="formField-email">
-    <label for="email--email">Email Address<abbr title="required">*</abbr></label>
-    <input id="email--email" type="text" value="mark@example.com">
+  <div data-automation-id="formField-preferredCheck">
+    <input type="checkbox" id="name--preferredCheck" name="preferredCheck"><label for="name--preferredCheck">I have a preferred name</label>
   </div>
-  <div data-automation-id="formField-phoneType">
-    <label for="phoneNumber--phoneType">Phone Device Type<abbr title="required">*</abbr></label>
-    <button type="button" id="phoneNumber--phoneType" aria-haspopup="listbox" data-options="Home|Mobile|Work">Select One</button>
+  <div data-automation-id="formField-addressLine1" data-fkit-id="address--addressLine1">
+    <label for="address--addressLine1"><span>Address Line 1<abbr>*</abbr></span></label>
+    <input type="text" id="address--addressLine1" name="addressLine1" aria-required="true" value="">
   </div>
-  <div data-automation-id="formField-phoneNumber">
-    <label for="phoneNumber--phoneNumber">Phone Number<abbr title="required">*</abbr></label>
-    <input id="phoneNumber--phoneNumber" type="text">
+  <div data-automation-id="formField-city" data-fkit-id="address--city">
+    <label for="address--city"><span>City<abbr>*</abbr></span></label>
+    <input type="text" id="address--city" name="city" aria-required="true" value="">
   </div>
-  <footer><button type="button" data-automation-id="bottom-navigation-next-button">Save and Continue</button></footer>
+  <div data-automation-id="formField-countryRegion" data-fkit-id="address--countryRegion">
+    <label for="address--countryRegion"><span>State<abbr>*</abbr></span></label>
+    <button aria-haspopup="listbox" type="button" value="" aria-label="State Select One Required" name="countryRegion" id="address--countryRegion" data-options="Arizona|California|Texas">Select One</button>
+  </div>
+  <div data-automation-id="formField-postalCode" data-fkit-id="address--postalCode">
+    <label for="address--postalCode"><span>Postal Code<abbr>*</abbr></span></label>
+    <input type="text" id="address--postalCode" name="postalCode" aria-required="true" value="">
+  </div>
+  <div data-automation-id="formField-phoneType" data-fkit-id="phoneNumber--phoneType">
+    <label for="phoneNumber--phoneType"><span>Phone Device Type<abbr>*</abbr></span></label>
+    <button aria-haspopup="listbox" type="button" value="" aria-label="Phone Device Type Select One Required" name="phoneType" id="phoneNumber--phoneType" data-options="Home|Mobile|Work">Select One</button>
+  </div>
+  <div data-automation-id="formField-countryPhoneCode" data-fkit-id="phoneNumber--countryPhoneCode">
+    <label for="phoneNumber--countryPhoneCode"><span>Country Phone Code<abbr>*</abbr></span></label>
+    <div data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
+      <ul data-automation-id="selectedItemList" role="listbox">
+        <li role="presentation"><div data-automation-id="selectedItem" role="option" aria-selected="true">United States of America (+1)</div></li>
+      </ul>
+      <div data-automation-id="multiselectInputContainer">
+        <div data-automation-hiddensearch="true" data-automation-id="monikerSearchBox">
+          <input placeholder="Search" aria-required="true" id="phoneNumber--countryPhoneCode" data-automation-id="searchBox" data-uxi-widget-type="selectinput" type="text">
+        </div>
+      </div>
+    </div>
+  </div>
+  <div data-automation-id="formField-phoneNumber" data-fkit-id="phoneNumber--phoneNumber">
+    <label for="phoneNumber--phoneNumber"><span>Phone Number<abbr>*</abbr></span></label>
+    <input type="text" id="phoneNumber--phoneNumber" name="phoneNumber" aria-required="true" value="">
+  </div>
+  <div data-automation-id="formField-extension" data-fkit-id="phoneNumber--extension">
+    <label for="phoneNumber--extension"><span>Phone Extension</span></label>
+    <input type="text" id="phoneNumber--extension" name="extension" value="">
+  </div>
+  <footer><button type="button" data-automation-id="pageFooterNextButton">Save and Continue</button></footer>
+  </div>
 </template>
 
 <template id="step-experience">
+  <div data-automation-id="applyFlowMyExperiencePage">
   <h2>My Experience</h2>
   <div data-automation-id="formField-resume">
     <label for="experience-resume">Resume/CV</label>
@@ -136,10 +195,12 @@
     <input id="experience-resume" class="file-input" type="file" data-automation-id="file-upload-input-ref" accept=".pdf,.doc,.docx">
     <button type="button" data-automation-id="select-files">Select files</button>
   </div>
-  <footer><button type="button" data-automation-id="bottom-navigation-next-button">Save and Continue</button></footer>
+  <footer><button type="button" data-automation-id="pageFooterNextButton">Save and Continue</button></footer>
+  </div>
 </template>
 
 <template id="step-questions">
+  <div data-automation-id="applyFlowPrimaryQuestionsPage">
   <h2>Application Questions</h2>
   <div data-automation-id="formField-auth">
     <label for="q-auth">Are you legally authorized to work in the United States?<abbr title="required">*</abbr></label>
@@ -153,10 +214,12 @@
     <label for="q-teams">How many years have you managed network engineering teams?<abbr title="required">*</abbr></label>
     <input id="q-teams" type="text">
   </div>
-  <footer><button type="button" data-automation-id="bottom-navigation-next-button">Save and Continue</button></footer>
+  <footer><button type="button" data-automation-id="pageFooterNextButton">Save and Continue</button></footer>
+  </div>
 </template>
 
 <template id="step-disclosures">
+  <div data-automation-id="applyFlowVoluntaryDisclosuresPage">
   <h2>Voluntary Disclosures</h2>
   <div data-automation-id="formField-gender">
     <label for="d-gender">Gender</label>
@@ -170,10 +233,12 @@
     <input type="checkbox" id="termsAndConditions--acceptTermsAndAgreements" required>
     <label for="termsAndConditions--acceptTermsAndAgreements">I have read and consent to the terms and conditions<abbr title="required">*</abbr></label>
   </div>
-  <footer><button type="button" data-automation-id="bottom-navigation-next-button">Save and Continue</button></footer>
+  <footer><button type="button" data-automation-id="pageFooterNextButton">Save and Continue</button></footer>
+  </div>
 </template>
 
 <template id="step-selfid">
+  <div data-automation-id="applyFlowSelfIdentifyPage">
   <h2>Self Identify</h2>
   <div data-automation-id="selfIdentifiedDisabilityData">
     <div data-automation-id="formField-name">
@@ -197,13 +262,16 @@
       </fieldset>
     </div>
   </div>
-  <footer><button type="button" data-automation-id="bottom-navigation-next-button">Save and Continue</button></footer>
+  <footer><button type="button" data-automation-id="pageFooterNextButton">Save and Continue</button></footer>
+  </div>
 </template>
 
 <template id="step-review">
+  <div data-automation-id="applyFlowReviewPage">
   <h2>Review</h2>
   <p>Network Engineering Manager, Acme Robotics</p>
-  <footer><button type="button" data-automation-id="bottom-navigation-next-button">Submit</button></footer>
+  <footer><button type="button" data-automation-id="pageFooterNextButton">Submit</button></footer>
+  </div>
 </template>
 
 <template id="step-sent">
@@ -227,10 +295,19 @@
   var start = document.getElementById('start');
   var path = 'autofill';
   var order = ['info', 'experience', 'questions', 'disclosures', 'selfid', 'review'];
+  var TITLES = { autofill: 'Autofill with Resume', info: 'My Information', experience: 'My Experience',
+    questions: 'Application Questions', disclosures: 'Voluntary Disclosures', selfid: 'Self Identify',
+    review: 'Review' };
+  // How long the step just left stays on screen before the next one is drawn:
+  // longer than the handler's settle wait, so a handler that does not wait
+  // for the new step reads the old one.
+  var DRAW_MS = 600;
+  var drawing = false;
 
   // The prompt's lists: the first list, and what each category opens.
   var TOP = ['Company Website', 'Job Board', 'Referral'];
   var UNDER = { 'Job Board': ['Glassdoor', 'Indeed', 'LinkedIn'] };
+  var CODES = ['Canada (+1)', 'United Kingdom (+44)', 'United States of America (+1)'];
 
   var apply = document.querySelector('[data-automation-id="adventureButton"]');
   if (apply) apply.addEventListener('click', function (e) { e.preventDefault(); start.hidden = false; });
@@ -241,16 +318,16 @@
       window.__start = path;
       start.hidden = true;
       document.getElementById('posting').hidden = true;
-      flow.hidden = false;
+      document.getElementById('flow-page').hidden = false;
       if (variant === 'signed_out') { show('signin'); return; }
-      show(path === 'autofill' ? 'autofill' : 'info');
+      later(path === 'autofill' ? 'autofill' : 'info');
     });
   });
 
   function text(el) { return (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim(); }
   function val(id) { var el = document.getElementById(id); return el ? el.value : ''; }
   function shown(id) { var el = document.getElementById(id); return el ? text(el) : ''; }
-  function closeLists() { Array.prototype.forEach.call(document.querySelectorAll('[role="listbox"]'), function (l) { l.remove(); }); }
+  function closeLists() { Array.prototype.forEach.call(document.querySelectorAll('[data-automation-id="activeListContainer"]'), function (l) { l.remove(); }); }
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeLists(); });
 
   function listUnder(anchor, items, onPick) {
@@ -277,27 +354,30 @@
     });
   }
 
-  function wirePrompt(root) {
-    var input = root.querySelector('[data-automation-id="searchBox"]');
-    if (!input) return;
-    var pills = root.querySelector('[data-automation-id="selectedItemList"]');
+  function wirePrompt(box) {
+    var input = box.querySelector('[data-automation-id="searchBox"]');
+    var pills = box.querySelector('[data-automation-id="selectedItemList"]');
+    var codes = input.id === 'phoneNumber--countryPhoneCode';
+    var first = codes ? CODES : TOP;
+    var all = codes ? CODES : TOP.concat(UNDER['Job Board']);
     function pick(item) {
-      if (UNDER[item]) { listUnder(input.parentNode, UNDER[item], pick); return; }
-      pills.innerHTML = '';
-      var pill = document.createElement('div');
-      pill.setAttribute('data-automation-id', 'selectedItem');
-      pill.textContent = item;
-      pills.appendChild(pill);
+      if (!codes && UNDER[item]) { listUnder(input.parentNode, UNDER[item], pick); return; }
+      pills.innerHTML = '<li role="presentation"><div data-automation-id="selectedItem" role="option" aria-selected="true"></div></li>';
+      pills.querySelector('[data-automation-id="selectedItem"]').textContent = item;
       input.value = '';
       closeLists();
     }
-    input.addEventListener('click', function () { listUnder(input.parentNode, TOP, pick); });
+    input.addEventListener('click', function () { listUnder(input.parentNode, first, pick); });
     input.addEventListener('keydown', function (e) {
       if (e.key !== 'Enter') return;
       var q = input.value.toLowerCase();
-      var all = TOP.concat(UNDER['Job Board']);
       listUnder(input.parentNode, all.filter(function (t) { return t.toLowerCase().indexOf(q) >= 0; }), pick);
     });
+  }
+
+  function later(name) {
+    drawing = true;
+    setTimeout(function () { drawing = false; show(name); }, DRAW_MS);
   }
 
   function show(name) {
@@ -313,9 +393,12 @@
       f.addEventListener('change', function () { window.__uploads += f.files.length; });
     });
     wireDropdowns(flow);
-    wirePrompt(flow);
-    var next = flow.querySelector('[data-automation-id="bottom-navigation-next-button"]');
-    if (next) next.addEventListener('click', function () { advance(name); });
+    Array.prototype.forEach.call(flow.querySelectorAll('[data-automation-id="multiSelectContainer"]'), wirePrompt);
+    var progress = document.getElementById('progress');
+    progress.innerHTML = TITLES[name] ? '<li data-automation-id="progressBarActiveStep"></li>' : '';
+    if (TITLES[name]) progress.firstChild.textContent = TITLES[name];
+    var next = flow.querySelector('[data-automation-id="pageFooterNextButton"]');
+    if (next) next.addEventListener('click', function () { if (!drawing) advance(name); });
   }
 
   function error(message) {
@@ -328,19 +411,25 @@
   function advance(from) {
     var a = window.__answers;
     if (from === 'autofill') {
-      var f = document.getElementById('autofill-resume');
+      var f = flow.querySelector('[data-automation-id="resumeUpload"] input[type="file"]');
       if (!f.files.length) { error('Error: Upload a file'); return; }
       a.autofillResume = f.files[0].name;
-      show('info');
+      later('info');
       return;
     }
     if (from === 'info') {
-      var pill = flow.querySelector('[data-automation-id="selectedItem"]');
+      var pill = flow.querySelector('[data-automation-id="formField-source"] [data-automation-id="selectedItem"]');
+      var code = flow.querySelector('[data-automation-id="formField-countryPhoneCode"] [data-automation-id="selectedItem"]');
       var prev = flow.querySelector('input[name="candidateIsPreviousWorker"]:checked');
       a.info = { source: pill ? text(pill) : '', previous: prev ? prev.value : '', country: shown('country--country'),
-        first: val('legalNameSection_firstName'), last: val('legalNameSection_lastName'), email: val('email--email'),
-        phoneType: shown('phoneNumber--phoneType'), phone: val('phoneNumber--phoneNumber') };
-      if (!pill || !prev || a.info.phoneType === 'Select One' || !a.info.phone) { error('Errors Found: fill in the required fields'); return; }
+        first: val('name--legalName--firstName'), last: val('name--legalName--lastName'),
+        preferred: document.getElementById('name--preferredCheck').checked,
+        street: val('address--addressLine1'), city: val('address--city'), state: shown('address--countryRegion'),
+        zip: val('address--postalCode'), phoneType: shown('phoneNumber--phoneType'),
+        code: code ? text(code) : '', phone: val('phoneNumber--phoneNumber'), extension: val('phoneNumber--extension') };
+      var i = a.info;
+      if (!pill || !prev || !i.first || !i.last || !i.street || !i.city || i.state === 'Select One' || !i.zip
+          || i.phoneType === 'Select One' || !code || !i.phone) { error('Errors Found: fill in the required fields'); return; }
     }
     if (from === 'experience') {
       var r = document.getElementById('experience-resume');
@@ -367,7 +456,7 @@
       show('sent');
       return;
     }
-    show(order[order.indexOf(from) + 1]);
+    later(order[order.indexOf(from) + 1]);
   }
 })();
 </script>

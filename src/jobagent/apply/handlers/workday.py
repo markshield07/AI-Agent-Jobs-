@@ -7,14 +7,21 @@ Application". Then comes a sign-in, since every company on Workday keeps its
 own candidate accounts, and after it the steps: My Information, My
 Experience, Application Questions, Voluntary Disclosures, Self Identify,
 Review. Each step ends in "Save and Continue"; Review ends in "Submit", on
-the same button (data-automation-id="bottom-navigation-next-button").
+the same button (data-automation-id="pageFooterNextButton"). The steps are
+one page: the address never changes, and each step is drawn in a wrapper
+named for it (applyFlowAutoFillPage, applyFlowMyInfoPage, ...).
 
 What this handler does about each part:
 
 - The start choice is "Autofill with Resume" when offered: Workday reads the
   tailored resume into My Experience, which "Apply Manually" leaves for a
-  person to type. What it read is kept like any prefilled value. The resume
-  it shows again under My Experience is not uploaded twice.
+  person to type. Its upload box has no label, only a "Select file" button,
+  so a file input in it is taken as the resume. What Workday read is kept
+  like any prefilled value. The resume it shows again under My Experience is
+  not uploaded twice.
+- After "Save and Continue" the old step stays on screen until the next is
+  drawn, so the next step is read only once the wrapper's name (or the
+  progress bar's active step) has changed.
 - The sign-in is never typed. `jobagent login workday <posting URL>` opens a
   visible browser on that company's site once; the person signs in or
   creates the account there, and its cookies are kept, never the password.
@@ -34,10 +41,9 @@ What this handler does about each part:
   the person can read it and press Submit themselves.
 
 Selectors are the data-automation-id values Workday has used for years and
-that the reference repos drive (AutoApply `bot/apply/workday.py`); none of
-them could be checked against a live site from where this was written, so
-the fixture under tests/fixtures/forms/workday.html is the contract, and a
-live dry run is the proof.
+that the reference repos drive (AutoApply `bot/apply/workday.py`), checked
+against a live dry run on CrowdStrike's site (2026-09-27). The fixture under
+tests/fixtures/forms/workday.html copies that markup and is the contract.
 """
 
 from __future__ import annotations
@@ -85,13 +91,18 @@ _ORDER_JS = r"""(selectors) => {
   });
 }"""
 
+# The options of the list open now. A pill already picked in another prompt
+# (the country phone code's "United States of America (+1)") is also
+# role=option, inside the list of selected items, and is not one of them.
 _OPTION_TEXTS_JS = r"""() => {
   const txt = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
   const visible = (el) => { const r = el.getBoundingClientRect(); const st = getComputedStyle(el);
     return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none'; };
+  const picked = (el) => !!el.closest(
+    '[data-automation-id="selectedItemList"], [data-automation-id="selectedItem"]');
   const found = Array.from(document.querySelectorAll(
     '[data-automation-id="promptOption"], [data-automation-id="promptLeafNode"], [role="option"]'
-  )).filter(visible).map(txt).filter(Boolean);
+  )).filter((el) => visible(el) && !picked(el)).map(txt).filter(Boolean);
   return Array.from(new Set(found)).slice(0, 200);
 }"""
 
@@ -101,11 +112,13 @@ _CLICK_JS = r"""(wanted) => {
   const norm = (s) => (s || '').toLowerCase().replace(/[^\w\s+]/g, ' ').replace(/\s+/g, ' ').trim();
   const visible = (el) => { const r = el.getBoundingClientRect(); const st = getComputedStyle(el);
     return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none'; };
+  const picked = (el) => !!el.closest(
+    '[data-automation-id="selectedItemList"], [data-automation-id="selectedItem"]');
   const want = norm(wanted);
   if (!want) return null;
   const options = Array.from(document.querySelectorAll(
     '[data-automation-id="promptOption"], [data-automation-id="promptLeafNode"], [role="option"]'
-  )).filter(visible);
+  )).filter((el) => visible(el) && !picked(el));
   const texts = options.map((o) => norm(o.innerText || o.textContent));
   let i = texts.findIndex((t) => t === want);
   if (i < 0) i = texts.findIndex((t) => t.startsWith(want) || (want.startsWith(t) && t.length > 2));
@@ -132,6 +145,60 @@ _PICKED_JS = r"""(sel) => {
   return Array.from(box.querySelectorAll('[data-automation-id="selectedItem"]'))
     .map((n) => (n.innerText || n.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
 }"""
+
+# Which step is on screen: the name of the wrapper it is drawn in, and the
+# progress bar's active step.
+_STEP_JS = r"""() => {
+  const txt = (el) => el ? (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim() : '';
+  const visible = (el) => { const r = el.getBoundingClientRect(); const st = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none'; };
+  const wrapper = Array.from(document.querySelectorAll(
+    '[data-automation-id^="applyFlow"][data-automation-id$="Page"]'
+  )).find((el) => el.getAttribute('data-automation-id') !== 'applyFlowPage' && visible(el));
+  const active = document.querySelector('[data-automation-id="progressBarActiveStep"]');
+  const name = wrapper ? wrapper.getAttribute('data-automation-id') : '';
+  return name || active ? name + '|' + txt(active).slice(0, 80) : '';
+}"""
+
+# How many questions the step on screen shows, to tell when it has finished drawing.
+_FIELD_COUNT_JS = r"""() => document.querySelectorAll(
+  '[data-automation-id^="formField-"], input, select, textarea, button[aria-haspopup="listbox"]'
+).length"""
+
+# For each file input: whether it is the resume (it sits in Workday's
+# resumeUpload box, or on the Autofill with Resume step, where the box has no
+# label but "Select file"), and the name of a file Workday already holds there.
+_FILES_JS = r"""(selectors) => selectors.map((sel) => {
+  let el = null;
+  try { el = document.querySelector(sel); } catch (e) { return null; }
+  if (!el) return null;
+  const txt = (n) => n ? (n.innerText || n.textContent || '').replace(/\s+/g, ' ').trim() : '';
+  const resume = !!el.closest(
+    '[data-automation-id="resumeUpload"], [data-automation-id="applyFlowAutoFillPage"]');
+  const box = el.closest('[data-automation-id="resumeUpload"]')
+    || el.closest('[data-automation-id^="formField-"]')
+    || el.closest('[data-automation-id*="attachments" i]') || el.parentElement;
+  const done = box && box.querySelector('[data-automation-id="file-upload-successful"], '
+    + '[data-automation-id="fileName"], [data-automation-id="file-upload-item"]');
+  return { resume, uploaded: done ? txt(done) : '' };
+})"""
+
+# Whether the question box around each control says it is required, for a
+# radio group whose aria-required sits on the group and whose star sits in
+# the legend, where the inventory, reading each radio, sees neither.
+_BOX_REQUIRED_JS = r"""(selectors) => selectors.map((sel) => {
+  let el = null;
+  try { el = document.querySelector(sel); } catch (e) { return false; }
+  if (!el) return false;
+  if (el.closest('[aria-required="true"]')) return true;
+  const box = el.closest('[data-automation-id^="formField-"]');
+  if (!box) return false;
+  if (box.querySelector('[aria-required="true"], [data-automation-id="requiredIndicator"]')) {
+    return true;
+  }
+  const head = box.querySelector('legend, label');
+  return !!head && /\*/.test(head.innerText || head.textContent || '');
+})"""
 
 # Housekeeping questions with one answer for everybody, filled when the site
 # left them empty: (label pattern, the option wanted).
@@ -207,13 +274,14 @@ class WorkdayHandler(WizardHandler):
     # the Review step; the loop looks for Submit first, so Next is never
     # pressed when it reads Submit.
     next_selectors = (
-        "button[data-automation-id='bottom-navigation-next-button']",
         "button[data-automation-id='pageFooterNextButton']",
+        "button[data-automation-id='bottom-navigation-next-button']",
         "button:text-is('Save and Continue')",
         "button:text-is('Continue')",
         "button:text-is('Next')",
     )
     submit_selectors = (
+        "button[data-automation-id='pageFooterNextButton']:text-is('Submit')",
         "button[data-automation-id='bottom-navigation-next-button']:text-is('Submit')",
         "button[data-automation-id='pageFooterSubmitButton']",
         "button:text-is('Submit')",
@@ -239,6 +307,9 @@ class WorkdayHandler(WizardHandler):
     pause_ms = SETTLE_MS
     max_steps = 10
     settle_ms = 8_000
+    # The longest wait for the next step to be drawn after Save and Continue.
+    step_timeout_ms = 20_000
+    poll_ms = 250
 
     def __init__(self) -> None:
         self._posting = ""
@@ -274,6 +345,8 @@ class WorkdayHandler(WizardHandler):
                 return None
         if click_first_visible(flow, self.start_selectors):
             wait_settled(flow, self.settle_ms)
+            self._wait_until(flow, lambda: bool(self.step_marker(flow)) or self.signed_out(flow))
+            self._wait_drawn(flow)
         return flow
 
     def _in_flow(self, page: Any) -> bool:
@@ -312,6 +385,50 @@ class WorkdayHandler(WizardHandler):
         domains = {(c.get("domain") or "").lstrip(".").lower() for c in cookies}
         return any(d and (host == d or host.endswith("." + d)) for d in domains)
 
+    # -- moving between steps --------------------------------------------------
+
+    def step_marker(self, page: Any) -> str:
+        try:
+            return str(page.evaluate(_STEP_JS) or "")
+        except Exception:
+            return ""
+
+    def wait_for_step(self, page: Any, before: str) -> None:
+        if not before:
+            return
+        root = self._mark_root(page)
+        # A step that will not save shows its errors and stays; the loop reports them.
+        self._wait_until(
+            page,
+            lambda: (
+                self.step_marker(page) not in ("", before) or bool(self._step_errors(page, root))
+            ),
+        )
+        self._wait_drawn(page)
+
+    def _wait_until(self, page: Any, done: Any) -> bool:
+        waited = 0
+        while waited < self.step_timeout_ms:
+            if done():
+                return True
+            page.wait_for_timeout(self.poll_ms)
+            waited += self.poll_ms
+        log.info("workday: the next step was not drawn after %d ms", self.step_timeout_ms)
+        return False
+
+    def _wait_drawn(self, page: Any) -> None:
+        """Until the number of questions on screen stops growing."""
+        last, steady, waited = -1, 0, 0
+        while steady < 2 and waited < self.step_timeout_ms:
+            try:
+                count = int(page.evaluate(_FIELD_COUNT_JS) or 0)
+            except Exception:
+                return
+            steady = steady + 1 if count == last else 0
+            last = count
+            page.wait_for_timeout(self.poll_ms)
+            waited += self.poll_ms
+
     # -- reading a step --------------------------------------------------------
 
     def discover_step(self, page: Any, root: str | None) -> list[FormField]:
@@ -329,6 +446,8 @@ class WorkdayHandler(WizardHandler):
                 covered = []
         covered += [False] * (len(generic) - len(covered))
         fields = [f for f, hidden in zip(generic, covered, strict=True) if not hidden]
+        self._uploaded = self._read_files(page, fields)
+        self._mark_required(page, fields)
         for field in fields:
             if field.kind in ("select", "multiselect") and not field.options:
                 field.options = self._options(page, field.selector)
@@ -339,7 +458,6 @@ class WorkdayHandler(WizardHandler):
                     field.section = "other"
 
         self._widgets = {}
-        self._uploaded = dict(found.get("uploaded") or {})
         for raw in found.get("widgets") or []:
             kind = raw.get("widget")
             if kind not in ("dropdown", "prompt", "date") or not raw.get("selector"):
@@ -365,6 +483,41 @@ class WorkdayHandler(WizardHandler):
             self._widgets[field.key] = _Widget(kind=kind, value=value, parts=parts)
             fields.append(field)
         return self._in_page_order(page, fields)
+
+    def _read_files(self, page: Any, fields: list[FormField]) -> dict[str, str]:
+        """Label the resume upload as the resume; return the files Workday holds, by selector."""
+        files = [f for f in fields if f.kind == "file"]
+        if not files:
+            return {}
+        try:
+            info = list(page.evaluate(_FILES_JS, [f.selector for f in files]) or [])
+        except Exception as exc:
+            log.debug("could not read Workday's upload boxes: %s", exc)
+            return {}
+        uploaded: dict[str, str] = {}
+        for field, found in zip(files, info, strict=False):
+            if not found:
+                continue
+            if found.get("resume"):
+                field.section = "resume"
+                # Its only text is "Select file" or "Drop file here".
+                if not re.search(r"r[ée]sum[ée]|\bcv\b", field.label or "", re.I):
+                    field.label = "Resume"
+            if found.get("uploaded"):
+                uploaded[field.selector] = str(found["uploaded"])
+        return uploaded
+
+    @staticmethod
+    def _mark_required(page: Any, fields: list[FormField]) -> None:
+        optional = [f for f in fields if not f.required]
+        if not optional:
+            return
+        try:
+            flags = list(page.evaluate(_BOX_REQUIRED_JS, [f.selector for f in optional]) or [])
+        except Exception:
+            return
+        for field, required in zip(optional, flags, strict=False):
+            field.required = bool(required)
 
     def prefilled(self, page: Any, fields: list[FormField]) -> dict[str, str]:
         plain = [f for f in fields if f.key not in self._widgets]

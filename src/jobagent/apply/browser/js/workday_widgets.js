@@ -62,15 +62,19 @@
       value: /^(select one|select|choose one)$/i.test(shown) ? '' : shown });
   });
 
+  // One prompt per search box: Workday nests multiselectInputContainer inside
+  // multiSelectContainer, and each would otherwise read as a prompt of its own.
   const prompts = new Set();
   base.querySelectorAll('[data-automation-id="multiselectInputContainer"], [data-automation-id="multiSelectContainer"], input[data-automation-id="searchBox"]').forEach((el) => {
-    const container = el.tagName === 'INPUT'
-      ? (el.closest('[data-automation-id="multiselectInputContainer"], [data-automation-id="multiSelectContainer"]') || el.parentElement)
-      : el;
-    if (prompts.has(container)) return;
-    prompts.add(container);
-    const input = container.querySelector('input[data-automation-id="searchBox"], input[type="text"], input:not([type])');
-    if (!input || !visible(input)) return;
+    const found = el.tagName === 'INPUT' ? el
+      : el.querySelector('input[data-automation-id="searchBox"], input[type="text"], input:not([type])');
+    if (!found) return;
+    const container = found.closest('[data-automation-id="multiSelectContainer"]')
+      || found.closest('[data-automation-id="multiselectInputContainer"]') || found.parentElement;
+    const input = found;
+    if (prompts.has(input)) return;
+    prompts.add(input);
+    if (!visible(input)) return;
     const b = box(container);
     const label = labelOf(input, b);
     const scope = b || container;
@@ -104,15 +108,5 @@
         ? values.filter(Boolean).join('/') : '' });
   });
 
-  // A file input with a file already on Workday's side (the resume uploaded
-  // on the first page shows again under My Experience): its name, by the
-  // input's selector, so it is not uploaded twice.
-  const uploaded = {};
-  base.querySelectorAll('input[type="file"]').forEach((el) => {
-    const b = el.closest('[data-automation-id^="formField-"]') || el.closest('[data-automation-id*="attachments" i]') || el.parentElement;
-    const done = b && b.querySelector('[data-automation-id="file-upload-successful"], [data-automation-id="fileName"], [data-automation-id="file-upload-item"]');
-    if (done && txt(done) && el.id) uploaded['#' + esc(el.id)] = txt(done);
-  });
-
-  return { widgets: out, uploaded };
+  return { widgets: out };
 }

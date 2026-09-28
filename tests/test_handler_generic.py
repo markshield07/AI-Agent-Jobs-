@@ -222,6 +222,7 @@ def test_a_phenom_step_takes_the_fields_and_the_resume_by_its_button(page, packe
     assert {f.key: f.source for f in result.filled}["division"] == "prefilled"
     assert values["sourceType"] == "Job Board"
     assert values["source"] == "Indeed", "the board the job was found on"
+    assert values["cust_Preferred"] == "Email"
     assert page.eval_on_selector("#source", "el => el.options[el.selectedIndex].text") == "Indeed"
 
 

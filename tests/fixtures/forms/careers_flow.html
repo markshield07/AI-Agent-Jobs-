@@ -25,7 +25,8 @@
             file box, the resume behind an "Upload Resume" button, the fields in a form of
             their own, and Next. The upload shows a spinner while the page "reads" the
             resume, which empties Last Name; then the file name. "How did you hear" = Job
-            Board brings up a required Source; Division comes already chosen.
+            Board brings up a required Source whose choices come 1.2s later, and never if
+            another answer is given in between; Division comes already chosen.
     phenomsilent  the same, but the page never shows the uploaded file's name
     signup  Apply Now leads to ADP's guest step: name, email and mobile, and a notice
             about a verification process
@@ -131,6 +132,8 @@
       '<label for="sourceType">How did you hear about this opportunity?*</label>' +
       '<select id="sourceType" required><option value="">Please Select</option><option>Company Website</option>' +
       '<option>Job Board</option></select><div id="source-box"></div>' +
+      '<label for="cust_Preferred">Preferred Contact Method*</label><select id="cust_Preferred" required>' +
+      '<option value="">Please Select</option><option>Cell Phone</option><option>Email</option></select>' +
       '</fieldset><button type="button" id="next">Next</button></form>' +
       '<div id="spinner" class="spinner hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.3)"></div>';
     var hidden = document.getElementById('hidden-resume');
@@ -145,12 +148,18 @@
         spinner.classList.add('hidden');
       }, 700);
     });
+    // As on Serco in the agent's own run: an answer given while Source is still
+    // loading leaves it with no choices, until "How did you hear" is chosen again.
+    document.getElementById('cust_Preferred').addEventListener('change', function () {
+      clearTimeout(window.__sourceLoad);
+    });
     document.getElementById('sourceType').addEventListener('change', function (e) {
       var box = document.getElementById('source-box');
       // Like Serco's: the list shows at once and its choices arrive a moment later.
       box.innerHTML = e.target.value === 'Job Board' ? '<label for="source">Source*</label>' +
         '<select id="source" required><option value="-1">Loading...</option></select>' : '';
-      if (e.target.value === 'Job Board') setTimeout(function () {
+      clearTimeout(window.__sourceLoad);
+      if (e.target.value === 'Job Board') window.__sourceLoad = setTimeout(function () {
         document.getElementById('source').innerHTML = '<option value="">Please Select</option>' +
           '<option value="45028">Indeed</option><option value="45030">LinkedIn</option>' +
           '<option value="45033">Other Site</option>';

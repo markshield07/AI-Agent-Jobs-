@@ -29,6 +29,7 @@ from jobagent.apply.browser.dom import current_values, discover_fields, script
 from jobagent.apply.browser.fill import (
     click_first_visible,
     detect_login_wall,
+    fill_field,
     page_text,
     wait_settled,
 )
@@ -319,6 +320,11 @@ class GenericHandler(BaseHandler):
                 # A list that appeared with an answer fills its choices a
                 # moment later (Serco's Source): wait for them, then read again.
                 _wait_for_options(page, new, self.options_wait_ms)
+                if _options_loading(page, new):
+                    # Still none: the answer that brought the list up is
+                    # chosen again, which asks the page for its choices again.
+                    self._choose_again(page, new, fields, filled, notes)
+                    _wait_for_options(page, new, self.options_wait_ms)
                 found = _the_application(page, discover_fields(page))
                 new = [
                     f for f in _unseen(found, fields) if not _widget(f) and _shown(page, f.selector)
@@ -346,6 +352,39 @@ class GenericHandler(BaseHandler):
                 plan.notes.extend(extra.notes)
                 plan.input_tokens += extra.input_tokens
                 plan.output_tokens += extra.output_tokens
+
+    def _choose_again(
+        self,
+        page: Any,
+        new: list[FormField],
+        fields: list[FormField],
+        filled: list[Fill],
+        notes: list[str],
+    ) -> None:
+        """Choose again the list answer just above each new list that has no
+        choices: first its prompt, then the answer, as a person would."""
+        by_key = {f.key: f for f in fields}
+        chosen = [
+            (by_key[f.key], f)
+            for f in filled
+            if f.key in by_key and by_key[f.key].kind == "select" and by_key[f.key].selector
+        ]
+        for empty in _empty_selects(page, new):
+            before = _nearest_before(page, empty.selector, [f.selector for f, _ in chosen])
+            if before is None:
+                notes.append(f"{empty.label!r} came up with no choices, and none came")
+                continue
+            field, fill = chosen[before]
+            try:
+                page.locator(field.selector).first.select_option(index=0, timeout=5000)
+                page.wait_for_timeout(300)
+            except Exception as exc:
+                log.debug("generic: could not reset %s: %s", field.selector, exc)
+            error = fill_field(page, field, fill)
+            notes.append(
+                f"{empty.label!r} came up with no choices; chose {field.label!r} again"
+                + (f" (could not: {error})" if error else "")
+            )
 
     def discover(self, page: Any) -> list[FormField]:
         if self._handoff:
@@ -516,18 +555,48 @@ _EMPTY_SELECTS_JS = """(selectors) => selectors.filter((sel) => {
   const real = (o) => o.value && o.value !== '-1' && o.value !== '0'
     && !/^\s*$|^-+$|^select\b|^choose\b|^please\s+select|^loading/i.test(o.text || '');
   return !!el && el.tagName === 'SELECT' && !Array.from(el.options).some(real);
-}).length"""
+})"""
+
+
+def _empty_selects(page: Any, fields: list[FormField]) -> list[FormField]:
+    """The native selects among `fields` that have no choices yet."""
+    lists = [f for f in fields if f.kind in ("select", "multiselect") and f.selector]
+    try:
+        empty = set(page.evaluate(_EMPTY_SELECTS_JS, [f.selector for f in lists]) or [])
+    except Exception:
+        return []
+    return [f for f in lists if f.selector in empty]
+
+
+def _nearest_before(page: Any, selector: str, candidates: list[str]) -> int | None:
+    """Which of `candidates` comes last before `selector` in the page, or None."""
+    try:
+        index = page.evaluate(
+            """([sel, cands]) => {
+                const AFTER = Node.DOCUMENT_POSITION_FOLLOWING;
+                const el = document.querySelector(sel);
+                let best = -1;
+                cands.forEach((c, i) => {
+                    let other = null;
+                    try { other = document.querySelector(c); } catch (e) { return; }
+                    if (!el || !other || other === el) return;
+                    if (!(other.compareDocumentPosition(el) & AFTER)) return;
+                    if (best < 0) { best = i; return; }
+                    const cur = document.querySelector(cands[best]);
+                    if (cur.compareDocumentPosition(other) & AFTER) best = i;
+                });
+                return best;
+            }""",
+            [selector, candidates],
+        )
+    except Exception:
+        return None
+    return None if index is None or index < 0 else int(index)
 
 
 def _options_loading(page: Any, fields: list[FormField]) -> bool:
     """A native select among `fields` that has no choices yet."""
-    selectors = [f.selector for f in fields if f.kind in ("select", "multiselect") and f.selector]
-    if not selectors:
-        return False
-    try:
-        return bool(page.evaluate(_EMPTY_SELECTS_JS, selectors))
-    except Exception:
-        return False
+    return bool(_empty_selects(page, fields))
 
 
 def _wait_for_options(page: Any, fields: list[FormField], wait_ms: int) -> None:

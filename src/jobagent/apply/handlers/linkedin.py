@@ -59,7 +59,13 @@ class LinkedInHandler(WizardHandler):
         "a:has-text('Sign in to apply')",
         "form.join-form",
     )
+    # The 2026 layout (the Mac's capture of Stand8's, 2026-09-28): a native
+    # <dialog data-testid="dialog" aria-labelledby="dialog-header">, obfuscated
+    # class names, and buttons that carry only their text ("Next", "Review",
+    # "Submit application"), so those are matched by text inside the dialog.
     root_selectors = (
+        "dialog[open][aria-labelledby='dialog-header']",
+        "dialog[open][data-testid='dialog']",
         ".jobs-easy-apply-modal",
         "[data-test-modal][role='dialog']",
         "div[role='dialog']",
@@ -70,15 +76,23 @@ class LinkedInHandler(WizardHandler):
         "button[aria-label*='Continue']",
         "button[aria-label*='Next']",
         "button[aria-label*='Review']",
+        "footer button:has-text('Next')",
+        "footer button:has-text('Review')",
+        "footer button:has-text('Continue')",
+        "button:has-text('Next')",
+        "button:has-text('Review')",
     )
     submit_selectors = (
         "button[aria-label='Submit application']",
         "button[aria-label*='Submit application']",
+        "button:has-text('Submit application')",
     )
     step_error_selectors = (
         ".artdeco-inline-feedback--error",
         ".fb-dash-form-element-error",
         "[data-test-form-element-error-messages]",
+        "[componentkey^='easyApplyFieldFocus'] [role='alert']",
+        "[componentkey^='easyApplyFieldFocus'] [data-testid*='error' i]",
     )
     success_signals = (
         "application was sent",
@@ -117,6 +131,7 @@ class LinkedInHandler(WizardHandler):
             page,
             (
                 "button[data-control-name='discard_application_confirm_btn']",
+                "dialog[open] button:has-text('Discard')",
                 "button[data-test-dialog-secondary-btn]:has-text('Discard')",
                 "button:has-text('Discard')",
             ),

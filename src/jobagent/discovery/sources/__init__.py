@@ -24,9 +24,18 @@ if TYPE_CHECKING:
 __all__ = ["all_sources"]
 
 
-def all_sources(criteria: SearchCriteria, client: httpx.Client | None = None) -> list[Source]:
-    """Every source that has something to search, given these criteria."""
+def all_sources(
+    criteria: SearchCriteria,
+    client: httpx.Client | None = None,
+    apply_sites: tuple[str, ...] = (),
+) -> list[Source]:
+    """Every source that has something to search, given these criteria. With
+    JOBAGENT_APPLY_SITES naming only LinkedIn and Indeed, those boards alone,
+    asked for the jobs that apply on their own forms."""
     wanted = {board.ats for board in criteria.boards}
+    on_site_only = bool(apply_sites) and set(apply_sites) <= {"linkedin", "indeed"}
+    if apply_sites:
+        wanted &= set(apply_sites)
     sources: list[Source] = []
     if "greenhouse" in wanted:
         sources.append(GreenhouseSource(client))
@@ -35,5 +44,5 @@ def all_sources(criteria: SearchCriteria, client: httpx.Client | None = None) ->
     if "ashby" in wanted:
         sources.append(AshbySource(client))
     if criteria.jobspy_sites and criteria.titles:
-        sources.append(JobSpySource())
+        sources.append(JobSpySource(on_site_only=on_site_only))
     return sources

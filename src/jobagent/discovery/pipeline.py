@@ -112,7 +112,7 @@ def run_discovery(
     client = client or make_client()
     try:
         if sources is None:
-            sources = all_sources(criteria, client=client)
+            sources = all_sources(criteria, client=client, apply_sites=settings.apply_site_list)
         _search(conn, criteria, sources, report, run_id)
 
         if classify or enrich_with_model:

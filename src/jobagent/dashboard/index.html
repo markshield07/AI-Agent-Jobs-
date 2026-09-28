@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Agent</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f6fdf'/%3E%3Cpath d='M9 17l5 5 9-11' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"></span>
+    <span>Job Agent</span>
+    <span class="mode" id="mode-badge" title="Submission mode">…</span>
+  </div>
+  <nav class="tabs" aria-label="Sections">
+    <a href="#overview" data-tab="overview">Overview</a>
+    <a href="#applications" data-tab="applications">Applications</a>
+    <a href="#jobs" data-tab="jobs">Jobs</a>
+    <a href="#profile" data-tab="profile">Resume &amp; answers</a>
+    <a href="#settings" data-tab="settings">Settings</a>
+  </nav>
+  <div class="actions">
+    <button type="button" data-run="discover" title="Search the boards now">Find jobs</button>
+    <button type="button" data-run="apply" title="Fill the forms of queued jobs that have a tailored resume">Apply</button>
+    <button type="button" data-run="inbox" title="Read the mailbox for replies">Check replies</button>
+  </div>
+</header>
+
+<div id="toast" role="status" aria-live="polite" hidden></div>
+
+<main>
+  <!-- ------------------------------------------------------------ overview -->
+  <section id="view-overview" class="view" hidden>
+    <div class="attention" id="attention"></div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="grid two">
+      <article class="card wide">
+        <header class="card-head">
+          <h2>Applications per day</h2>
+          <div class="segmented" id="range" role="group" aria-label="Range">
+            <button type="button" data-days="7">7d</button>
+            <button type="button" data-days="30" aria-pressed="true">30d</button>
+            <button type="button" data-days="90">90d</button>
+          </div>
+        </header>
+        <div class="legend">
+          <span><i class="sw applied"></i>Applied</span>
+          <span><i class="sw responses"></i>Heard back</span>
+          <span><i class="sw discovered"></i>Found</span>
+        </div>
+        <div id="per-day" class="chart"></div>
+        <p class="sub" id="window-note"></p>
+      </article>
+
+      <article class="card">
+        <header class="card-head"><h2>Funnel</h2></header>
+        <div id="funnel"></div>
+      </article>
+
+      <article class="card">
+        <header class="card-head"><h2>Job categories</h2></header>
+        <div id="categories"></div>
+      </article>
+
+      <article class="card">
+        <header class="card-head"><h2>By site</h2></header>
+        <div id="sites"></div>
+      </article>
+
+      <article class="card">
+        <header class="card-head"><h2>Recent activity</h2></header>
+        <ol id="activity" class="feed"></ol>
+      </article>
+    </div>
+  </section>
+
+  <!-- -------------------------------------------------------- applications -->
+  <section id="view-applications" class="view" hidden>
+    <div class="toolbar">
+      <div class="chips" id="app-filters"></div>
+    </div>
+    <div class="split">
+      <div class="card list-card">
+        <table class="table" id="app-table">
+          <thead><tr><th>Job</th><th>Site</th><th>Status</th><th>Sent</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="empty" id="app-empty" hidden>No applications yet. Queue a few jobs, tailor them, then press Apply.</p>
+      </div>
+      <aside class="card detail" id="app-detail" hidden></aside>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- jobs -->
+  <section id="view-jobs" class="view" hidden>
+    <div class="toolbar">
+      <div class="chips" id="job-filters"></div>
+      <label class="inline">Min score <input type="number" id="job-min-score" min="0" max="100" step="5" value=""></label>
+    </div>
+    <div class="card list-card">
+      <table class="table" id="job-table">
+        <thead><tr><th>Job</th><th>Category</th><th class="num">Score</th><th>Found</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="empty" id="job-empty" hidden>Nothing here. Set what to search for under Settings, then press Find jobs.</p>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------- profile -->
+  <section id="view-profile" class="view" hidden>
+    <div class="grid two">
+      <article class="card">
+        <header class="card-head"><h2>Resume</h2></header>
+        <p class="sub" id="resume-current">No resume uploaded yet.</p>
+        <form id="resume-form" class="stack">
+          <input type="file" name="file" accept=".pdf,.docx,.txt,.md" required>
+          <button type="submit">Upload and parse</button>
+        </form>
+      </article>
+
+      <article class="card">
+        <header class="card-head"><h2>Add skills and keywords</h2></header>
+        <p class="sub">Things you have actually done. Tailoring may use them; it never invents others.</p>
+        <form id="keywords-form" class="stack">
+          <textarea name="keywords" rows="3" placeholder="Kubernetes, Terraform, incident response"></textarea>
+          <button type="submit">Add</button>
+        </form>
+      </article>
+
+      <article class="card wide">
+        <header class="card-head"><h2>Fact base</h2><span class="sub" id="fact-count"></span></header>
+        <div id="facts" class="facts"></div>
+      </article>
+
+      <article class="card">
+        <header class="card-head"><h2>Never claim</h2></header>
+        <p class="sub">Terms no resume or answer may mention, even if a job asks for them.</p>
+        <form id="never-form" class="row">
+          <input name="term" placeholder="e.g. Kotlin" required>
+          <button type="submit">Add</button>
+        </form>
+        <ul id="never" class="tags"></ul>
+      </article>
+
+      <article class="card">
+        <header class="card-head"><h2>Answer bank</h2></header>
+        <p class="sub">Your answers to form questions, reused on every site.</p>
+        <table class="table compact" id="answers"><tbody></tbody></table>
+      </article>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ settings -->
+  <section id="view-settings" class="view" hidden>
+    <div class="grid two">
+      <article class="card">
+        <header class="card-head"><h2>LinkedIn and Indeed sign-in</h2></header>
+        <p class="sub">Sign in once on your own machine with the command shown. Your password is never stored.</p>
+        <div id="sessions"></div>
+      </article>
+
+      <article class="card">
+        <header class="card-head"><h2>How it runs</h2></header>
+        <dl class="facts-list" id="config"></dl>
+        <p class="sub">Change these in <code>.env</code> and restart. Nothing is submitted unless the mode is <b>auto</b>.</p>
+      </article>
+
+      <article class="card wide">
+        <header class="card-head"><h2>What to search for</h2></header>
+        <form id="criteria-form" class="criteria">
+          <label>Job titles <textarea name="titles" rows="2" placeholder="One per line or comma-separated"></textarea></label>
+          <label>Locations <textarea name="locations" rows="2"></textarea></label>
+          <label>Keywords that earn points <textarea name="keywords" rows="2"></textarea></label>
+          <label>Words that rule a posting out <textarea name="exclude_keywords" rows="2"></textarea></label>
+          <label>Companies to skip <textarea name="company_blacklist" rows="2"></textarea></label>
+          <div class="row wrap">
+            <label class="inline">Minimum score <input type="number" name="min_score" min="0" max="100"></label>
+            <label class="inline">Worst tier queued <input type="number" name="max_tier" min="1" max="4"></label>
+            <label class="inline">Max age (hours) <input type="number" name="max_age_hours" min="1"></label>
+            <label class="inline">Salary at least <input type="number" name="salary_min" min="0" step="1000"></label>
+            <label class="inline check"><input type="checkbox" name="remote_ok"> Remote counts as a match</label>
+          </div>
+          <div class="row wrap" id="criteria-sites"></div>
+          <div class="row"><button type="submit">Save</button><span class="sub" id="criteria-note"></span></div>
+        </form>
+      </article>
+    </div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

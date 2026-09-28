@@ -15,9 +15,9 @@ Architecture and the reasoning behind each decision:
 | 2 | Discovery, dedupe, enrichment, scoring | done |
 | 3 | Tailoring and PDF rendering | done |
 | 4 | Submission, on career-page boards, off by default | done |
-| 4b | LinkedIn Easy Apply and Indeed's own application | **this branch** |
+| 4b | LinkedIn Easy Apply and Indeed's own application | done |
 | 5 | Response tracking | done |
-| 6 | Dashboard and scheduling | not started |
+| 6 | Dashboard and scheduling | **this branch** |
 
 ## The fact base
 
@@ -38,7 +38,7 @@ keyword naming one is refused at the point you add it, not at render time.
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
-jobagent serve                # http://127.0.0.1:8000
+jobagent serve                # the dashboard, at http://127.0.0.1:8000
 ```
 
 PDF rendering uses WeasyPrint, which needs Pango and Cairo on the machine
@@ -290,6 +290,55 @@ A reply only ever moves an application **forward**: an interview invitation
 after a rejection is kept as a note, not a reversal. `rejected` and `withdrawn`
 end an application from anywhere.
 
+### The dashboard
+
+![The dashboard's overview, with sample data](docs/dashboard.png)
+
+`jobagent serve` and open http://127.0.0.1:8000. It is a plain page served by
+the same process as the API: no build step, no account, nothing loaded from
+anywhere else, light and dark to match your system.
+
+- **Overview**: applied, heard back (and the response rate), interviews, offers,
+  the median days to a reply, and jobs found; applications, replies and new
+  jobs per day over 7, 30 or 90 days; the funnel from found to offer; each job
+  category with what was found, applied to and answered; each site's response
+  rate; and the latest submissions and replies. Anything waiting on you (a
+  question to answer, an application to approve, one to check) is at the top.
+- **Applications**: every application by status. Open one to see what went on
+  the form, the screenshot, its history and the page's own words; answer the
+  question it is stuck on (saved for every later form), submit one a dry run
+  left at the button, or record an interview, offer or rejection.
+- **Jobs**: what discovery found, by status and score; queue, skip or tailor one.
+- **Resume & answers**: upload the resume, add skills you have, switch facts
+  off, keep the never-claim list, read the answer bank.
+- **Settings**: LinkedIn and Indeed sign-in status, the submission mode and
+  caps, and what to search for.
+
+The buttons at the top run a search, an apply pass (in the configured mode;
+it asks first when that mode is `auto`) and a mailbox check.
+
+A **response** is any reply filed against the application, or a status you or
+the inbox moved it to. An automatic "we received your application" counts as a
+reply; the "Heard back" card also says how many replies were more than that. Days follow your browser's time zone.
+
+### Running on a schedule
+
+```bash
+jobagent run              # one cycle: find, tailor, apply, read replies
+jobagent run --every 6    # a cycle about every 6 hours, until Ctrl-C
+jobagent run --skip apply # everything but applying
+```
+
+Each step works on what the step before it left, and a step that fails is
+reported while the rest still run. Applying follows `JOBAGENT_APPLY_MODE`, so a
+scheduled run in the default mode fills forms and sends nothing. The daily caps
+and the jittered pause hold across cycles. To run it from cron instead of
+keeping a terminal open:
+
+```cron
+15 */6 * * *  cd /path/to/AI-Agent-Jobs- && .venv/bin/jobagent run >> data/cycle.log 2>&1
+```
+
 ## API
 
 | Method | Path | What it does |
@@ -328,6 +377,9 @@ end an application from anywhere.
 | `GET` | `/api/inbox` | Everything read, newest first. Filter by `application_id`, `matched`, `label` |
 | `GET` | `/api/inbox/counts` | How many messages per label, and how many unmatched |
 | `POST` | `/api/inbox/{id}/attach` | File a message against an application, and move its status |
+| `GET` | `/api/stats` | The dashboard's numbers: totals, per day (`days`, `tz_offset_minutes`), funnel, categories, sites |
+| `GET` | `/api/activity` | The newest submissions, replies and status changes |
+| `GET` | `/api/config` | The mode, caps and model route (never a key or password) |
 | `GET` | `/api/sessions` | Whether LinkedIn and Indeed are signed in, and until when (never the cookies) |
 | `DELETE` | `/api/sessions/{site}` | Forget a saved sign-in |
 
@@ -387,6 +439,9 @@ src/jobagent/
 │   ├── store.py        The inbox log; the reason a mail is never read twice
 │   └── poller.py       One pass: fetch, match, read, append
 ├── api/                FastAPI routes
+├── dashboard/          The page: index.html, app.js, style.css, no build step
+├── stats.py            The dashboard's numbers, derived from the tables at read time
+├── cycle.py            One scheduled turn: discover, tailor, apply, inbox
 └── main.py             App factory and the command line
 ```
 

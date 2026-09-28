@@ -24,18 +24,33 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from jobagent.apply.answering import CONSENT_KEY, NEVER_GUESSED, SENSITIVE, field_section
+from jobagent.apply.answering import (
+    CONSENT_KEY,
+    NEVER_GUESSED,
+    SENSITIVE,
+    answer_key_for,
+    field_section,
+)
 from jobagent.apply.browser.dom import current_values, discover_fields, script
 from jobagent.apply.browser.fill import (
     click_first_visible,
     detect_login_wall,
     fill_field,
+    fill_plan,
     page_text,
     visible_errors,
     wait_settled,
 )
 from jobagent.apply.closing import deadline_passed
 from jobagent.apply.handlers.base import COOKIE_BUTTON_SELECTORS, BaseHandler
+from jobagent.apply.handlers.workday import (
+    _PRESENT,
+    _by_recency,
+    _entry_text,
+    _match_role,
+    _norm,
+    parse_date,
+)
 from jobagent.apply.models import Fill, FormField, HandlerResult, NeededInput
 from jobagent.discovery.ats import detect_ats
 
@@ -69,6 +84,25 @@ _CODE_CHECK = re.compile(
     re.I,
 )
 SIGN_UP_JS = script("sign_up.js")
+DATE_PICKER_JS = script("date_picker.js")
+# A field of one numbered entry in a list the form repeats: experienceData[0].title.
+_ENTRY = re.compile(
+    r"(?P<kind>experience|employment|work|job|position|history|education|school)\w*"
+    r"[\[._-](?P<n>\d+)[\]._-]",
+    re.I,
+)
+_DATE_LABEL = re.compile(
+    r"\b(?:from|start|to|end)\b.*\bdate\b|\bdate\b.*\b(?:from|start|to|end)\b", re.I
+)
+_END_LABEL = re.compile(r"\b(?:to|end)\b", re.I)
+_DATE_KEY = re.compile(r"(?:(?P<start>start|from)|(?P<end>end|to))_?date\b", re.I)
+# The controls inside a calendar a date box opens: its month and year lists.
+_PICKER_PART_JS = """(selectors) => selectors.map((sel) => {
+  let el = null;
+  try { el = document.querySelector(sel); } catch (e) { return false; }
+  return !!el && !!el.closest('.react-datepicker, .react-datepicker-popper, .ui-datepicker,'
+    + ' [class*="datepicker-dropdown" i], [class*="calendar" i]');
+})"""
 STEP_CONTROL_JS = script("step_control.js")
 # A page still busy with an upload: its spinner or progress bar is showing.
 BUSY_JS = """() => Array.from(document.querySelectorAll(
@@ -124,6 +158,11 @@ class GenericHandler(BaseHandler):
         # The fields of the page on screen, and whether the resume went on.
         self._page_fields: list[FormField] = []
         self._resume_sent = False
+        # The person's jobs on file, the home location, and the (month, year)
+        # each work-history date box takes, by field key.
+        self._roles: list[Any] = []
+        self._home = ""
+        self._dates: dict[str, tuple[int, int]] = {}
 
     def matches(self, url: str) -> bool:
         """Never claims a URL: it is what `handler_for` falls back to, so a
@@ -255,9 +294,10 @@ class GenericHandler(BaseHandler):
         resume = "" if self._resume_sent else self._resume
         by_button: list[Fill] = []
         notes: list[str] = []
+        self._plan_entries(page, fields, plan)
         if resume and not any(f.file_path for f in plan.fills):
             self._resume_by_button(page, resume, by_button, plan, notes)
-        filled, unfilled, more = super().fill(page, fields, plan)
+        filled, unfilled, more = self._fill_with(page, fields, plan)
         filled[:0] = by_button
         notes.extend(more)
         if resume and not any(f.file_path for f in filled):
@@ -265,7 +305,161 @@ class GenericHandler(BaseHandler):
         self._resume_sent = self._resume_sent or any(f.file_path for f in filled)
         self._keep_prefilled(page, fields, plan, filled)
         self._look_again(page, fields, plan, filled, unfilled, notes)
+        _close_pickers(page)
+        self._still_empty(page, fields, plan, unfilled)
         return filled, unfilled, notes
+
+    def _fill_with(self, page: Any, fields: list[FormField], plan: Any) -> tuple[list, list, list]:
+        return fill_plan(page, fields, plan, fill_one=self._fill_one)
+
+    def _fill_one(self, page: Any, field: FormField, fill: Fill) -> str | None:
+        """A work-history date through its calendar; anything else as usual."""
+        when = self._dates.get(field.key)
+        if when is None:
+            return fill_field(page, field, fill)
+        return _set_date(page, field, *when)
+
+    def _plan_entries(self, page: Any, fields: list[FormField], plan: Any) -> None:
+        """Each work-history entry on the page from the job on file it names.
+
+        A resume the page read makes an entry per job with its title and
+        employer (Serco's My Experience) and leaves the dates empty. The job
+        on file with that employer (else that title), or for an empty entry the
+        next job no entry names, gives: From and To through the date box's
+        calendar, "I currently work here" ticked only for a job that runs to the
+        present (To then left empty), and the title, employer and description
+        where the entry has none. The employer's location comes from the job on
+        file or from the answer bank (location_at:<employer>); never the home
+        address, and a required one with nothing on file is asked."""
+        entries: dict[int, list[FormField]] = {}
+        for field in fields:
+            found = _ENTRY.search(field.key or "") or _ENTRY.search(field.selector or "")
+            if found and not found.group("kind").lower().startswith(("education", "school")):
+                entries.setdefault(int(found.group("n")), []).append(field)
+        if not entries:
+            return
+        held = current_values(page, [f for group in entries.values() for f in group])
+
+        def named(group: list[FormField], pattern: str) -> str:
+            return next(
+                (held.get(f.key, "") for f in group if re.search(pattern, f.label, re.I)), ""
+            ).strip()
+
+        chosen: dict[int, Any] = {}
+        for n, group in sorted(entries.items()):
+            title = named(group, r"title|position")
+            company = named(group, r"employer|company")
+            if (title or company) and self._roles:
+                role = _match_role(self._roles, title, company)
+                if role is not None:
+                    chosen[n] = role
+        used = {id(r) for r in chosen.values()}
+        spare = [r for r in _by_recency(self._roles) if id(r) not in used]
+        for n, group in sorted(entries.items()):
+            if n not in chosen and spare and not named(group, r"title|position|employer|company"):
+                chosen[n] = spare.pop(0)
+
+        for n, group in sorted(entries.items()):
+            role = chosen.get(n)
+            detail = (getattr(role, "detail", {}) or {}) if role is not None else {}
+            end = str(detail.get("end") or "").strip()
+            current = bool(_PRESENT.fullmatch(end)) if role is not None else False
+            employer = str(detail.get("employer") or named(group, r"employer|company"))
+            where_key = "location_at:" + _norm(employer).replace(" ", "_")
+            for field in group:
+                label = field.label or ""
+                have = held.get(field.key, "").strip()
+                if field.kind == "checkbox" and re.search(r"current", label, re.I):
+                    if role is not None:
+                        _redo(plan, field, current, "resume")
+                elif field.kind in ("text", "date") and (
+                    _DATE_LABEL.search(label) or _DATE_KEY.search(field.key or "")
+                ):
+                    if role is None:
+                        continue
+                    by_key = _DATE_KEY.search(field.key or "")
+                    is_end = (
+                        by_key.group("end") is not None
+                        if by_key
+                        else bool(_END_LABEL.search(label))
+                        and not re.search(r"\b(?:from|start)\b", label, re.I)
+                    )
+                    if is_end and current:
+                        _redo(plan, field, None, "resume")  # left empty: still there
+                        continue
+                    parsed = parse_date(end if is_end else str(detail.get("start") or ""))
+                    if parsed is None or parsed[0] is None:
+                        continue
+                    self._dates[field.key] = (parsed[0], parsed[2])
+                    _redo(plan, field, f"{parsed[0]:02d}/01/{parsed[2]}", "resume")
+                elif re.search(r"location|city", label, re.I) and field.kind == "text":
+                    where = str(detail.get("location") or "").strip() or (
+                        self._bank(plan, where_key) or ""
+                    )
+                    if where:
+                        _redo(plan, field, where, "resume")
+                    elif have and have != self._home:
+                        _redo(plan, field, have, "prefilled")
+                    else:
+                        _redo(plan, field, None, "resume")
+                        if have == self._home and have:
+                            _clear(page, field)
+                        if field.required:
+                            plan.needed.append(
+                                NeededInput(
+                                    key=field.key,
+                                    label=f"{label} ({employer or 'job ' + str(n + 1)})",
+                                    kind=field.kind,
+                                    required=True,
+                                    reason="the job on file has no location; answer it once "
+                                    "for this employer",
+                                    answer_key=where_key,
+                                )
+                            )
+                elif re.search(r"title|position|employer|company|description|summary", label, re.I):
+                    if have:
+                        _redo(plan, field, have, "prefilled")
+                    elif role is not None:
+                        text = _entry_text(label.lower(), role, detail)
+                        if text:
+                            _redo(plan, field, text, "resume")
+
+    def _bank(self, plan: Any, key: str) -> str | None:
+        answers = getattr(self, "_answers", {}) or {}
+        value = answers.get(key)
+        return str(value).strip() if value and str(value).strip() else None
+
+    def _still_empty(
+        self, page: Any, fields: list[FormField], plan: Any, unfilled: list[NeededInput]
+    ) -> None:
+        """A required box the page still shows empty, that nothing filled and
+        nothing asked for, is asked for: never left silently."""
+        known = {n.key for n in [*plan.needed, *unfilled]}
+        left = [
+            f
+            for f in fields
+            if f.required
+            and f.key not in known
+            and f.kind in ("text", "textarea", "email", "tel", "url", "number", "date", "select")
+            and _shown(page, f.selector)
+        ]
+        if not left:
+            return
+        held = current_values(page, left)
+        for field in left:
+            if held.get(field.key):
+                continue
+            unfilled.append(
+                NeededInput(
+                    key=field.key,
+                    label=field.label or field.key,
+                    kind=field.kind,
+                    required=True,
+                    options=list(field.options),
+                    reason="required, and still empty after filling",
+                    answer_key=answer_key_for(field),
+                )
+            )
 
     def _next_pages(
         self,
@@ -297,7 +491,7 @@ class GenericHandler(BaseHandler):
             try:
                 found = [
                     f
-                    for f in _the_application(page, discover_fields(page))
+                    for f in _the_application(page, _picker_parts(page, discover_fields(page)))
                     if not _widget(f) and _shown(page, f.selector)
                 ]
             except Exception as exc:
@@ -406,7 +600,7 @@ class GenericHandler(BaseHandler):
             try:
                 # A second, longer wait before deciding nothing more is coming.
                 page.wait_for_timeout(500 if not quiet else 1_500)
-                found = _the_application(page, discover_fields(page))
+                found = _the_application(page, _picker_parts(page, discover_fields(page)))
             except Exception as exc:
                 log.debug("generic: could not look at the form again: %s", exc)
                 return
@@ -420,7 +614,7 @@ class GenericHandler(BaseHandler):
                     # chosen again, which asks the page for its choices again.
                     self._choose_again(page, new, fields, filled, notes)
                     _wait_for_options(page, new, self.options_wait_ms)
-                found = _the_application(page, discover_fields(page))
+                found = _the_application(page, _picker_parts(page, discover_fields(page)))
                 new = [
                     f for f in _unseen(found, fields) if not _widget(f) and _shown(page, f.selector)
                 ]
@@ -432,13 +626,13 @@ class GenericHandler(BaseHandler):
                 continue
             if emptied:
                 again = type(plan)(fills=emptied)
-                _, lost, more = super().fill(page, fields, again)
+                _, lost, more = self._fill_with(page, fields, again)
                 unfilled.extend(lost)
                 notes.extend(more)
                 notes.append(f"filled {len(emptied)} field(s) again after the page emptied them")
             if new:
                 extra = self._answerer(new)
-                done, lost, more = super().fill(page, new, extra)
+                done, lost, more = self._fill_with(page, new, extra)
                 fields.extend(new)
                 filled.extend(done)
                 unfilled.extend(lost)
@@ -484,7 +678,7 @@ class GenericHandler(BaseHandler):
     def discover(self, page: Any) -> list[FormField]:
         if self._handoff:
             return []
-        fields = _the_application(page, discover_fields(page))
+        fields = _the_application(page, _picker_parts(page, discover_fields(page)))
         if fields and looks_like_an_application(fields):
             self._sign_up = _sign_up(page, fields)
             if self._sign_up:
@@ -501,9 +695,13 @@ class GenericHandler(BaseHandler):
         self._sign_up = None
         self._page_fields = []
         self._resume_sent = False
+        self._roles = [f for f in getattr(packet, "facts", []) if getattr(f, "kind", "") == "role"]
+        self._home = str((getattr(packet, "contact", {}) or {}).get("location") or "")
+        self._dates = {}
         self._resume = getattr(packet, "resume_path", "") or ""
         self._wanted = list(getattr(packet, "wanted_places", None) or [])
         self._answerer = args[0] if args else kwargs.get("answerer")
+        self._answers = dict(getattr(packet, "answers", {}) or {})
         result = super().apply(page, packet, *args, **kwargs)
         if self._sign_up and not result.wrong_place:
             return HandlerResult(
@@ -620,6 +818,75 @@ def _upload_by_button(page: Any, path: str) -> bool:
     return False
 
 
+def _redo(plan: Any, field: FormField, value: Any, source: str) -> None:
+    """Replace whatever the plan had for `field` with `value` (None: nothing)."""
+    plan.fills[:] = [f for f in plan.fills if f.key != field.key]
+    plan.needed[:] = [n for n in plan.needed if n.key != field.key]
+    if value is not None:
+        plan.fills.append(Fill(key=field.key, value=value, source=source, label=field.label))
+
+
+def _clear(page: Any, field: FormField) -> None:
+    try:
+        page.locator(field.selector).first.fill("", timeout=3000)
+    except Exception:
+        pass
+
+
+def _set_date(page: Any, field: FormField, month: int, year: int) -> str | None:
+    """Put a month and year in a date box through the calendar it opens:
+    the year and month lists, then the 1st. A box with no such calendar
+    gets MM/01/YYYY typed. None when the box shows a date after."""
+    box = page.locator(field.selector).first
+    try:
+        box.click(timeout=5000)
+        page.wait_for_timeout(300)
+        args = {"selector": field.selector, "step": "lists", "day": 1}
+        if page.evaluate(DATE_PICKER_JS, args):
+            page.locator('[data-jobagent-picker="year"]').first.select_option(
+                label=str(year), timeout=3000
+            )
+            page.wait_for_timeout(150)
+            page.evaluate(DATE_PICKER_JS, args)  # the lists again, should the year redraw them
+            page.locator('[data-jobagent-picker="month"]').first.select_option(
+                index=month - 1, timeout=3000
+            )
+            page.wait_for_timeout(150)
+            if page.evaluate(DATE_PICKER_JS, {**args, "step": "day"}):
+                page.locator('[data-jobagent-picker="day"]').first.click(timeout=3000)
+                page.wait_for_timeout(200)
+        if not (box.input_value(timeout=2000) or "").strip():
+            box.fill(f"{month:02d}/01/{year}", timeout=3000)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(100)
+        return None if (box.input_value(timeout=2000) or "").strip() else "the date did not stay"
+    except Exception as exc:
+        first = str(exc).splitlines()[0][:200] if str(exc) else type(exc).__name__
+        return f"{type(exc).__name__}: {first}"
+
+
+def _close_pickers(page: Any) -> None:
+    """Close any calendar left open."""
+    try:
+        if page.locator(".react-datepicker, .ui-datepicker:visible").count():
+            page.keyboard.press("Escape")
+    except Exception:
+        pass
+
+
+def _picker_parts(page: Any, fields: list[FormField]) -> list[FormField]:
+    """`fields` less the unlabelled lists inside a date box's calendar."""
+    lists = [f for f in fields if not (f.label or "").strip() and f.selector]
+    if not lists:
+        return fields
+    try:
+        inside = page.evaluate(_PICKER_PART_JS, [f.selector for f in lists]) or []
+    except Exception:
+        return fields
+    drop = {f.key for f, flag in zip(lists, inside, strict=False) if flag}
+    return [f for f in fields if f.key not in drop]
+
+
 def _page_end(page: Any, fields: list[FormField]) -> dict[str, Any] | None:
     """The button ending the page on screen: {kind: submit|next, text}, or None."""
     try:
@@ -657,7 +924,7 @@ def _resume_shown(page: Any, resume: str) -> bool:
     )
 
 
-_EMPTY_SELECTS_JS = """(selectors) => selectors.filter((sel) => {
+_EMPTY_SELECTS_JS = r"""(selectors) => selectors.filter((sel) => {
   let el = null;
   try { el = document.querySelector(sel); } catch (e) { return false; }
   // A choice is an option with a value and words that are not a placeholder

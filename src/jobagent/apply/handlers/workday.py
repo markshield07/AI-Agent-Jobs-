@@ -1187,6 +1187,7 @@ def _month_year(value: Any) -> str | None:
 def parse_date(value: str) -> tuple[int | None, int | None, int] | None:
     """(month, day, year) from the shapes an answer comes in; day or month may be None."""
     text = re.sub(r"\s+", " ", (value or "").strip())
+    text = re.sub(r"\bsept\b\.?", "Sep", text, flags=re.I)  # "Sept 2013"
     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%B %d, %Y", "%b %d, %Y", "%d %B %Y"):
         try:
             moment = datetime.strptime(text, fmt)

@@ -30,6 +30,10 @@
             Next leads to My Experience (a link, a voluntary question), then Review and Submit.
     phenomsilent  the same, but the page never shows the uploaded file's name
     phenomstuck   the same, but Next never goes on and shows an error
+    phenomwork    the same, but My Experience is Serco's: two jobs the page read from the
+            resume, each with Title and Company filled, Location filled with the home town,
+            From and To empty behind a react-datepicker calendar (year and month lists and
+            a day grid), and "I currently work here"
     signup  Apply Now leads to ADP's guest step: name, email and mobile, and a notice
             about a verification process
     community  Apply Now leads to a "Join our talent community" form and nothing else
@@ -98,7 +102,7 @@
       apply = '<button type="button" id="apply">Apply</button><div id="inline" class="hidden">' + form + '</div>';
     } else {
       var to = { link: 'form', choice: 'choice', guest: 'login', wall: 'login', phenom: 'phenom',
-        phenomsilent: 'phenom', phenomstuck: 'phenom', signup: 'signup', community: 'signup', closed: 'form' }[variant] || 'form';
+        phenomsilent: 'phenom', phenomstuck: 'phenom', phenomwork: 'phenom', signup: 'signup', community: 'signup', closed: 'form' }[variant] || 'form';
       apply = '<a id="apply" href="' + go(to) + '">Apply Now</a>';
     }
     var deadline = variant === 'closed' ? '<p>Application Deadline: 9/27/2020</p>' : '';
@@ -180,12 +184,80 @@
       }
       window.__page1 = { firstName: val('firstName'), lastName: val('lastName'), homePhone: val('homePhone'),
         source: text('source'), division: text('division'), resume: window.__resume };
-      main.innerHTML = '<h2>My Experience</h2><form id="p2"><fieldset><legend>Links</legend>' +
+      var work = '';
+      if (variant === 'phenomwork') {
+        var entry = function (n, title, company) {
+          var id = function (part) { return 'experienceData[' + n + '].' + part; };
+          var date = function (part, label, required) {
+            return '<div class="field"><label for="' + id(part) + '">' + label + '</label>' +
+              '<div class="react-datepicker-wrapper"><div class="react-datepicker__input-container">' +
+              '<input type="text" class="date-box" id="' + id(part) + '"' + (required ? ' required' : '') +
+              ' placeholder="MM/DD/YYYY"></div></div></div>';
+          };
+          return '<fieldset class="work"><legend>Work Experience ' + (n + 1) + '</legend>' +
+            '<label for="' + id('title') + '">Title*</label><input id="' + id('title') + '" required value="' + title + '">' +
+            '<label for="' + id('companyName') + '">Company*</label><input id="' + id('companyName') + '" required value="' + company + '">' +
+            date('fromTo.startDate', 'From Date*', true) + date('fromTo.endDate', 'To Date', false) +
+            '<label><input type="checkbox" id="' + id('fromTo.currentlyWorkHere') + '"> I currently work here</label>' +
+            '<label for="' + id('jobLocation') + '">Location*</label><input id="' + id('jobLocation') + '" required value="Austin, Texas, United States">' +
+            '</fieldset>';
+        };
+        work = '<fieldset><legend>Work Experience</legend>' + entry(0, 'Network Operations Manager', 'Globex') +
+          entry(1, 'Network Engineer', 'Initech') + '</fieldset>';
+      }
+      main.innerHTML = '<h2>My Experience</h2><form id="p2">' + work + '<fieldset><legend>Links</legend>' +
         '<label for="li">LinkedIn Profile</label><input id="li"></fieldset>' +
         '<fieldset><legend>Voluntary Information</legend><label for="gender">Gender</label>' +
         '<select id="gender"><option value="">Please Select</option><option>Male</option><option>Female</option>' +
         '<option>I decline to self-identify</option></select></fieldset>' +
         '<button type="button" id="back">Previous</button> <button type="button" id="next2">Next</button></form>';
+      // A react-datepicker calendar: the box opens it; a year list, a month list and
+      // the month's days, with the days either side greyed; a day puts MM/DD/YYYY in
+      // the box and closes it. What the calendar set is kept for the test.
+      window.__picked = {};
+      var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
+        'September', 'October', 'November', 'December'];
+      var openPicker = function (input) {
+        document.querySelectorAll('.react-datepicker-popper').forEach(function (p) { p.remove(); });
+        var at = new Date(2026, 8, 1);
+        var popper = document.createElement('div');
+        popper.className = 'react-datepicker-popper';
+        var draw = function () {
+          var years = '', months = '', days = '';
+          for (var y = 1900; y <= 2026; y++) years += '<option' + (y === at.getFullYear() ? ' selected' : '') + '>' + y + '</option>';
+          MONTHS.forEach(function (m, i) { months += '<option value="' + i + '"' + (i === at.getMonth() ? ' selected' : '') + '>' + m + '</option>'; });
+          var first = new Date(at.getFullYear(), at.getMonth(), 1).getDay();
+          var last = new Date(at.getFullYear(), at.getMonth() + 1, 0).getDate();
+          var before = new Date(at.getFullYear(), at.getMonth(), 0).getDate();
+          for (var b = first - 1; b >= 0; b--) days += '<div role="option" class="react-datepicker__day react-datepicker__day--outside-month">' + (before - b) + '</div>';
+          for (var d = 1; d <= last; d++) days += '<div role="option" class="react-datepicker__day react-datepicker__day--0' + (d < 10 ? '0' : '') + d + '">' + d + '</div>';
+          for (var a = 1; a <= 3; a++) days += '<div role="option" class="react-datepicker__day react-datepicker__day--outside-month">' + a + '</div>';
+          popper.innerHTML = '<div class="react-datepicker"><div class="react-datepicker__header">' +
+            '<select class="range-select">' + months + '</select><select class="range-select">' + years + '</select></div>' +
+            '<div class="react-datepicker__month" style="display:grid;grid-template-columns:repeat(7,2em)">' + days + '</div></div>';
+          var lists = popper.querySelectorAll('select');
+          lists[0].addEventListener('change', function (e) { at = new Date(at.getFullYear(), +e.target.value, 1); draw(); });
+          lists[1].addEventListener('change', function (e) { at = new Date(+e.target.value, at.getMonth(), 1); draw(); });
+          popper.querySelectorAll('.react-datepicker__day').forEach(function (el) {
+            el.addEventListener('click', function () {
+              var month = at.getMonth() + (/outside/.test(el.className) ? (+el.textContent > 15 ? -1 : 1) : 0);
+              var when = new Date(at.getFullYear(), month, +el.textContent);
+              var text = ('0' + (when.getMonth() + 1)).slice(-2) + '/' + ('0' + when.getDate()).slice(-2) + '/' + when.getFullYear();
+              input.value = text;
+              window.__picked[input.id] = text;
+              popper.remove();
+            });
+          });
+        };
+        draw();
+        input.closest('.field').appendChild(popper);
+      };
+      document.querySelectorAll('.date-box').forEach(function (input) {
+        input.addEventListener('click', function () { openPicker(input); });
+      });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') document.querySelectorAll('.react-datepicker-popper').forEach(function (p) { p.remove(); });
+      });
       document.getElementById('next2').addEventListener('click', function () {
         var page2 = { linkedin: val('li'), gender: text('gender') };
         main.innerHTML = '<h2>Review your application</h2><p>Check everything before you send it.</p>' +

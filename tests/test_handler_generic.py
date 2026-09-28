@@ -249,6 +249,81 @@ def test_a_page_that_will_not_go_on_stops_with_what_it_said(page, packet):
     assert page.evaluate("() => window.__submitted || null") is None
 
 
+def _work_history(packet):
+    from jobagent.resume.facts import Fact
+
+    packet.contact["location"] = "Austin, Texas, United States"
+    packet.facts = [
+        Fact(
+            id=1,
+            kind="role",
+            text="Ran the network operations center at Globex",
+            detail={
+                "employer": "Globex Corporation",
+                "title": "Network Operations Manager",
+                "start": "April 2018",
+                "end": "Present",
+            },
+        ),
+        Fact(
+            id=2,
+            kind="role",
+            text="Built the campus network at Initech",
+            detail={
+                "employer": "Initech",
+                "title": "Network Engineer",
+                "start": "Sep 2013",
+                "end": "Jun 2015",
+                "location": "Denver, CO",
+            },
+        ),
+    ]
+
+
+def test_work_history_dates_go_through_the_calendar_and_the_home_town_is_not_a_job_location(
+    page, packet
+):
+    packet.job["source"] = "indeed"
+    _work_history(packet)
+    result = run_flow(page, packet, "phenomwork", submit=True)
+    assert result.outcome == "needs_input", result.error
+    picked = page.evaluate("() => window.__picked")
+    assert picked == {
+        "experienceData[0].fromTo.startDate": "04/01/2018",
+        "experienceData[1].fromTo.startDate": "09/01/2013",
+        "experienceData[1].fromTo.endDate": "06/01/2015",
+    }, "each date set through its calendar; the job still held has no end"
+    assert page.locator(".react-datepicker-popper").count() == 0, "no calendar left open"
+    ticked = page.evaluate(
+        "() => [0, 1].map((n) => document.getElementById("
+        "'experienceData[' + n + '].fromTo.currentlyWorkHere').checked)"
+    )
+    assert ticked == [True, False], "only the job that runs to the present"
+    held = page.evaluate(
+        "() => [0, 1].map((n) => document.getElementById("
+        "'experienceData[' + n + '].jobLocation').value)"
+    )
+    assert held == ["", "Denver, CO"], "the job's own location, never the home town"
+    # The calendar's own lists are not questions; the location with none on
+    # file is asked, once for that employer, and stops the page going on.
+    asked = [n for n in result.needed if n.required]
+    assert [n.key for n in asked] == ["experienceData[0].jobLocation"]
+    assert asked[0].answer_key == "location_at:globex_corporation"
+    assert not any(not (n.label or "").strip() for n in result.needed)
+    values = {f.key: f.value for f in result.filled}
+    assert values["experienceData[0].title"] == "Network Operations Manager"
+    assert page.evaluate("() => window.__submitted || null") is None
+
+
+def test_a_job_location_on_file_for_the_employer_lets_the_page_go_on(page, packet):
+    packet.job["source"] = "indeed"
+    _work_history(packet)
+    packet.answers["location_at:globex_corporation"] = "Remote"
+    result = run_flow(page, packet, "phenomwork")
+    assert result.outcome == "dry_run", (result.error, result.needed)
+    assert page.is_visible("#submit-app"), "went on to Review"
+
+
 def test_a_resume_the_page_never_shows_is_not_taken_as_attached(page, packet):
     result = run_flow(page, packet, "phenomsilent", submit=True)
     assert result.outcome == "needs_input"

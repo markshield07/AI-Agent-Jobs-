@@ -80,11 +80,19 @@ class JobSpySource:
                     rows = [r for r in rows if title_matches(str(r.get("title") or ""), criteria)]
                 usual = None if board_remote or not location else _usual_state(rows)
 
+                applies_here = bool(call.get("easy_apply"))
                 for row in rows:
                     job = _to_job(row)
                     if job is None:
                         log.debug("jobspy: skipping a row without url, title or company: %r", row)
                         continue
+                    if applies_here:
+                        # The board's own apply filter chose it. jobspy still fills
+                        # job_url_direct for these (the Mac's probe, 2026-09-28), so
+                        # it says nothing about where the posting applies.
+                        job.apply_url = job.url
+                        job.ats_type = detect_ats(job.url)
+                        job.applies_on_board = True
                     if job.url in seen:
                         continue
                     seen.add(job.url)
@@ -137,7 +145,6 @@ def _calls(
             # age and, even with the title in quotes, returned jobs sharing no
             # more than a word of it (2026-09-28): only matching titles are kept.
             usual = {"site_name": ["indeed"], **base}
-            calls.append(({**usual, "hours_old": None}, True) if remote else (usual, False))
             apply_here = {
                 **usual,
                 "search_term": f'"{title.strip(chr(34))}"',
@@ -147,7 +154,10 @@ def _calls(
             }
             if remote:
                 apply_here["location"] = "Remote"
+            # Indeed Apply first: a posting both searches return is then kept
+            # as the one that applies on Indeed.
             calls.append((apply_here, False))
+            calls.append(({**usual, "hours_old": None}, True) if remote else (usual, False))
         if "linkedin" in sites:
             calls.append(({"site_name": ["linkedin"], **base, "easy_apply": True}, remote))
         return calls

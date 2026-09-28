@@ -641,16 +641,18 @@ def test_on_site_only_asks_linkedin_for_easy_apply_and_indeed_for_indeed_apply()
     assert set(by_site) == {("indeed",), ("linkedin",)}, "boards it cannot apply on are left out"
     indeed, _ = by_site[("indeed",)]
     assert indeed["easy_apply"] is True and indeed["hours_old"] is None, "Indeed Apply, no age"
+    assert indeed["search_term"] == '"Network Engineer"', "the title as a phrase"
     linkedin, _ = by_site[("linkedin",)]
     assert linkedin["easy_apply"] is True and linkedin["hours_old"] == 72
 
-    remote = dict(
-        (tuple(call["site_name"]), (call, flag))
-        for call, flag in _calls(crit, "Network Engineer", "Remote", on_site_only=True)
-    )
-    indeed, flag = remote[("indeed",)]
-    assert "easy_apply" not in indeed and indeed["is_remote"] and flag, "the remote filter stays"
-    assert remote[("linkedin",)][0]["easy_apply"] is True
+    remote = _calls(crit, "Network Engineer", "Remote", on_site_only=True)
+    indeed = [(call, flag) for call, flag in remote if call["site_name"] == ["indeed"]]
+    (filtered, flag), (apply_here, apply_flag) = indeed
+    assert "easy_apply" not in filtered and filtered["is_remote"] and flag, "the remote filter"
+    assert apply_here["easy_apply"] is True and apply_here["location"] == "Remote"
+    assert not apply_here["is_remote"] and not apply_flag, "not taken as remote on its say"
+    linkedin = [call for call, _ in remote if call["site_name"] == ["linkedin"]]
+    assert linkedin[0]["easy_apply"] is True and linkedin[0]["search_term"] == "Network Engineer"
     assert (
         _calls(crit, "Network Engineer", "Remote", on_site_only=False)[0][0].get("easy_apply")
         is None

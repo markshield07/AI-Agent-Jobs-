@@ -240,7 +240,7 @@ def run_new(page, packet, *, submit=False, variant=""):
 def test_the_2026_window_is_walked_by_its_button_text_and_stops_at_submit(page, packet):
     result = run_new(page, packet)
     assert result.outcome == "dry_run", (result.error, result.needed)
-    assert js(page, "__steps") == ["contact", "questions", "review"]
+    assert js(page, "__steps") == ["contact", "resume", "questions", "review"]
     assert js(page, "__submitted") is None
     assert js(page, "__discarded") is True, "Dismiss, then Discard in the second window"
     assert not any(f.selector in ("#search", "#alert") for f in result.fields), (
@@ -257,7 +257,8 @@ def test_the_2026_window_is_sent_with_the_profile_answers_and_resume(page, packe
     assert sent["contact"]["first"] == "Mark" and sent["contact"]["email"] == "mark@example.com"
     assert sent["contact"]["city"] == "Menifee, California, United States", "picked from the list"
     assert sent["questions"] == {"auth": "Yes", "sponsor": "No", "mist": None}
-    assert sent["resume"] == "mark-shield.pdf"
+    assert sent["resume"] == "mark-shield.pdf", "through the Upload resume button"
+    assert {f.key: f.source for f in result.filled}["linkedin-resume-upload"] == "resume"
 
 
 @pytest.mark.usefixtures("page")

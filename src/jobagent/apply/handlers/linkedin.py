@@ -23,10 +23,39 @@ they occur.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
-from jobagent.apply.browser.fill import click_first_visible, wait_settled
-from jobagent.apply.handlers.wizard import WizardHandler
+from jobagent.apply.browser.fill import click_first_visible, fill_field, fill_plan, wait_settled
+from jobagent.apply.handlers.wizard import ROOT, WizardHandler
+from jobagent.apply.models import Fill, FormField
+
+# The resume step with no file box: LinkedIn's "Upload resume" button, which
+# opens the file chooser itself, stands in for one.
+UPLOAD_KEY = "linkedin-resume-upload"
+UPLOAD_ATTR = "data-jobagent-upload"
+_MARK_UPLOAD_JS = r"""([root, attr]) => {
+  document.querySelectorAll('[' + attr + ']').forEach((el) => el.removeAttribute(attr));
+  const scope = document.querySelector(root) || document;
+  if (scope.querySelector('input[type="file"]')) return false;
+  const button = Array.from(scope.querySelectorAll('button')).find((b) => {
+    const r = b.getBoundingClientRect();
+    return r.width > 0 && /^\s*upload\s+(a\s+)?(resume|cv)\s*$/i.test(b.innerText || '');
+  });
+  if (!button) return false;
+  button.setAttribute(attr, 'resume');
+  return true;
+}"""
+# Whether the step shows the file as the chosen resume: its name, or a
+# checked choice in the resume list.
+_RESUME_SHOWN_JS = r"""([root, name]) => {
+  const scope = document.querySelector(root) || document;
+  const text = (scope.innerText || '').toLowerCase();
+  if (name && text.includes(name.toLowerCase())) return true;
+  const ref = scope.querySelector('#easyApplyUploadedResumeRef, [role="radiogroup"]');
+  const picked = 'input:checked, [aria-checked="true"], [aria-selected="true"]';
+  return !!(ref && ref.querySelector(picked));
+}"""
 
 
 class LinkedInHandler(WizardHandler):
@@ -119,6 +148,57 @@ class LinkedInHandler(WizardHandler):
         if found and "linkedin.com" in url:
             return f"https://www.linkedin.com/jobs/view/{found.group(1)}/"
         return url
+
+    def discover_step(self, page: Any, root: str | None) -> list[FormField]:
+        """The step's fields; on the resume step with no file box, the
+        "Upload resume" button as the resume's upload."""
+        fields = super().discover_step(page, root)
+        if any(f.kind == "file" for f in fields):
+            return fields
+        try:
+            found = page.evaluate(_MARK_UPLOAD_JS, [root or "body", UPLOAD_ATTR])
+        except Exception:
+            found = False
+        if found:
+            fields.append(
+                FormField(
+                    key=UPLOAD_KEY,
+                    label="Resume",
+                    kind="file",
+                    required=True,
+                    section="resume",
+                    selector=f'[{UPLOAD_ATTR}="resume"]',
+                    accept=".pdf,.doc,.docx",
+                )
+            )
+        return fields
+
+    def prefilled(self, page: Any, fields: list[FormField]) -> dict[str, str]:
+        return super().prefilled(page, [f for f in fields if f.key != UPLOAD_KEY])
+
+    def fill(self, page: Any, fields: list[FormField], plan: Any) -> tuple[list, list, list]:
+        return fill_plan(page, fields, plan, fill_one=self._fill_one)
+
+    def _fill_one(self, page: Any, field: FormField, fill: Fill) -> str | None:
+        if field.key != UPLOAD_KEY:
+            return fill_field(page, field, fill)
+        if not fill.file_path:
+            return "no resume file to upload"
+        name = Path(fill.file_path).name
+        try:
+            with page.expect_file_chooser(timeout=8000) as chooser:
+                page.locator(field.selector).first.click(timeout=5000)
+            chooser.value.set_files(fill.file_path)
+        except Exception as exc:
+            return f"the Upload resume button gave no file chooser: {type(exc).__name__}"
+        for _ in range(30):  # the upload shows within seconds
+            page.wait_for_timeout(500)
+            try:
+                if page.evaluate(_RESUME_SHOWN_JS, [ROOT, name]):
+                    return None
+            except Exception:
+                continue
+        return "LinkedIn never showed the uploaded resume"
 
     def discard(self, page: Any) -> None:
         """Close the modal and discard the draft, so nothing half-filled stays saved."""

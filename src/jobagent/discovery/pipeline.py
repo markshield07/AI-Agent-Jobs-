@@ -12,7 +12,9 @@ that is identical across batches and therefore cached.
 from __future__ import annotations
 
 import logging
+import random
 import sqlite3
+import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -20,12 +22,13 @@ from typing import TYPE_CHECKING, Any
 from jobagent.config import Settings
 from jobagent.discovery import store
 from jobagent.discovery.criteria import SearchCriteria, load_criteria
-from jobagent.discovery.enrich import enrich_description
+from jobagent.discovery.enrich import RateLimited, enrich_description
 from jobagent.discovery.http import make_client
 from jobagent.discovery.models import RawJob
 from jobagent.discovery.scoring.classify import classify_jobs
 from jobagent.discovery.scoring.rules import RuleScore, passes, score_rules
 from jobagent.discovery.sources import all_sources
+from jobagent.discovery.sources.filters import title_matches
 from jobagent.llm.backend import Completer, LLMUnavailable, resolve_backend
 from jobagent.resume.profile import profile_tags, profile_text
 
@@ -118,7 +121,13 @@ def run_discovery(
         if classify or enrich_with_model:
             completer = _resolve_completer(settings, completer, report)
         if enrich:
-            _enrich(conn, report, client=client, completer=completer if enrich_with_model else None)
+            _enrich(
+                conn,
+                report,
+                client=client,
+                completer=completer if enrich_with_model else None,
+                criteria=criteria,
+            )
         _score(conn, criteria, report)
         if classify:
             _classify(conn, criteria, report, completer)
@@ -185,24 +194,60 @@ def _enrich(
     *,
     client: httpx.Client,
     completer: Completer | None,
+    criteria: SearchCriteria | None = None,
     max_enrich: int = 100,
+    sleep: Any = None,
 ) -> None:
+    """Fetch the full postings, those whose title matches first. LinkedIn
+    answers 429 Too Many Requests to a quick run of page loads, so its pages
+    are spaced out, and a 429 from any site ends that site's fetches for the
+    run: the rest wait for the next one."""
+    sleep = sleep or time.sleep
     todo = store.jobs_needing_enrichment(conn)
+    if criteria is not None:
+        todo.sort(key=lambda job: not title_matches(job.get("title") or "", criteria))
     if len(todo) > max_enrich:
         report.notes.append(
             f"Enrichment capped at {max_enrich} of {len(todo)} postings; "
             "the rest wait for the next run."
         )
         todo = todo[:max_enrich]
+    last: dict[str, float] = {}
+    stopped: set[str] = set()
     for job in todo:
+        host = _host(job["url"])
+        if host in stopped:
+            continue
+        gap = next((g for h, g in ENRICH_GAPS.items() if host.endswith(h)), 0.0)
+        if gap and host in last:
+            wait = last[host] + gap * random.uniform(0.8, 1.4) - time.monotonic()
+            if wait > 0:
+                sleep(wait)
+        last[host] = time.monotonic()
         try:
             text = enrich_description(job["url"], client=client, completer=completer)
+        except RateLimited:
+            stopped.add(host)
+            report.notes.append(
+                f"{host} said too many requests; its other postings are read next run."
+            )
+            continue
         except Exception as exc:  # one unfetchable page must not end the run
             log.warning("enrichment of %s failed: %s", job["url"], exc)
             continue
         if text:
             store.set_description(conn, job["id"], text)
             report.enriched += 1
+
+
+# Seconds between page loads on a site that limits them, before jitter.
+ENRICH_GAPS = {"linkedin.com": 4.0}
+
+
+def _host(url: str) -> str:
+    from urllib.parse import urlparse
+
+    return (urlparse(url or "").netloc or "").lower()
 
 
 def _score(conn: sqlite3.Connection, criteria: SearchCriteria, report: RunReport) -> None:

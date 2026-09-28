@@ -341,6 +341,39 @@ def refresh_workday_session(settings: Settings, host: str, state: dict[str, Any]
     return True
 
 
+def record_keep_alive(
+    settings: Settings, host: str, state: str, *, how: str = "", landed: str = ""
+) -> None:
+    """What a keep-alive visit found (signed_in, signed_out, unknown, timed_out
+    or error), when, how it visited and where the page ended up, so
+    `login workday --status` and the dashboard show the keep-alive is working.
+    A signed-out visit also marks the sign-in as ended."""
+    payload = _workday_payload(settings, host)
+    if not payload:
+        return
+    payload["kept_alive_at"] = _now_exact()
+    payload["keep_alive"] = state
+    payload["keep_alive_how"] = how
+    payload["keep_alive_landed"] = landed
+    if state == "signed_out":
+        payload["checked_at"] = payload["kept_alive_at"]
+        payload["checked"] = "signed_out"
+        payload["signed_out_at"] = payload["kept_alive_at"]
+    _write_private(workday_session_path(settings, host), payload)
+
+
+def save_workday_capture(settings: Settings, host: str, name: str, html: str) -> Path:
+    """Keep a page from this company's site for a later look, owner-only:
+    data/sessions/workday/<host>-<name>.html."""
+    path = workday_dir(settings) / f"{host}-{name}.html"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(html)
+    os.chmod(path, 0o600)
+    return path
+
+
 def workday_waiting(settings: Settings, host: str) -> list[str]:
     """Jobs whose application stopped at this company's sign-in page."""
     return [str(j) for j in _workday_payload(settings, host).get("waiting") or []]
@@ -396,6 +429,8 @@ def workday_status(settings: Settings, host: str) -> dict[str, Any]:
         "signed_in": state == "signed_in",
         "checked_at": checked_at,
         "signed_out_at": signed_out_at,
+        "kept_alive_at": payload.get("kept_alive_at"),
+        "keep_alive": payload.get("keep_alive"),
         "url": url,
         "waiting": len(payload.get("waiting") or []),
         "login_command": f"jobagent login workday {url or '<posting URL>'}",

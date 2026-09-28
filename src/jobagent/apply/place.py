@@ -17,17 +17,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+from jobagent.discovery.scoring.rules import NOT_REMOTE as _NOT_REMOTE
+from jobagent.discovery.scoring.rules import SAYS_REMOTE as _SAYS_REMOTE
 from jobagent.discovery.scoring.rules import place_matches
 
-# Plain statements that the job is remote, in a posting's own words.
-_SAYS_REMOTE = re.compile(
-    r"\b(?:fully|100%|completely|entirely) remote\b"
-    r"|\bremote[- ](?:position|role|opportunity|job|first)\b"
-    r"|\b(?:work|working) (?:from home|remotely)\b"
-    r"|\bthis (?:is a|position is|role is) remote\b",
-    re.I,
-)
-_NOT_REMOTE = re.compile(r"\bnot (?:a )?remote\b|\bno remote\b|\bnon-remote\b", re.I)
 _IN_OFFICE = re.compile(r"\bhybrid\b|\bon-?site\b|\bin[- ]office\b", re.I)
 # Locations too broad to rule anything out.
 _BROAD = {

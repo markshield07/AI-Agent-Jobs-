@@ -289,12 +289,19 @@ To keep sign-ins from ending between runs, leave this running alongside
 `jobagent run`:
 
 ```
-jobagent login workday --keep-alive            # every 30 minutes (--every N), until stopped
+jobagent login workday --keep-alive            # every 15 minutes (--every N), until stopped
 ```
 
 It opens each signed-in company's Candidate Home (their "My Applications"
 page) the way you would, presses nothing, and keeps the cookies the visit
-leaves. A company whose sign-in has ended anyway is marked for a new one.
+leaves. When that page shows neither your applications nor a sign-in, it
+saves what it showed to `data/sessions/workday/<company>-home.html` and
+checks the posting on file instead, as `--status` does. A company whose
+sign-in has ended anyway is marked for a new one. Each round prints a line
+per company straight away (so a `nohup ... > log` file fills as it goes),
+and each visit is stamped into the company's sign-in file, which
+`jobagent login workday --status --no-check` shows as "keep-alive last
+visited".
 
 After Submit, Workday may grey the button out and show nothing more; the
 agent then opens the posting again and counts "You applied for this job on

@@ -929,3 +929,35 @@ def test_a_parked_job_in_a_wanted_place_still_waits_for_the_sign_in(conn, settin
     assert record["outcome"] == "skipped" and record["sign_in"] == WD_HOST
     assert workday.checked == [["remote"]]
     assert sessions.workday_waiting(settings, WD_HOST) == [jid]
+
+
+def test_a_queued_job_whose_description_says_onsite_is_skipped_before_any_browser(
+    conn, settings, ready_job
+):
+    _wanted(conn, "Remote")
+    jid = ready_job()
+    # Indeed called it remote; the description says otherwise.
+    conn.execute(
+        "UPDATE jobs SET remote = 1, location = 'Norfolk, VA', description = ? WHERE id = ?",
+        ("The Lead Network Engineer will work onsite at Naval Station Norfolk.", jid),
+    )
+    conn.commit()
+    handler = FakeHandler(_result("dry_run"))
+    record = _apply(conn, jid, settings, handler, mode="auto")
+    assert record["outcome"] == "skipped" and record["wrong_place"] is True
+    assert 'the description says "onsite at Naval Station Norfolk"' in record["reason"]
+    assert handler.calls == [], "no browser, no form"
+    assert jobs.get_job(conn, jid)["status"] == "skipped"
+
+
+def test_a_queued_job_in_a_wanted_place_still_goes_ahead(conn, settings, ready_job):
+    _wanted(conn, "Remote", "Norfolk, VA")
+    jid = ready_job()
+    conn.execute(
+        "UPDATE jobs SET location = 'Norfolk, VA', description = ? WHERE id = ?",
+        ("The Lead Network Engineer will work onsite at Naval Station Norfolk.", jid),
+    )
+    conn.commit()
+    handler = FakeHandler(_result("dry_run"))
+    record = _apply(conn, jid, settings, handler)
+    assert record["outcome"] == "dry_run" and len(handler.calls) == 1

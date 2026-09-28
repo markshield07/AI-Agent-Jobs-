@@ -26,6 +26,7 @@ from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -207,7 +208,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--every minutes, to keep the sign-in from ending; runs until stopped.",
     )
     login.add_argument(
-        "--every", type=float, default=30, help="--keep-alive: minutes between visits (30)."
+        "--every", type=float, default=15, help="--keep-alive: minutes between visits (15)."
     )
     login.add_argument("--once", action="store_true", help="--keep-alive: one round, then stop.")
     login.add_argument("--forget", action="store_true", help="Delete the saved sign-in.")
@@ -757,6 +758,8 @@ def _workday_line(status: dict[str, object]) -> str:
         text = f"signed in (saved {status['saved_at']}, working at {status['checked_at']})"
     else:
         text = f"saved {status['saved_at']}, not checked since"
+    if status.get("kept_alive_at"):
+        text += f"; keep-alive last visited {status['kept_alive_at']} ({status['keep_alive']})"
     if status.get("waiting"):
         text += f"; {status['waiting']} application(s) waiting on it"
     return f"Workday {host}: {text}."
@@ -807,58 +810,102 @@ def _check_workday(
 def _keep_workday_alive(settings: Settings, *, every_min: float, once: bool) -> int:
     """Visit each signed-in company's Candidate Home now and every `every_min`
     minutes, keeping the cookies each visit leaves; a company whose sign-in
-    has ended is marked for a new one and left alone until it gets it."""
+    has ended is marked for a new one and left alone until it gets it.
+
+    Each visit is stamped into the company's sign-in file (kept_alive_at), and
+    each line printed goes out at once, so a log written under nohup shows
+    every round as it happens."""
     from jobagent.apply import sessions
     from jobagent.apply.browser.session import BrowserUnavailable, open_browser
-    from jobagent.apply.handlers.workday import WorkdayHandler
 
     if every_min < 5:
         print("--every must be at least 5 minutes.", file=sys.stderr)
         return 2
+    for stream in (sys.stdout, sys.stderr):
+        # Written to a file, print() output waits in a buffer until exit.
+        try:
+            stream.reconfigure(line_buffering=True)
+        except (AttributeError, ValueError):
+            pass
+    rounds = 0
     while True:
-        stamp = datetime.now().strftime("%H:%M")
+        rounds += 1
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         hosts = [
             h
             for h in sessions.workday_hosts(settings)
             if sessions.workday_status(settings, h)["saved"]
         ]
-        if not hosts:
-            print(f"{stamp} Workday: no company sign-ins saved.")
+        print(
+            f"{stamp} Workday keep-alive round {rounds}: "
+            f"{len(hosts)} compan{'y' if len(hosts) == 1 else 'ies'} with a saved sign-in."
+        )
         try:
             with open_browser(settings) as browser:
                 for host in hosts:
-                    status = sessions.workday_status(settings, host)
-                    if status["state"] == "needs_sign_in":
-                        print(
-                            f"{stamp} Workday {host}: needs a new sign-in: "
-                            f"{status['login_command']}"
-                        )
-                        continue
-                    if not status["url"]:
-                        print(f"{stamp} Workday {host}: no posting on file to find its site by.")
-                        continue
-                    with browser.new_page() as page:
-                        state = WorkdayHandler().keep_alive(page, status["url"])
-                        kept = state == "signed_in" and sessions.refresh_workday_session(
-                            settings, host, {"cookies": page.context.cookies()}
-                        )
-                    if state == "signed_out":
-                        sessions.record_workday_check(settings, host, "signed_out")
-                        print(
-                            f"{stamp} Workday {host}: the sign-in has ended; sign in again: "
-                            f"{status['login_command']}"
-                        )
-                    elif kept:
-                        print(f"{stamp} Workday {host}: still signed in; cookies refreshed.")
-                    else:
-                        print(
-                            f"{stamp} Workday {host}: could not tell ({state}); tried again later."
-                        )
+                    _keep_one_alive(settings, browser, host, stamp)
         except BrowserUnavailable as exc:
-            print(f"Could not open a browser: {exc}", file=sys.stderr)
+            print(f"{stamp} Could not open a browser: {exc}", file=sys.stderr)
+        except Exception as exc:  # the loop outlives any one bad round
+            print(f"{stamp} Keep-alive round failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         if once:
             return 0
+        print(f"{stamp} Next round in {every_min:g} minutes.")
         time.sleep(every_min * 60)
+
+
+def _keep_one_alive(settings: Settings, browser: Any, host: str, stamp: str) -> None:
+    """One company's visit: Candidate Home, and when that page cannot be read,
+    the posting on file with Apply pressed, as `login workday --status` does."""
+    from jobagent.apply import sessions
+    from jobagent.apply.handlers.workday import WorkdayHandler
+
+    status = sessions.workday_status(settings, host)
+    if status["state"] == "needs_sign_in":
+        print(f"{stamp} Workday {host}: needs a new sign-in: {status['login_command']}")
+        return
+    if not status["url"]:
+        print(f"{stamp} Workday {host}: no posting on file to find its site by.")
+        return
+    began = time.monotonic()
+    how, landed, capture = "candidate home", "", None
+    try:
+        with browser.new_page() as page:
+            state = WorkdayHandler().keep_alive(page, status["url"])
+            landed = str(getattr(page, "url", "") or "")
+            if state in ("unknown", "timed_out"):
+                capture = _page_html(page)
+                how = "candidate home, then the posting"
+                state = WorkdayHandler().check_session(page, status["url"])
+                landed = str(getattr(page, "url", "") or "")
+            kept = state == "signed_in" and sessions.refresh_workday_session(
+                settings, host, {"cookies": page.context.cookies()}
+            )
+    except Exception as exc:  # one company's failure leaves the others' visits alone
+        sessions.record_keep_alive(settings, host, "error", how=how, landed=landed)
+        print(f"{stamp} Workday {host}: the visit failed: {type(exc).__name__}: {exc}")
+        return
+    sessions.record_keep_alive(settings, host, state, how=how, landed=landed)
+    took = f" ({how}, {time.monotonic() - began:.0f}s)"
+    if state == "signed_out":
+        print(
+            f"{stamp} Workday {host}: the sign-in has ended{took}; sign in again: "
+            f"{status['login_command']}"
+        )
+    elif kept:
+        print(f"{stamp} Workday {host}: still signed in; cookies refreshed{took}.")
+    else:
+        print(f"{stamp} Workday {host}: could not tell ({state}){took}; trying again next round.")
+    if capture and state != "signed_in":
+        path = sessions.save_workday_capture(settings, host, "home", capture)
+        print(f"{stamp} Workday {host}: saved what Candidate Home showed to {path}.")
+
+
+def _page_html(page: Any) -> str | None:
+    try:
+        return page.content()
+    except Exception:
+        return None
 
 
 def _run_waiting(settings: Settings, job_ids: list[str], *, host: str | None = None) -> int:

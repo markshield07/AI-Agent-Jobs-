@@ -100,7 +100,14 @@ jobagent discover             # or POST /api/runs/discover from the dashboard
 A run searches every company board in the criteria (Greenhouse, Lever and
 Ashby publish their postings as public JSON with full descriptions) and, for
 each title and location pair, the aggregator sites through JobSpy (Indeed,
-LinkedIn and the rest, by scraping). What comes back goes through:
+LinkedIn and the rest, by scraping). JobSpy searches are capped at six a run;
+with more title and location pairs than that, each hourly run takes the next
+six in turn, so every pair is searched every few hours. A Remote search asks
+Indeed on its own with its remote filter (Indeed drops that filter next to a
+maximum age, so the age is checked here instead). A search around a place
+(say Orange County) keeps that place with each posting it returns, so a job
+listed in Irvine counts as in Orange County, unless it is in a different state
+from the rest of that search's results. What comes back goes through:
 
 1. **Dedupe.** A posting's id is a hash of its cleaned URL, title and company,
    and the URL is unique on its own, so the same job seen on two boards lands
@@ -110,7 +117,9 @@ LinkedIn and the rest, by scraping). What comes back goes through:
    platform, then (only with `--enrich-with-model`) the model.
 3. **Rules.** A deterministic 0 to 100 score on title, salary, location and
    keyword overlap with your fact base, with hard rejects for excluded terms,
-   blacklisted companies and salary below your floor. Free, runs on
+   blacklisted companies, salary below your floor, and on-site or hybrid jobs
+   outside your places (by the board's flag, the title or location, or the
+   description's own words such as "onsite at ..."). Free, runs on
    everything, and the reason for each score is stored with the job.
 4. **Model tiering.** Rule survivors go to the model in batches against your
    profile, which is the cached prefix of every call. Each comes back with a

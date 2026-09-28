@@ -16,6 +16,7 @@ field mapping never sees pandas.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -37,9 +38,18 @@ _YEARLY_FLOOR = 10_000
 class JobSpySource:
     name = "jobspy"
 
-    def __init__(self, max_queries: int = 6, scrape: Callable[..., Any] | None = None) -> None:
+    def __init__(
+        self,
+        max_queries: int = 6,
+        scrape: Callable[..., Any] | None = None,
+        window: Callable[[], int] | None = None,
+    ) -> None:
         self.max_queries = max_queries
         self._scrape = scrape
+        # Which slice of the queries this run takes when there are more than
+        # the cap: the hour since the epoch by default, so hourly runs walk
+        # through every title and place in turn instead of repeating the first.
+        self._window = window or (lambda: int(time.time() // 3600))
 
     def search(self, criteria: SearchCriteria) -> Iterator[RawJob]:
         if not criteria.jobspy_sites or not criteria.titles:
@@ -49,7 +59,7 @@ class JobSpySource:
             return
 
         seen: set[str] = set()
-        for title, location in _queries(criteria, self.max_queries):
+        for title, location in _queries(criteria, self.max_queries, self._window()):
             for call, board_remote in _calls(criteria, title, location):
                 try:
                     rows = _records(scrape(**call))
@@ -61,6 +71,7 @@ class JobSpySource:
                     continue
                 if board_remote and call["hours_old"] is None:
                     rows = [r for r in rows if _fresh(r.get("date_posted"), criteria.max_age_hours)]
+                usual = None if board_remote or not location else _usual_state(rows)
 
                 for row in rows:
                     job = _to_job(row)
@@ -74,6 +85,10 @@ class JobSpySource:
                         # The board's own remote filter chose it. jobspy's is_remote
                         # column only says "remote" appears somewhere in the text.
                         job.remote = True
+                    elif location and _state(job.location) in (None, usual):
+                        # Within the board's radius of the place searched; a posting
+                        # in another state than the rest is a board padding its list.
+                        job.found_near = location
                     yield job
 
 
@@ -106,6 +121,82 @@ def _calls(
     return calls
 
 
+_STATES = {
+    "alabama": "AL",
+    "alaska": "AK",
+    "arizona": "AZ",
+    "arkansas": "AR",
+    "california": "CA",
+    "colorado": "CO",
+    "connecticut": "CT",
+    "delaware": "DE",
+    "florida": "FL",
+    "georgia": "GA",
+    "hawaii": "HI",
+    "idaho": "ID",
+    "illinois": "IL",
+    "indiana": "IN",
+    "iowa": "IA",
+    "kansas": "KS",
+    "kentucky": "KY",
+    "louisiana": "LA",
+    "maine": "ME",
+    "maryland": "MD",
+    "massachusetts": "MA",
+    "michigan": "MI",
+    "minnesota": "MN",
+    "mississippi": "MS",
+    "missouri": "MO",
+    "montana": "MT",
+    "nebraska": "NE",
+    "nevada": "NV",
+    "new hampshire": "NH",
+    "new jersey": "NJ",
+    "new mexico": "NM",
+    "new york": "NY",
+    "north carolina": "NC",
+    "north dakota": "ND",
+    "ohio": "OH",
+    "oklahoma": "OK",
+    "oregon": "OR",
+    "pennsylvania": "PA",
+    "rhode island": "RI",
+    "south carolina": "SC",
+    "south dakota": "SD",
+    "tennessee": "TN",
+    "texas": "TX",
+    "utah": "UT",
+    "vermont": "VT",
+    "virginia": "VA",
+    "washington": "WA",
+    "west virginia": "WV",
+    "wisconsin": "WI",
+    "wyoming": "WY",
+    "district of columbia": "DC",
+}
+
+
+def _state(location: str | None) -> str | None:
+    """The US state a posting's location names ("Irvine, CA, US" -> "CA"), if any."""
+    for part in (location or "").split(",")[1:]:
+        part = part.strip()
+        if len(part) == 2 and part.isalpha() and part.isupper() and part in _STATES.values():
+            return part
+        if part.lower() in _STATES:
+            return _STATES[part.lower()]
+    return None
+
+
+def _usual_state(rows: list[dict[str, Any]]) -> str | None:
+    """The state most of one search's results are in."""
+    counts: dict[str, int] = {}
+    for row in rows:
+        state = _state(_text(row.get("location")))
+        if state:
+            counts[state] = counts.get(state, 0) + 1
+    return max(counts, key=lambda k: counts[k]) if counts else None
+
+
 def _fresh(posted: Any, max_age_hours: int | None) -> bool:
     """Whether a posting is within the age wanted; one with no date is kept."""
     if not max_age_hours or posted is None:
@@ -134,8 +225,14 @@ def _import_scrape() -> Callable[..., Any] | None:
     return scrape_jobs
 
 
-def _queries(criteria: SearchCriteria, max_queries: int) -> list[tuple[str, str | None]]:
-    """Every title x location pair, first spelling of a repeat kept, capped."""
+def _queries(
+    criteria: SearchCriteria, max_queries: int, window: int = 0
+) -> list[tuple[str, str | None]]:
+    """Every title x location pair, first spelling of a repeat kept, capped.
+
+    Over the cap, run `window` takes the next `max_queries` pairs after the
+    previous run's, wrapping around, so no title or place is left out for good.
+    """
     titles = _distinct(criteria.titles)
     locations = _distinct(criteria.locations) or [None]
     queries: list[tuple[str, str | None]] = [
@@ -148,7 +245,8 @@ def _queries(criteria: SearchCriteria, max_queries: int) -> list[tuple[str, str 
             len(queries),
             max_queries,
         )
-        queries = queries[:max_queries]
+        start = (window * max_queries) % len(queries)
+        queries = (queries + queries)[start : start + max_queries]
     return queries
 
 

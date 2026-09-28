@@ -73,6 +73,7 @@ def criteria(**overrides: Any) -> SearchCriteria:
 
 
 def search(scraper: Scraper, crit: SearchCriteria | None = None, **kwargs: Any) -> list:
+    kwargs.setdefault("window", lambda: 0)
     return list(JobSpySource(scrape=scraper, **kwargs).search(crit or criteria()))
 
 
@@ -583,3 +584,49 @@ def test_linkedin_alone_takes_remote_and_age_in_one_search():
     [call] = scraper.calls
     assert call["site_name"] == ["linkedin"]
     assert call["is_remote"] is True and call["hours_old"] == 72
+
+
+def test_over_the_cap_successive_runs_walk_through_every_query():
+    from jobagent.discovery.sources.jobspy_source import _queries
+
+    crit = criteria(titles=["A", "B", "C"], locations=["X", "Y", "Z"])
+    seen = []
+    for window in range(3):
+        seen += _queries(crit, 4, window)
+    assert set(seen) == {(t, loc) for t in "ABC" for loc in "XYZ"}
+    assert _queries(crit, 4, 1) == [("B", "Y"), ("B", "Z"), ("C", "X"), ("C", "Y")]
+    assert _queries(crit, 4, 2) == [("C", "Z"), ("A", "X"), ("A", "Y"), ("A", "Z")]
+
+
+def test_a_place_search_vouches_for_nearby_postings_in_the_same_state():
+    scraper = Scraper(
+        frame(
+            row(
+                id="irvine",
+                job_url="https://www.indeed.com/viewjob?jk=1",
+                location="Irvine, CA, US",
+            ),
+            row(
+                id="anaheim",
+                job_url="https://www.indeed.com/viewjob?jk=2",
+                location="Anaheim, California",
+            ),
+            row(id="dallas", job_url="https://www.indeed.com/viewjob?jk=3", location="Dallas, TX"),
+            row(id="nowhere", job_url="https://www.indeed.com/viewjob?jk=4", location=None),
+        )
+    )
+
+    jobs = search(scraper, criteria(locations=["Orange County"]))
+
+    assert {job.external_id: job.found_near for job in jobs} == {
+        "irvine": "Orange County",
+        "anaheim": "Orange County",
+        "dallas": None,
+        "nowhere": "Orange County",
+    }
+
+
+def test_remote_and_unlocated_searches_vouch_for_no_place():
+    remote = search(Scraper(frame(row(date_posted=None))), criteria(locations=["Remote"]))
+    anywhere = search(Scraper(frame(row())), criteria(locations=[]))
+    assert [job.found_near for job in remote + anywhere] == [None, None]

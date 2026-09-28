@@ -961,3 +961,20 @@ def test_a_queued_job_in_a_wanted_place_still_goes_ahead(conn, settings, ready_j
     handler = FakeHandler(_result("dry_run"))
     record = _apply(conn, jid, settings, handler)
     assert record["outcome"] == "dry_run" and len(handler.calls) == 1
+
+
+def test_the_listing_place_a_board_found_near_a_wanted_place_is_wanted_too(conn, ready_job):
+    from jobagent.apply.pipeline import wanted_places
+
+    _wanted(conn, "Remote", "Orange County")
+    jid = ready_job()
+    conn.execute(
+        "UPDATE jobs SET location = 'Irvine, CA', found_near = 'Orange County' WHERE id = ?",
+        (jid,),
+    )
+    conn.commit()
+    job = jobs.get_job(conn, jid)
+    assert wanted_places(conn, job) == ["remote", "orange county", "irvine, ca"]
+    assert wanted_places(conn) == ["remote", "orange county"]
+    _wanted(conn, "Remote")
+    assert wanted_places(conn, job) == ["remote"], "only while that place is still wanted"

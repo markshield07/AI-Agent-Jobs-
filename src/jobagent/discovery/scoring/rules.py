@@ -161,6 +161,8 @@ def _not_remote(job: Mapping[str, Any], title: str, criteria: SearchCriteria) ->
     places = [want for want in wanted if want != "remote"]
     if any(_location_matches(want, lower, have_words) for want in places):
         return None
+    if _found_near_wanted(job, places):
+        return None
     if said and any(_location_matches(want, said.lower(), set(_words(said))) for want in places):
         return None
     where = f'the description says "{said}"' if said and not _in_office(have) else have
@@ -235,7 +237,19 @@ def _score_location(job: Mapping[str, Any], title: str, criteria: SearchCriteria
         # it must never match a posting by its text.
         if want != "remote" and _location_matches(want, have, have_words):
             return 20
+    if _found_near_wanted(job, [w for w in wanted if w != "remote"]):
+        return 20
     return 8 if not have else 0
+
+
+def _found_near_wanted(job: Mapping[str, Any], places: list[str]) -> bool:
+    """A board's search around a wanted place found it: "Irvine, CA" from a
+    search for Orange County is near enough, as the board's radius says."""
+    near = _text(job, "found_near").strip().lower()
+    if not near:
+        return False
+    near_words = set(_words(near))
+    return any(_location_matches(want, near, near_words) for want in places)
 
 
 def _is_remote(job: Mapping[str, Any], title: str) -> bool:

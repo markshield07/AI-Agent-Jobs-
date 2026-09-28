@@ -37,7 +37,7 @@ from jobagent.db.database import utcnow
 from jobagent.discovery import store as jobs
 from jobagent.discovery.ats import detect_ats
 from jobagent.discovery.criteria import load_criteria
-from jobagent.discovery.scoring.rules import not_remote
+from jobagent.discovery.scoring.rules import not_remote, place_matches
 from jobagent.llm.backend import Completer, LLMUnavailable, resolve_backend
 from jobagent.resume.facts import list_facts, list_never_claim
 from jobagent.tailor import store as variants
@@ -176,14 +176,22 @@ def build_packet(
         facts=list_facts(conn),
         never_claim=[row["term"] for row in list_never_claim(conn)],
         variant_id=variant.id,
-        wanted_places=wanted_places(conn),
+        wanted_places=wanted_places(conn, job),
     )
 
 
-def wanted_places(conn: sqlite3.Connection) -> list[str]:
-    """The locations searched for, lower case; empty when none are set."""
+def wanted_places(conn: sqlite3.Connection, job: Mapping[str, Any] | None = None) -> list[str]:
+    """The locations searched for, lower case; empty when none are set. With
+    the job, also the place its listing gave when a board found it searching
+    around a wanted place ("irvine, ca" for Orange County), so the posting
+    may put it there."""
     criteria = load_criteria(conn)
-    return criteria.normalised(criteria.locations)
+    wanted = criteria.normalised(criteria.locations)
+    near = str((job or {}).get("found_near") or "").strip().lower()
+    listed = str((job or {}).get("location") or "").strip().lower()
+    if near and listed and listed not in wanted and any(place_matches(w, near) for w in wanted):
+        wanted.append(listed)
+    return wanted
 
 
 # ------------------------------------------------------------------- run --
@@ -272,7 +280,7 @@ def apply_to_job(
     waiting_on = _workday_signed_out(settings, url) if handler.ats == "workday" else None
     if waiting_on:
         # The posting is public: no sign-in is asked for a job in the wrong place.
-        elsewhere = _posting_elsewhere(conn, settings, browser, handler, url)
+        elsewhere = _posting_elsewhere(conn, settings, browser, handler, url, job)
         if elsewhere:
             return _wrong_place(conn, settings, job_id, url, elsewhere)
         sessions.mark_workday_signed_out(settings, waiting_on, job_id=job_id, url=url)
@@ -403,9 +411,10 @@ def _posting_elsewhere(
     browser: BrowserSession | None,
     handler: Handler,
     url: str,
+    job: Mapping[str, Any] | None = None,
 ) -> str | None:
     """Open the posting only to read where it is; None when that is fine or unknown."""
-    wanted = wanted_places(conn)
+    wanted = wanted_places(conn, job)
     check = getattr(handler, "wrong_place", None)
     if not wanted or check is None:
         return None

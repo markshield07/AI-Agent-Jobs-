@@ -152,7 +152,24 @@ def test_init_db_migrates_a_version_one_database(tmp_path):
     assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == SCHEMA_VERSION
 
     init_db(conn)  # a second start is a no-op, not a duplicate-column error
-    assert conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 4
+    assert conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 5
+
+
+def test_init_db_gives_a_version_four_database_the_found_near_column(tmp_path):
+    from jobagent.db.database import SCHEMA_VERSION, connect, init_db
+
+    conn = connect(tmp_path / "v4.db")
+    init_db(conn)
+    conn.executescript(
+        """
+        ALTER TABLE jobs DROP COLUMN found_near;
+        DELETE FROM schema_version;
+        INSERT INTO schema_version (version, applied_at) VALUES (4, 'then');
+        """
+    )
+    init_db(conn)
+    assert "found_near" in {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+    assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == SCHEMA_VERSION
 
 
 def test_unsubmitted_application_status_follows_its_newest_attempt(conn):

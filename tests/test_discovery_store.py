@@ -505,3 +505,28 @@ def test_list_runs_is_newest_first_and_limited(conn):
     ids = [store.start_run(conn) for _ in range(3)]
     assert [r["id"] for r in store.list_runs(conn)] == list(reversed(ids))
     assert [r["id"] for r in store.list_runs(conn, limit=2)] == ids[:0:-1]
+
+
+def test_a_board_search_place_is_kept_and_reopens_a_not_remote_skip(conn):
+    url = "https://www.indeed.com/viewjob?jk=irvine"
+    [jid] = _insert(conn, _job(url=url, source="indeed", location="Irvine, CA"))
+    store.set_rule_score(conn, jid, 0, "not remote (Irvine, CA) and not in orange county")
+    store.set_status(conn, jid, "skipped")
+    other = "https://www.indeed.com/viewjob?jk=keyword"
+    [kid] = _insert(conn, _job(url=other, source="indeed", title="Other"))
+    store.set_rule_score(conn, kid, 0, "excluded keyword: clearance")
+    store.set_status(conn, kid, "skipped")
+
+    again = upsert_jobs(
+        conn,
+        [
+            _job(url=url, source="indeed", location="Irvine, CA", found_near="Orange County"),
+            _job(url=other, source="indeed", title="Other", found_near="Orange County"),
+        ],
+    )
+
+    assert again.duplicates == 2 and again.new_ids == []
+    job = store.get_job(conn, jid)
+    assert job["found_near"] == "Orange County"
+    assert job["status"] == "pending" and job["scored_at"] is None, "scored again next run"
+    assert store.get_job(conn, kid)["status"] == "skipped", "other reasons stand"

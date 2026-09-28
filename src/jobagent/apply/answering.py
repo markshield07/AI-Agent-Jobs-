@@ -41,6 +41,12 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     # Before "phone": the other boxes a phone number comes with (Workday).
     ("phone_country", r"\bphone\s+code\b|\bcountry\s+(?:calling\s+|dialing\s+)?code\b"),
     ("phone_extension", r"\bextension\b|\bext\b"),
+    # A second number ("Home Phone" beside "Mobile Phone") is not the mobile again.
+    (
+        "other_phone",
+        r"\b(?:home|work|office|business|alternate|alternative|secondary|other|evening|day)"
+        r"\s+(?:phone|telephone|tel|number)\b|\blandline\b",
+    ),
     ("phone", r"\b(?:phone|mobile|telephone|cell)\b"),
     # The parts of a postal address each have a key of their own, so a form
     # that asks for street, city, state and ZIP separately (Workday) does not
@@ -48,7 +54,7 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     ("postal_code", r"\bpostal|\bzip\b|\bpost\s*code\b"),
     ("address_line_2", r"\baddress\s+line\s*2\b|\bapartment\b|\bapt\b|\bsuite\b"),
     ("address", r"\b(?:street\s+)?address\b"),
-    ("city", r"^\W*(?:city|town|city\s*/\s*town)\W*$"),
+    ("city", r"^\W*(?:city|town|city\s*/\s*town|town\s*/\s*city)\W*$"),
     ("state", r"^\W*(?:state|province|region|state\s*/\s*province)\W*$"),
     ("country", r"\bcountry\b"),
     ("location", r"\blocation\b|\bcity\b|\bwhere (?:are|do) you (?:based|located|live)\b"),
@@ -67,7 +73,15 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     ("referral", r"\breferred\s+by\b|\breferral\b|\bemployee\s+referr"),
     (
         "heard_about",
-        r"\b(?:hear|heard|find\s+out|learn|found\s+out)\s+about\b|\bhow did you find\b",
+        r"\b(?:hear|heard|find\s+out|learn|found\s+out)\s+about\b|\bhow did you find\b"
+        r"|^\W*(?:job\s+|applicant\s+|candidate\s+)?source\W*$",
+    ),
+    # How a recruiter should reach the person: plain defaults, overridable.
+    ("contact_time", r"\b(?:best|preferred)\s+time\s+to\s+(?:contact|call|reach)\b"),
+    (
+        "contact_method",
+        r"\b(?:preferred|best)\s+(?:contact\s+method|method\s+of\s+contact|way\s+to\s+contact)"
+        r"|\bcontact\s+preference\b",
     ),
     # Never guessed. These come from the answer bank or from the user.
     # Sponsorship before authorization: "require work authorization
@@ -82,6 +96,14 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
         r"|\bwork\s+permit\b",
     ),
     ("citizenship", r"\bcitizen"),
+    # The parts of a salary a form asks for apart from the amount: they follow
+    # from salary_expectation, so they are tried before it.
+    ("salary_currency", r"\bcurrency\b"),
+    (
+        "salary_period",
+        r"\b(?:salary|pay|compensation|rate)\b.{0,30}\b(?:time\s*frame|period|frequency|basis|unit)\b"
+        r"|\bpay\s+(?:period|frequency)\b",
+    ),
     (
         "salary_expectation",
         r"\bsalary\b|\bcompensation\b|\bpay\s+expectation|\bdesired\s+pay\b|\bhourly\s+rate\b"
@@ -94,6 +116,8 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     ),
     ("relocation", r"\brelocat"),
     ("work_arrangement", r"\bremote\b|\bhybrid\b|\bon-?site\b|\bin[- ]office\b|\bin\s+person\b"),
+    # "Clearance Status" beside "Clearance Level" (Serco) is a second answer.
+    ("clearance_status", r"\bclearance\s+status\b"),
     ("security_clearance", r"\bclearance\b"),
     ("over_18", r"\b18\b|\beighteen\b|\blegal\s+age\b|\bage\s+of\s+majority\b"),
     ("background_check", r"\bbackground\s+check\b|\bdrug\s+(?:test|screen)"),
@@ -112,10 +136,13 @@ SENSITIVE: frozenset[str] = frozenset(
         "visa_sponsorship",
         "citizenship",
         "salary_expectation",
+        "salary_currency",
+        "salary_period",
         "start_date",
         "relocation",
         "work_arrangement",
         "security_clearance",
+        "clearance_status",
         "over_18",
         "background_check",
         "previously_employed",
@@ -161,7 +188,9 @@ _DECLINE = re.compile(
 )
 _CONSENT = re.compile(
     r"\bprivacy\b|\bterms\b|\bconsent\b|\bagree\b|\backnowledge\b|\bcertify\b|\bauthori[sz]e\b"
-    r"|\bconfirm\b|\baccept\b|\bpolicy\b|\bgdpr\b|\bdata\s+(?:processing|retention)\b",
+    r"|\bconfirm\b|\baccept\b|\bpolicy\b|\bgdpr\b|\bdata\s+(?:processing|retention)\b"
+    r"|\bi\s+understand\b|\bi\s+have\s+read\b"
+    r"|\bby\s+(?:continuing|submitting|clicking|checking|applying|proceeding)\b",
     re.IGNORECASE,
 )
 _MARKETING = re.compile(
@@ -186,6 +215,7 @@ _WHY_US = re.compile(
 )
 _YES = frozenset({"yes", "y", "true", "1", "i do", "i am", "i have"})
 _NO = frozenset({"no", "n", "false", "0", "i do not", "i am not", "i have not"})
+_BOARDS = frozenset({"linkedin", "indeed", "glassdoor", "ziprecruiter", "dice", "monster"})
 _ASKABLE = frozenset({"text", "textarea", "select", "multiselect", "radio", "number", "unknown"})
 _MAX_MODEL_QUESTIONS = 20
 _DESCRIPTION_CHARS = 2500
@@ -253,13 +283,15 @@ def letter_body(letter: str) -> str:
 
 
 def _is_terms_box(field: FormField) -> bool:
-    """A box agreeing to terms or a privacy policy, not one asking for updates."""
+    """A box agreeing to terms or a privacy policy, not one asking for updates.
+    A required box is terms whatever else it mentions: Serco's privacy notice
+    speaks of "future positions", and the form cannot be sent without it."""
     return (
         field.kind == "checkbox"
         and not field.options
         and field.section in ("consent", "other", "questions", "eeo")
         and bool(_CONSENT.search(field.label))
-        and not _MARKETING.search(field.label)
+        and (field.required or not _MARKETING.search(field.label))
     )
 
 
@@ -286,6 +318,7 @@ _CONTACT_KEYS = frozenset(
         "email",
         "phone",
         "phone_country",
+        "other_phone",
         "location",
         "address",
         "address_line_2",
@@ -462,6 +495,12 @@ class _Planner:
                 return False
             self._fill(field, flag, source)
             return True
+        if field.kind == "number":
+            # "$150,000" in the answer bank is 150000 in a number box.
+            number = re.sub(r"[^\d.]", "", value.split("-")[0]).rstrip(".")
+            if not number:
+                return False
+            value = number
         self._fill(field, value, source)
         return True
 
@@ -511,6 +550,12 @@ class _Planner:
         if banked is not None:
             if not self._apply_value(field, banked, "answer_bank"):
                 self._need(field, NO_OPTION)
+            return
+        if key in ("salary_currency", "salary_period"):
+            self._plan_salary_part(field, key)
+            return
+        if key in ("contact_time", "contact_method"):
+            self._plan_reach(field, key)
             return
         if (
             key in SENSITIVE
@@ -570,7 +615,7 @@ class _Planner:
         elif field.required and self.agree_to_terms:
             self._fill(field, True, "auto_mode")
             self.plan.notes.append(
-                f"agreed to {field.label!r} because the apply mode is auto; "
+                f"agreed to {field.label!r} because applications go all the way (auto mode); "
                 f"answer {CONSENT_KEY} No to stop agreeing to terms"
             )
         elif field.required:
@@ -615,9 +660,26 @@ class _Planner:
             return
         elif key in ("email", "phone", "location"):
             value = contact.get(key)
-        elif key in ("address", "address_line_2", "postal_code", "country"):
+        elif key == "other_phone":
+            # A second number is only ever the one on file for it; a required
+            # one with none on file gets the main number.
+            value = self._bank("other_phone", "home_phone")
+            source = "answer_bank"
+            if value is None and not field.required:
+                self._skip(field, "no second phone number on file")
+                return
+            if value is None:
+                value, source = contact.get("phone"), "contact"
+        elif key in ("address", "address_line_2", "postal_code"):
             value = self._bank(key)
             source = "answer_bank"
+        elif key == "country":
+            # The answer bank, else the last part of "City, State, Country".
+            value = self._bank(key)
+            source = "answer_bank"
+            parts = [p.strip() for p in (contact.get("location") or "").split(",")]
+            if value is None and len(parts) >= 3 and parts[-1]:
+                value, source = parts[-1], "contact"
         elif key in ("city", "state"):
             # From the answer bank, else from the location on file when it
             # reads "City, State, ...".
@@ -660,9 +722,61 @@ class _Planner:
             self.used_links.add(value)
         self._value_or_need(field, value, "links", NOT_ON_FILE)
 
+    def _plan_salary_part(self, field: FormField, key: str) -> None:
+        """The currency or the period of the salary on file: USD, and yearly
+        for an amount in the thousands, hourly below that, unless the answer
+        bank says otherwise (salary_currency, salary_period)."""
+        salary = self._bank("salary_expectation")
+        if key == "salary_currency":
+            wanted = [self._bank("salary_currency") or "USD", "US dollar", "$"]
+        else:
+            banked = self._bank("salary_period")
+            if banked:
+                wanted = [banked]
+            elif salary is None:
+                wanted = []
+            else:
+                amount = re.sub(r"[^\d.]", "", salary.split("-")[0]) or "0"
+                yearly = float(amount.rstrip(".") or 0) >= 1000
+                wanted = (
+                    ["annually", "annual", "yearly", "year", "yr", "per year", "salary"]
+                    if yearly
+                    else ["hourly", "hour", "hr", "per hour"]
+                )
+        if salary is None and not self._bank(key):
+            self._need(field, NEVER_GUESSED)
+            return
+        if not field.options:
+            self._fill(field, wanted[0], "answer_bank")
+            return
+        for want in wanted:
+            option = pick_option(want, field.options)
+            if option:
+                self._fill(field, option, "answer_bank")
+                return
+        self._need(field, NO_OPTION)
+
+    def _plan_reach(self, field: FormField, key: str) -> None:
+        """When and how a recruiter should get in touch: the answer bank, else
+        any time, by email."""
+        banked = self._bank(key)
+        wanted = [banked] if banked else []
+        wanted += ["anytime", "any time", "no preference"] if key == "contact_time" else ["email"]
+        for want in wanted:
+            if self._apply_value(field, want, "answer_bank" if want == banked else "default"):
+                return
+        if field.required:
+            self._need(field, NO_OPTION if field.options else NOT_ON_FILE)
+        else:
+            self._skip(field, "no option fits")
+
     def _plan_heard_about(self, field: FormField) -> None:
         if field.options:
-            for wanted in ("job board", "linkedin", "online", "internet", "other"):
+            # The board the job was found on first ("LinkedIn" in a Source
+            # list), then the kind of place it is.
+            board = str(self.packet.job.get("source") or "").strip().lower()
+            boards = [board] if board in _BOARDS else []
+            for wanted in (*boards, "job board", "linkedin", "online", "internet", "other"):
                 option = pick_option(wanted, field.options)
                 if option:
                     self._fill(field, option, "default")

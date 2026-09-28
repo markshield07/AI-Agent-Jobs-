@@ -20,13 +20,21 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import date
+from pathlib import Path
 from typing import Any
 
-from jobagent.apply.answering import field_section
-from jobagent.apply.browser.dom import discover_fields, script
-from jobagent.apply.browser.fill import click_first_visible, detect_login_wall, wait_settled
+from jobagent.apply.answering import CONSENT_KEY, NEVER_GUESSED, SENSITIVE, field_section
+from jobagent.apply.browser.dom import current_values, discover_fields, script
+from jobagent.apply.browser.fill import (
+    click_first_visible,
+    detect_login_wall,
+    page_text,
+    wait_settled,
+)
+from jobagent.apply.closing import deadline_passed
 from jobagent.apply.handlers.base import COOKIE_BUTTON_SELECTORS, BaseHandler
-from jobagent.apply.models import Fill, FormField, HandlerResult
+from jobagent.apply.models import Fill, FormField, HandlerResult, NeededInput
 from jobagent.discovery.ats import detect_ats
 
 log = logging.getLogger(__name__)
@@ -45,6 +53,33 @@ UPLOAD_BUTTON = re.compile(
 # is taken to be an application.
 _APPLICATION_SECTIONS = ("contact", "resume", "cover_letter", "links")
 MIN_APPLICATION_FIELDS = 3
+# A form that signs the person up for something other than this job: a talent
+# community or job alerts (ADP's "Join Our Talent Community" after its notice),
+# or a check of an email or phone number by a code sent to it.
+_SIGN_UP = re.compile(
+    r"talent\s+(?:community|network|pool|pipeline)|join\s+our\s+(?:community|network)"
+    r"|job\s+alerts?\b|stay\s+(?:connected|in\s+touch)",
+    re.I,
+)
+_CODE_CHECK = re.compile(
+    r"verification\s+(?:code|process|step|link)|one[-\s]time\s+(?:pass)?code|\bOTP\b"
+    r"|verify\s+your\s+(?:email|phone|mobile|identity|account)|code\s+(?:we|we'll)\s+sen[dt]",
+    re.I,
+)
+SIGN_UP_JS = script("sign_up.js")
+# A page still busy with an upload: its spinner or progress bar is showing.
+BUSY_JS = """() => Array.from(document.querySelectorAll(
+    '[aria-busy="true"], [role="progressbar"], [class*="spinner" i], [class*="loader" i],'
+    + ' [class*="loading" i]')).some((el) => {
+  const r = el.getBoundingClientRect(); const st = getComputedStyle(el);
+  return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none'
+    && st.opacity !== '0';
+})"""
+_UPLOADED = re.compile(
+    r"\b(?:uploaded|attached)\s+successfully\b|\bsuccessfully\s+(?:uploaded|attached)\b"
+    r"|\b(?:remove|delete|replace)\s+(?:resume|cv|file)\b",
+    re.I,
+)
 NOT_AN_APPLICATION = (
     "the page has a form, but not one that looks like an application: no file upload "
     "and too few of the things an application asks for"
@@ -59,11 +94,25 @@ class GenericHandler(BaseHandler):
     max_hops = 3
     # How long a press gets to open a new tab before it is taken to have none.
     new_tab_ms = 2_500
+    # How long an uploaded resume gets to be read (the page's spinner) before
+    # the form is filled around it.
+    upload_wait_ms = 30_000
+    # How many more looks at the form after filling it, for questions that
+    # appear only once an answer is given (Serco's "Source" after "How did you hear").
+    more_looks = 2
+    # Where the posting names its place: schema.org markup, ADP's location line.
+    place_selectors = ('[itemprop="jobLocation"]', ".job-description-location-item")
 
     def __init__(self) -> None:
         # Where an Apply press landed on a site another handler fills.
         self._handoff: str | None = None
         self._resume = ""
+        self._answerer: Any = None
+        self._wanted: list[str] = []
+        # What the posting said before any press: closed, or somewhere not wanted.
+        self._posting: str | None = None
+        # Why the form found is a sign-up and not the application.
+        self._sign_up: str | None = None
 
     def matches(self, url: str) -> bool:
         """Never claims a URL: it is what `handler_for` falls back to, so a
@@ -83,6 +132,9 @@ class GenericHandler(BaseHandler):
         press as it did when any email input counted.
         """
         _clear_consent(page)
+        self._posting = self._read_posting(page)
+        if self._posting:
+            return
         tried: list[str] = []
         for _ in range(self.max_hops):
             if self._handed_off(page) or self._application_showing(page):
@@ -102,6 +154,17 @@ class GenericHandler(BaseHandler):
             wait_settled(page, self.settle_ms)
             _clear_consent(page)
         self._handed_off(page)
+
+    def _read_posting(self, page: Any) -> str | None:
+        """Why the posting itself rules the job out, read before any press
+        leaves it: a deadline that has passed, or a place not wanted."""
+        closed = deadline_passed(page_text(page), date.today())
+        if closed:
+            return closed
+        return super().wrong_place(page, self._wanted)
+
+    def wrong_place(self, page: Any, wanted: Any) -> str | None:
+        return self._posting or super().wrong_place(page, wanted)
 
     def _handed_off(self, page: Any) -> bool:
         """True when the press led to Workday, Greenhouse, Lever or Ashby,
@@ -161,19 +224,123 @@ class GenericHandler(BaseHandler):
         return True
 
     def fill(self, page: Any, fields: list[FormField], plan: Any) -> tuple[list, list, list]:
-        """The plan, then the resume through the page's own Upload Resume
-        button when the form's file box is hidden where it could not be read."""
-        filled, unfilled, notes = super().fill(page, fields, plan)
+        """The resume first when it goes through the page's own Upload Resume
+        button (the form's file box hidden where it could not be read): a page
+        that reads the resume rewrites the form while its spinner shows, so the
+        plan goes on after. Then the plan; then what the page already held for
+        a field the plan could not answer; then another look for questions an
+        answer brought up."""
         resume = self._resume
-        if resume and not any(f.file_path for f in filled) and _upload_by_button(page, resume):
-            filled.append(Fill(key="resume", file_path=resume, source="resume", label="Resume"))
-            notes.append("uploaded the resume through the page's Upload Resume button")
+        by_button: list[Fill] = []
+        notes: list[str] = []
+        if resume and not any(f.file_path for f in plan.fills):
+            self._resume_by_button(page, resume, by_button, plan, notes)
+        filled, unfilled, more = super().fill(page, fields, plan)
+        filled[:0] = by_button
+        notes.extend(more)
+        if resume and not any(f.file_path for f in filled):
+            self._resume_by_button(page, resume, filled, plan, notes)
+        self._keep_prefilled(page, fields, plan, filled)
+        self._look_again(page, fields, plan, filled, unfilled, notes)
         return filled, unfilled, notes
+
+    def _resume_by_button(
+        self, page: Any, resume: str, filled: list[Fill], plan: Any, notes: list[str]
+    ) -> None:
+        if not _upload_by_button(page, resume):
+            return
+        _wait_idle(page, self.upload_wait_ms)
+        filled.append(Fill(key="resume", file_path=resume, source="resume", label="Resume"))
+        if _resume_shown(page, resume):
+            notes.append("uploaded the resume through the page's Upload Resume button")
+            return
+        plan.needed.append(
+            NeededInput(
+                key="resume",
+                label="Resume",
+                kind="file",
+                required=True,
+                reason="the resume went to the page's Upload Resume button, but the page "
+                "never showed it attached; not sent without it",
+                answer_key="resume",
+            )
+        )
+
+    def _keep_prefilled(
+        self, page: Any, fields: list[FormField], plan: Any, filled: list[Fill]
+    ) -> None:
+        """A field the plan had no answer for that the page already filled
+        (Serco's Country of Residence, set to United States) keeps what it
+        holds. Never for a question only the person answers."""
+        by_key = {f.key: f for f in fields}
+        open_ = [
+            n
+            for n in plan.needed
+            if n.key in by_key
+            and n.reason != NEVER_GUESSED
+            and n.answer_key not in SENSITIVE
+            and n.answer_key != CONSENT_KEY
+            and field_section(by_key[n.key]) != "eeo"
+        ]
+        held = current_values(page, [by_key[n.key] for n in open_])
+        for need in open_:
+            value = held.get(need.key)
+            if value and by_key[need.key].kind != "file":
+                plan.needed.remove(need)
+                filled.append(Fill(key=need.key, value=value, source="prefilled", label=need.label))
+                plan.notes.append(f"kept {need.label!r} as the page had it: {value!r}")
+
+    def _look_again(
+        self,
+        page: Any,
+        fields: list[FormField],
+        plan: Any,
+        filled: list[Fill],
+        unfilled: list[NeededInput],
+        notes: list[str],
+    ) -> None:
+        """Fill what appeared since the plan was made: a question an answer
+        brought up, or a box the page emptied again after it was filled."""
+        if self._answerer is None:
+            return
+        for _ in range(self.more_looks):
+            try:
+                page.wait_for_timeout(500)
+                found = _the_application(page, discover_fields(page))
+            except Exception as exc:
+                log.debug("generic: could not look at the form again: %s", exc)
+                return
+            new = [f for f in _unseen(found, fields) if not _widget(f) and _shown(page, f.selector)]
+            emptied = _emptied(page, fields, filled)
+            if not new and not emptied:
+                return
+            if emptied:
+                again = type(plan)(fills=emptied)
+                _, lost, more = super().fill(page, fields, again)
+                unfilled.extend(lost)
+                notes.extend(more)
+                notes.append(f"filled {len(emptied)} field(s) again after the page emptied them")
+            if new:
+                extra = self._answerer(new)
+                done, lost, more = super().fill(page, new, extra)
+                fields.extend(new)
+                filled.extend(done)
+                unfilled.extend(lost)
+                notes.extend(more)
+                plan.needed.extend(extra.needed)
+                plan.notes.extend(extra.notes)
+                plan.input_tokens += extra.input_tokens
+                plan.output_tokens += extra.output_tokens
 
     def discover(self, page: Any) -> list[FormField]:
         if self._handoff:
             return []
         fields = _the_application(page, discover_fields(page))
+        if fields and looks_like_an_application(fields):
+            self._sign_up = _sign_up(page, fields)
+            if self._sign_up:
+                log.info("generic: %s: %s", page.url, self._sign_up)
+                return []
         if not fields or looks_like_an_application(fields):
             return fields
         log.info("generic: %s has a form, but not an application", page.url)
@@ -181,8 +348,19 @@ class GenericHandler(BaseHandler):
 
     def apply(self, page: Any, packet: Any, *args: Any, **kwargs: Any) -> Any:
         self._handoff = None
+        self._posting = None
+        self._sign_up = None
         self._resume = getattr(packet, "resume_path", "") or ""
+        self._wanted = list(getattr(packet, "wanted_places", None) or [])
+        self._answerer = args[0] if args else kwargs.get("answerer")
         result = super().apply(page, packet, *args, **kwargs)
+        if self._sign_up and not result.wrong_place:
+            return HandlerResult(
+                outcome="blocked",
+                error=self._sign_up,
+                final_url=result.final_url,
+                screenshot_path=result.screenshot_path,
+            )
         board = str(packet.job.get("url") or "")
         if result.outcome == "failed" and detect_ats(board) == "indeed" and _indeed_apply(page):
             # The company's page applies only through Indeed Apply (Paycor):
@@ -289,6 +467,83 @@ def _upload_by_button(page: Any, path: str) -> bool:
     except Exception as exc:
         log.info("generic: could not upload the resume by its button: %s", exc)
     return False
+
+
+def _wait_idle(page: Any, wait_ms: int) -> None:
+    """Wait, up to `wait_ms`, until no spinner or progress bar is showing."""
+    waited = 0
+    while waited < wait_ms:
+        try:
+            if not page.evaluate(BUSY_JS):
+                return
+        except Exception:
+            return
+        page.wait_for_timeout(500)
+        waited += 500
+
+
+def _resume_shown(page: Any, resume: str) -> bool:
+    """The page shows the resume as attached: its file name, or a word that it went on."""
+    text = page_text(page)
+    name = Path(resume).name
+    return (
+        name.lower() in text.lower()
+        or Path(resume).stem.lower() in text.lower()
+        or bool(_UPLOADED.search(text))
+    )
+
+
+def _unseen(found: list[FormField], fields: list[FormField]) -> list[FormField]:
+    """The fields in `found` that are not among `fields`. A key made from a
+    control's position shifts when a control is added above it, so a field
+    counts as seen by its key, its selector, or its label and kind."""
+    keys = {f.key for f in fields}
+    selectors = {f.selector for f in fields if f.selector}
+    labels = {(f.label, f.kind) for f in fields if f.label}
+    return [
+        f
+        for f in found
+        if f.key not in keys and f.selector not in selectors and (f.label, f.kind) not in labels
+    ]
+
+
+def _emptied(page: Any, fields: list[FormField], filled: list[Fill]) -> list[Fill]:
+    """The typed-in answers the page has since emptied."""
+    by_key = {f.key: f for f in fields}
+    typed = [
+        f
+        for f in filled
+        if f.key in by_key
+        and isinstance(f.value, str)
+        and f.value
+        and by_key[f.key].kind in ("text", "textarea", "number", "email", "tel")
+    ]
+    if not typed:
+        return []
+    held = current_values(page, [by_key[f.key] for f in typed])
+    return [f for f in typed if not held.get(f.key)]
+
+
+def _sign_up(page: Any, fields: list[FormField]) -> str | None:
+    """Why the form is a sign-up rather than the application, or None. A form
+    that takes a resume is an application whatever is written around it."""
+    if any(f.kind == "file" and not _widget(f) for f in fields):
+        return None
+    try:
+        seen = page.evaluate(SIGN_UP_JS, [f.selector for f in fields if f.selector][:5]) or {}
+    except Exception:
+        return None
+    heading = str(seen.get("heading") or "")
+    if _SIGN_UP.search(heading):
+        return (
+            f"the form is a sign-up ({heading!r}), not an application; nothing was sent "
+            "and nothing more can be done here"
+        )
+    if _CODE_CHECK.search(str(seen.get("text") or "")):
+        return (
+            "the form asks to verify an email or phone number with a code sent to it; apply by hand"
+        )
+    return None
 
 
 def _clear_consent(page: Any) -> None:

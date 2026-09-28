@@ -7,7 +7,8 @@
   A company careers site where the form is some presses from the posting, the way the
   live failures were (Phenom, Paycor, ADP): a talent-community email box and an
   "Apply with LinkedIn" button beside the real Apply, and a sign-in that may offer to
-  apply as a guest. Pages, chosen with ?step=...: posting (default), choice, login, form.
+  apply as a guest. Pages, chosen with ?step=...: posting (default), choice, login, form,
+  phenom, signup.
 
   Variants on the posting, with ?variant=...:
     link    Apply Now is a link to the form page
@@ -22,7 +23,14 @@
     indeedapply  no Apply at all; the page only preloads Indeed Apply
     phenom  Apply Now leads to a Phenom-style step 1: an Apply-with-LinkedIn widget's hidden
             file box, the resume behind an "Upload Resume" button, the fields in a form of
-            their own, and Next
+            their own, and Next. The upload shows a spinner while the page "reads" the
+            resume, which empties Last Name; then the file name. "How did you hear" = Job
+            Board brings up a required Source; Division comes already chosen.
+    phenomsilent  the same, but the page never shows the uploaded file's name
+    signup  Apply Now leads to ADP's guest step: name, email and mobile, and a notice
+            about a verification process
+    community  Apply Now leads to a "Join our talent community" form and nothing else
+    closed  the posting says its application deadline has passed
 -->
 <style>
   body { font-family: sans-serif; margin: 0; }
@@ -86,10 +94,12 @@
     } else if (variant === 'reveal') {
       apply = '<button type="button" id="apply">Apply</button><div id="inline" class="hidden">' + form + '</div>';
     } else {
-      var to = { link: 'form', choice: 'choice', guest: 'login', wall: 'login', phenom: 'phenom' }[variant] || 'form';
+      var to = { link: 'form', choice: 'choice', guest: 'login', wall: 'login', phenom: 'phenom',
+        phenomsilent: 'phenom', signup: 'signup', community: 'signup', closed: 'form' }[variant] || 'form';
       apply = '<a id="apply" href="' + go(to) + '">Apply Now</a>';
     }
-    main.innerHTML = '<h1>Network Operations Manager</h1><p>Lead our NOC.</p>' +
+    var deadline = variant === 'closed' ? '<p>Application Deadline: 9/27/2020</p>' : '';
+    main.innerHTML = '<h1>Network Operations Manager</h1><p>Lead our NOC.</p>' + deadline +
       '<button type="button" id="apply-linkedin" onclick="window.__opened.push(\'linkedin\')">Apply with LinkedIn</button> ' +
       '<a href="#" id="share">Share this job</a> ' + apply + community;
     if (variant === 'reveal' || variant === 'onetrust') {
@@ -115,13 +125,43 @@
       '<label for="lastName">Last Name</label><input id="lastName">' +
       '<label for="email">Email</label><input id="email" type="email">' +
       '<label for="phoneNumber">Mobile Phone</label><input id="phoneNumber" type="tel">' +
-      '</fieldset><button type="button" id="next">Next</button></form>';
+      '<label for="homePhone">Home Phone</label><input id="homePhone" type="tel">' +
+      '<label for="division">Division*</label><select id="division" required><option value="">Please Select</option>' +
+      '<option value="n" selected>Networks</option><option value="s">Security</option></select>' +
+      '<label for="sourceType">How did you hear about this opportunity?*</label>' +
+      '<select id="sourceType" required><option value="">Please Select</option><option>Company Website</option>' +
+      '<option>Job Board</option></select><div id="source-box"></div>' +
+      '</fieldset><button type="button" id="next">Next</button></form>' +
+      '<div id="spinner" class="spinner hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.3)"></div>';
     var hidden = document.getElementById('hidden-resume');
     document.getElementById('upload-btn').addEventListener('click', function () { hidden.click(); });
     hidden.addEventListener('change', function () {
-      window.__resume = hidden.files[0] && hidden.files[0].name;
-      document.getElementById('resume-name').textContent = window.__resume || '';
+      var spinner = document.getElementById('spinner');
+      spinner.classList.remove('hidden');
+      setTimeout(function () {
+        window.__resume = hidden.files[0] && hidden.files[0].name;
+        document.getElementById('lastName').value = '';
+        if (variant !== 'phenomsilent') document.getElementById('resume-name').textContent = window.__resume || '';
+        spinner.classList.add('hidden');
+      }, 700);
     });
+    document.getElementById('sourceType').addEventListener('change', function (e) {
+      var box = document.getElementById('source-box');
+      box.innerHTML = e.target.value === 'Job Board' ? '<label for="source">Source*</label>' +
+        '<select id="source" required><option value="">Please Select</option><option>Indeed</option>' +
+        '<option>LinkedIn</option><option>Other</option></select>' : '';
+    });
+  } else if (step === 'signup') {
+    main.innerHTML = variant === 'community'
+      ? '<h2>Join our talent community</h2><form id="tc"><label for="tcf">First Name</label><input id="tcf">' +
+        '<label for="tcl">Last Name</label><input id="tcl"><label for="tce">Email</label><input id="tce" type="email">' +
+        '<label for="tcp">Mobile Number</label><input id="tcp" type="tel"><button type="submit">Join</button></form>'
+      : '<div class="guest-login-container"><div class="banner">Tell us about yourself.</div>' +
+        '<div role="alert">Please be advised that the mobile number or email associated with this ' +
+        'verification process is intended to be unique to you.</div><div class="login-form-container">' +
+        '<label for="gf">First Name</label><input id="gf"><label for="gl">Last Name</label><input id="gl">' +
+        '<label for="ge">Email</label><input id="ge" type="email"><label for="gp">Mobile Number</label>' +
+        '<input id="gp" type="tel"><button type="button">Next</button></div></div>';
   } else if (step === 'choice') {
     main.innerHTML = '<h1>How would you like to apply?</h1>' +
       '<button type="button" onclick="window.__opened.push(\'linkedin\')">Apply with LinkedIn</button>' +

@@ -599,9 +599,133 @@ def test_auto_mode_agrees_to_required_terms_and_says_so(packet):
     plan = plan_fills(fields, packet, agree_to_terms=True)
     assert fills(plan) == {"privacy": True}, "an optional box stays unticked"
     assert sources(plan) == {"privacy": "auto_mode"}
-    assert any("because the apply mode is auto" in n for n in plan.notes)
+    assert any("auto mode" in n for n in plan.notes)
     assert plan.needed == []
 
     packet.answers[answering.CONSENT_KEY] = "No"
     plan = plan_fills(fields, packet, agree_to_terms=True)
     assert fills(plan) == {"privacy": False, "certify": False}, "the person's No wins"
+
+
+# ------------------------------------------------ what Serco's form showed --
+
+
+@pytest.mark.parametrize(
+    "label, key",
+    [
+        ("Town/City", "city"),
+        ("City / Town", "city"),
+        ("Home Phone", "other_phone"),
+        ("Work Phone Number", "other_phone"),
+        ("Mobile Phone", "phone"),
+        ("Desired Salary Currency", "salary_currency"),
+        ("Desired Salary Timeframe", "salary_period"),
+        ("Pay frequency", "salary_period"),
+        ("Desired Salary Amount", "salary_expectation"),
+        ("Security Clearance Level", "security_clearance"),
+        ("Security Clearance Status", "clearance_status"),
+        ("Source", "heard_about"),
+        ("Best Time to Contact", "contact_time"),
+        ("Preferred Contact Method", "contact_method"),
+    ],
+)
+def test_serco_labels_have_keys_of_their_own(label, key):
+    assert canonical_key(F("x", label)) == key
+
+
+def test_city_country_and_a_second_phone_on_a_serco_form(packet):
+    packet.contact["location"] = "Menifee, California, United States"
+    fields = [
+        F("city", "Town/City", required=True),
+        F(
+            "country",
+            "Country of Residence",
+            kind="select",
+            required=True,
+            options=["Canada", "United States", "Uruguay"],
+        ),
+        F("mobile", "Mobile Phone", required=True),
+        F("home", "Home Phone"),
+    ]
+    plan = plan_fills(fields, packet)
+    assert fills(plan) == {"city": "Menifee", "country": "United States", "mobile": "+1 555 0100"}
+    assert plan.needed == []
+
+    packet.answers["home_phone"] = "+1 555 0199"
+    assert fills(plan_fills(fields, packet))["home"] == "+1 555 0199"
+    del packet.answers["home_phone"]
+    fields[3].required = True
+    assert fills(plan_fills(fields, packet))["home"] == "+1 555 0100", "required: the main number"
+
+
+def test_salary_currency_and_period_follow_the_salary_on_file(packet):
+    fields = [
+        F(
+            "cur",
+            "Desired Salary Currency",
+            kind="select",
+            required=True,
+            options=["USD $", "CAN $"],
+        ),
+        F("amt", "Desired Salary Amount", kind="number", required=True),
+        F("per", "Desired Salary Timeframe", kind="select", required=True, options=["Yr.", "Hr."]),
+    ]
+    plan = plan_fills(fields, packet)
+    assert {n.key for n in plan.needed} == {"cur", "amt", "per"}, "no salary on file: asked"
+    assert all(n.reason == NEVER_GUESSED for n in plan.needed)
+
+    packet.answers["salary_expectation"] = "$150,000"
+    plan = plan_fills(fields, packet)
+    assert fills(plan) == {"cur": "USD $", "amt": "150000", "per": "Yr."}
+    assert plan.needed == []
+
+    packet.answers["salary_expectation"] = "65"
+    assert fills(plan_fills(fields, packet))["per"] == "Hr."
+    packet.answers["salary_period"] = "Yearly"
+    fields[2].options = ["Hourly", "Yearly"]
+    assert fills(plan_fills(fields, packet))["per"] == "Yearly", "the answer bank wins"
+
+
+def test_a_required_privacy_notice_that_mentions_future_positions_is_terms(packet):
+    label = (
+        "* By continuing I understand that the information I disclose will be visible to and "
+        "shared between HR and Hiring Managers. Such information disclosed by me will be used "
+        "to support the recruitment selection processes for this or future positions."
+    )
+    field = F("privacy", label, kind="checkbox", required=True)
+    assert answering.answer_key_for(field) == answering.CONSENT_KEY
+    plan = plan_fills([field], packet, agree_to_terms=True)
+    assert fills(plan) == {"privacy": True} and sources(plan) == {"privacy": "auto_mode"}
+    optional = F("news", "Keep me informed about future positions and updates", kind="checkbox")
+    assert fills(plan_fills([optional], packet, agree_to_terms=True)) == {"news": False}
+
+
+def test_how_to_reach_the_person_defaults_to_any_time_by_email(packet):
+    fields = [
+        F(
+            "time",
+            "Best Time to Contact",
+            kind="select",
+            required=True,
+            options=["Anytime", "Morning", "Afternoon", "Evening"],
+        ),
+        F(
+            "how",
+            "Preferred Contact Method",
+            kind="select",
+            required=True,
+            options=["Home Phone", "Cell Phone", "Email"],
+        ),
+    ]
+    plan = plan_fills(fields, packet)
+    assert fills(plan) == {"time": "Anytime", "how": "Email"}
+    packet.answers["contact_method"] = "Cell Phone"
+    assert fills(plan_fills(fields, packet))["how"] == "Cell Phone"
+
+
+def test_a_source_list_gets_the_board_the_job_was_found_on(packet):
+    packet.job["source"] = "linkedin"
+    field = F(
+        "src", "Source", kind="select", required=True, options=["Indeed", "LinkedIn", "Other"]
+    )
+    assert fills(plan_fills([field], packet)) == {"src": "LinkedIn"}

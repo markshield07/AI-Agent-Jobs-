@@ -21,6 +21,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, replace
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ from jobagent.apply import sessions, store
 from jobagent.apply.answering import make_answerer
 from jobagent.apply.browser.fill import wait_settled
 from jobagent.apply.browser.session import BrowserSession, BrowserUnavailable, open_browser
+from jobagent.apply.closing import deadline_passed
 from jobagent.apply.handlers import default_handlers, handler_for
 from jobagent.apply.models import MODES, Handler, HandlerResult, NeededInput, Packet
 from jobagent.apply.sessions import SITES
@@ -304,8 +306,9 @@ def apply_to_job(
         packet,
         completer=completer,
         allow_model=settings.apply_model_answers,
-        # Auto mode is the person's own choice to send applications all the way.
-        agree_to_terms=mode == "auto",
+        # Auto mode is the person's own choice to send applications all the way;
+        # a dry run shows what auto mode would put on the form, without sending.
+        agree_to_terms=mode in ("auto", "dry_run"),
     )
     application_id = store.get_or_create_application(
         conn,
@@ -460,9 +463,12 @@ def _note_workday_sign_in(settings: Settings, job_id: str, url: str, result: Han
 
 
 def _ruled_out(job: Mapping[str, Any], criteria: Any) -> str | None:
-    """Why today's rules turn the job away outright, or None."""
+    """Why today's rules turn the job away outright, or None: the hard rules,
+    or an application deadline in the posting that has passed."""
     verdict = score_rules(job, criteria, set())
-    return verdict.reason if verdict.disqualified else None
+    if verdict.disqualified:
+        return verdict.reason
+    return deadline_passed(str(job.get("description") or ""), date.today())
 
 
 def _site_cap_reached(conn: sqlite3.Connection, settings: Settings, handler: Handler) -> str | None:

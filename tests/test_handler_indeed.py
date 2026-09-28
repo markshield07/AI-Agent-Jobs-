@@ -175,3 +175,29 @@ def test_a_step_that_rejects_its_answers_stops_with_the_message(page, packet):
     assert result.outcome == "blocked"
     assert "Answer this question to continue" in result.error
     assert js(page, "__submitted") is None
+
+
+# ------------------------------------------------------------- bot check --
+
+WALL = Path(__file__).parent / "fixtures" / "forms" / "bot_check.html"
+
+
+@pytest.mark.usefixtures("page")
+def test_a_bot_check_that_stays_stops_with_what_to_do(page, packet):
+    packet.job["url"] = WALL.as_uri()
+    handler = IndeedHandler()
+    handler.bot_check_ms = 2_000
+    answerer = make_answerer(packet, completer=None, allow_model=False)
+    result = handler.apply(page, packet, answerer, submit=True)
+    assert result.outcome == "blocked"
+    assert "Just a moment" in result.error and "jobagent login indeed" in result.error
+
+
+@pytest.mark.usefixtures("page")
+def test_a_bot_check_that_passes_goes_on_to_the_posting(page, packet):
+    packet.job["url"] = f"{WALL.as_uri()}?then={FIXTURE.as_uri()}"
+    handler = IndeedHandler()
+    handler.bot_check_ms = 8_000
+    answerer = make_answerer(packet, completer=None, allow_model=False)
+    result = handler.apply(page, packet, answerer, submit=False)
+    assert result.outcome == "dry_run", result.error

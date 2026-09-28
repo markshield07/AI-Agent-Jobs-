@@ -530,3 +530,25 @@ def test_a_board_search_place_is_kept_and_reopens_a_not_remote_skip(conn):
     assert job["found_near"] == "Orange County"
     assert job["status"] == "pending" and job["scored_at"] is None, "scored again next run"
     assert store.get_job(conn, kid)["status"] == "skipped", "other reasons stand"
+
+
+def test_a_posting_seen_again_from_the_boards_apply_filter_applies_on_the_board(conn):
+    posting = "https://www.indeed.com/viewjob?jk=abc"
+    first = RawJob(
+        url=posting,
+        title="Network Engineer",
+        company="Allbridge",
+        source="indeed",
+        apply_url="https://careers.allbridge.com/1",
+    )
+    jid = store.upsert_jobs(conn, [first]).new_ids[0]
+    again = RawJob(
+        url=posting,
+        title="Network Engineer",
+        company="Allbridge",
+        source="indeed",
+        apply_url=posting,
+        applies_on_board=True,
+    )
+    store.upsert_jobs(conn, [again])
+    assert store.get_job(conn, jid)["apply_url"] == posting

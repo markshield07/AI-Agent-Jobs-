@@ -38,6 +38,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 from jobagent.apply.browser.dom import current_values, discover_fields
 from jobagent.apply.browser.fill import (
+    bot_check,
     click_first_visible,
     detect_captcha,
     page_text,
@@ -103,6 +104,8 @@ class WizardHandler(BaseHandler):
     # Hosts that are still the site's own flow after the apply button.
     own_hosts: tuple[str, ...] = ()
     max_steps: int = 12
+    # How long a bot check ("Just a moment...") is given to pass on its own.
+    bot_check_ms: int = 20_000
     # Upload the tailored resume even where the site shows one already. True
     # where that one is the account's old resume (LinkedIn); False where it
     # is the one this run uploaded a step earlier (Workday).
@@ -171,6 +174,9 @@ class WizardHandler(BaseHandler):
         except Exception as exc:
             return HandlerResult(outcome="failed", error=f"could not open {url}: {_brief(exc)}")
         wait_settled(page, self.settle_ms)
+        wall = bot_check(page, self.bot_check_ms)
+        if wall:
+            return self._result(page, "blocked", screenshot_path, error=self.bot_check_hint(wall))
         click_first_visible(page, COOKIE_BUTTON_SELECTORS)
 
         # Before any sign-in: a job in the wrong place needs no account.
@@ -198,6 +204,9 @@ class WizardHandler(BaseHandler):
     def _steps(
         self, page: Any, answerer: Answerer, *, submit: bool, screenshot_path: str | None
     ) -> HandlerResult:
+        wall = bot_check(page, self.bot_check_ms)
+        if wall:
+            return self._result(page, "blocked", screenshot_path, error=self.bot_check_hint(wall))
         if self._left_site(page):
             return self._stop(
                 page,
@@ -359,6 +368,15 @@ class WizardHandler(BaseHandler):
     def sign_in_target(self) -> str:
         """What to sign in to again when the run meets a sign-in page."""
         return self.site
+
+    def bot_check_hint(self, wall: str) -> str:
+        label = site_info(self.site).label if self.site else "the site"
+        return (
+            f"{wall}. Run `jobagent login {self.site}` and pass {label}'s check in the "
+            "window it opens, then try again"
+            if self.site
+            else wall
+        )
 
     def login_hint(self) -> str:
         label = site_info(self.site).label

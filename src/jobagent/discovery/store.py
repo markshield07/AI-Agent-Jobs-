@@ -113,6 +113,14 @@ def upsert_jobs(
                 result.duplicates += 1
                 if job.found_near:
                     _vouch(conn, jid, job.found_near)
+                if job.applies_on_board:
+                    # Stored before from a search that took the company link as
+                    # where it applies; not yet tried, it applies on the board.
+                    conn.execute(
+                        """UPDATE jobs SET apply_url = ?, ats_type = ?
+                           WHERE id = ? AND status IN ('pending', 'queued')""",
+                        (job.apply_url, job.ats_type or detect_ats(job.apply_url or url), jid),
+                    )
     return result
 
 

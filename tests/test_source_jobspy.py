@@ -638,7 +638,7 @@ def test_on_site_only_asks_linkedin_for_easy_apply_and_indeed_both_ways():
     crit = criteria(jobspy_sites=["indeed", "linkedin", "zip_recruiter"], max_age_hours=72)
     place = _calls(crit, "Network Engineer", "Riverside, CA", on_site_only=True)
     assert {tuple(c["site_name"]) for c, _ in place} == {("indeed",), ("linkedin",)}
-    usual, apply_here = [c for c, _ in place if c["site_name"] == ["indeed"]]
+    apply_here, usual = [c for c, _ in place if c["site_name"] == ["indeed"]]
     assert "easy_apply" not in usual and usual["hours_old"] == 72
     assert usual["search_term"] == "Network Engineer"
     assert apply_here["easy_apply"] is True and apply_here["hours_old"] is None
@@ -648,7 +648,7 @@ def test_on_site_only_asks_linkedin_for_easy_apply_and_indeed_both_ways():
     assert linkedin["easy_apply"] is True and linkedin["hours_old"] == 72
 
     remote = _calls(crit, "Network Engineer", "Remote", on_site_only=True)
-    (filtered, flag), (apply_here, apply_flag) = [
+    (apply_here, apply_flag), (filtered, flag) = [
         (c, f) for c, f in remote if c["site_name"] == ["indeed"]
     ]
     assert "easy_apply" not in filtered and filtered["is_remote"] and flag, "the remote filter"
@@ -660,10 +660,25 @@ def test_on_site_only_asks_linkedin_for_easy_apply_and_indeed_both_ways():
 
 def test_an_indeed_apply_search_keeps_only_matching_titles():
     scraper = Scraper(
-        frame(row(job_url="https://www.indeed.com/viewjob?jk=u", title="Network Engineer")),
         frame(
             row(job_url="https://www.indeed.com/viewjob?jk=1", title="Wine & Spirits Sales"),
-            row(job_url="https://www.indeed.com/viewjob?jk=2", title="Senior Network Engineer"),
+            row(
+                job_url="https://www.indeed.com/viewjob?jk=2",
+                title="Senior Network Engineer",
+                job_url_direct="https://careers.example.com/2",
+            ),
+        ),
+        frame(
+            row(
+                job_url="https://www.indeed.com/viewjob?jk=u",
+                title="Network Engineer",
+                job_url_direct="https://careers.example.com/u",
+            ),
+            row(
+                job_url="https://www.indeed.com/viewjob?jk=2",
+                title="Senior Network Engineer",
+                job_url_direct="https://careers.example.com/2",
+            ),
         ),
     )
     found = list(
@@ -677,16 +692,20 @@ def test_an_indeed_apply_search_keeps_only_matching_titles():
         )
     )
     assert [j.url for j in found] == [
-        "https://www.indeed.com/viewjob?jk=u",
         "https://www.indeed.com/viewjob?jk=2",
+        "https://www.indeed.com/viewjob?jk=u",
     ]
+    by_url = {j.url: j.apply_url for j in found}
+    # Found by the Indeed Apply search: it applies on Indeed, whatever jobspy
+    # put as the direct link. Found only by the usual search: the link stands.
+    assert by_url["https://www.indeed.com/viewjob?jk=2"] == "https://www.indeed.com/viewjob?jk=2"
+    assert by_url["https://www.indeed.com/viewjob?jk=u"] == "https://careers.example.com/u"
 
 
 def test_an_indeed_apply_search_keeps_only_fresh_postings():
     now = datetime.datetime.now(datetime.UTC)
     old, new = (now - datetime.timedelta(days=30)).date(), now.date()
     scraper = Scraper(
-        frame(),
         frame(
             row(job_url="https://www.indeed.com/viewjob?jk=1", date_posted=old),
             row(job_url="https://www.indeed.com/viewjob?jk=2", date_posted=new),
@@ -698,4 +717,4 @@ def test_an_indeed_apply_search_keeps_only_fresh_postings():
         )
     )
     assert [j.url for j in found] == ["https://www.indeed.com/viewjob?jk=2"]
-    assert scraper.calls[1]["easy_apply"] is True
+    assert scraper.calls[0]["easy_apply"] is True

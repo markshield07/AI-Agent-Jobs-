@@ -297,6 +297,12 @@ _CONTACT_KEYS = frozenset(
 )
 
 
+def field_section(field: FormField) -> str:
+    """What part of an application a field is (contact, resume, links...),
+    read from its label where the page did not say."""
+    return _section(field)
+
+
 def _section(field: FormField) -> str:
     if field.section not in ("other", "questions"):
         return field.section

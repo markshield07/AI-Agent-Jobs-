@@ -1004,3 +1004,22 @@ def test_a_careers_page_that_leads_to_workday_goes_to_the_workday_handler():
     )
     assert _company_site_handler(via_indeed, generic, handlers).ats == "indeed"
     assert _company_site_handler(via_indeed, linkedin, handlers).ats == "generic"
+
+
+def test_a_queued_job_todays_rules_turn_away_is_skipped_before_any_browser(
+    conn, settings, ready_job
+):
+    from jobagent.discovery.criteria import SearchCriteria, save_criteria
+
+    save_criteria(
+        conn, SearchCriteria(titles=["Engineer"], locations=[], exclude_keywords=["TS/SCI"])
+    )
+    jid = ready_job()
+    conn.execute(
+        "UPDATE jobs SET description = 'Active TS/SCI clearance required.' WHERE id = ?", (jid,)
+    )
+    conn.commit()
+    handler = FakeHandler(_result("dry_run"))
+    record = _apply(conn, jid, settings, handler, mode="auto")
+    assert record["outcome"] == "skipped" and "excluded keyword: TS/SCI" in record["reason"]
+    assert handler.calls == []

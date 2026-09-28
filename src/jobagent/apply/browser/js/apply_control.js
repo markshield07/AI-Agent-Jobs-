@@ -19,7 +19,9 @@
   // A notice in a dialog that must be accepted to go on (ADP's privacy notice
   // after Apply). Cookie banners are dealt with before any of this.
   const GO_ON = /^((i\s+)?(consent|agree|accept)(\s+(&|and)\s+(continue|proceed))?|continue(\s+to\s+(the\s+)?application)?|proceed(\s+to\s+(the\s+)?application)?)[\s!.›»>→]*$/i;
-  const inDialog = (el) => !!el.closest('[role="dialog"], [aria-modal="true"], dialog, .modal');
+  // ADP's notice is an sdf-focus-pane with no dialog role, id "…privacy_dailog".
+  const inDialog = (el) => !!el.closest('[role="dialog"], [aria-modal="true"], dialog, .modal, '
+    + '[class*="modal" i], [id*="dialog" i], [id*="dailog" i], [class*="dialog" i], sdf-focus-pane');
   // Consent tools and search filters have Apply buttons of their own.
   const aside = (el) => !!el.closest('[id^="onetrust"], #onetrust-consent-sdk, [class*="cookie" i], '
     + '[role="search"], [id*="filter" i], [class*="filter" i]');

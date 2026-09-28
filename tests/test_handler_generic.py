@@ -202,3 +202,19 @@ def test_a_page_that_applies_only_through_indeed_goes_to_indeeds_posting(page, p
     )
     assert result.outcome == "blocked" and "Indeed Apply" in result.error
     assert result.external_url == "https://www.indeed.com/viewjob?jk=abc123"
+
+
+def test_a_phenom_step_takes_the_fields_and_the_resume_by_its_button(page, packet):
+    result = run_flow(page, packet, "phenom")
+    assert result.outcome == "dry_run", result.error
+    values = {f.key: f.value for f in result.filled}
+    assert values["firstName"] == "Mark" and values["email"] == "mark@example.com"
+    assert page.evaluate("() => window.__resume") == "mark-shield.pdf"
+    assert not any("api_key" in f.key for f in result.filled), "not LinkedIn's widget box"
+
+
+def test_a_form_with_nothing_filled_is_never_a_success(page, packet, monkeypatch):
+    monkeypatch.setattr(GenericHandler, "fill", lambda self, page, fields, plan: ([], [], []))
+    result = run_flow(page, packet, "link", submit=True)
+    assert result.outcome == "failed" and "could fill none of it" in result.error
+    assert page.evaluate("() => window.__submitted || null") is None

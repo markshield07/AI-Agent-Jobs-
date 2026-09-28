@@ -179,6 +179,16 @@ class BaseHandler:
 
         if any(n.required for n in needed):
             return self._result(page, "needs_input", screenshot_path, needed=needed, **common)
+        if not filled:
+            # Nothing went on the form: pressing its button would send it empty.
+            return self._result(
+                page,
+                "failed",
+                screenshot_path,
+                needed=needed,
+                error="found the form but could fill none of it; not sent",
+                **common,
+            )
         if not submit:
             return self._result(page, "dry_run", screenshot_path, needed=needed, **common)
 

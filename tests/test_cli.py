@@ -743,3 +743,57 @@ def test_login_that_times_out_saves_nothing(cli_settings, settings, monkeypatch,
     assert exit_.value.code == 2
     assert "not signed in after 300 seconds" in capsys.readouterr().err
     assert not sessions.session_path(settings, "indeed").exists()
+
+
+def test_keep_alive_visits_each_signed_in_company_and_keeps_what_it_left(
+    settings, monkeypatch, capsys
+):
+    from contextlib import contextmanager
+
+    from jobagent.apply import sessions
+    from jobagent.apply.handlers.workday import WorkdayHandler
+
+    def cookie(host, value):
+        return {"name": "PLAY_SESSION", "value": value, "domain": host, "path": "/", "expires": -1}
+
+    live, gone, lapsed = (f"{c}.wd5.myworkdayjobs.com" for c in ("live", "gone", "lapsed"))
+    for host in (live, gone, lapsed):
+        posting = f"https://{host}/careers/job/Remote/Engineer_R1"
+        sessions.save_workday_session(
+            settings, host, {"cookies": [cookie(host, "old")]}, url=posting
+        )
+    sessions.mark_workday_signed_out(settings, lapsed)
+
+    class Context:
+        def cookies(self):
+            return [cookie(live, "fresh")]
+
+    class Page:
+        context = Context()
+
+    class Browser:
+        @contextmanager
+        def new_page(self):
+            yield Page()
+
+    @contextmanager
+    def fake_open(settings_):
+        yield Browser()
+
+    visited = []
+
+    def fake_keep_alive(self, page, url, **kw):
+        visited.append(url)
+        return "signed_in" if live in url else "signed_out"
+
+    monkeypatch.setattr("jobagent.apply.browser.session.open_browser", fake_open)
+    monkeypatch.setattr(WorkdayHandler, "keep_alive", fake_keep_alive)
+    assert main._keep_workday_alive(settings, every_min=30, once=True) == 0
+    out = capsys.readouterr().out
+    assert len(visited) == 2, "a company whose sign-in has ended is left alone"
+    assert f"Workday {live}: still signed in; cookies refreshed." in out
+    assert f"Workday {gone}: the sign-in has ended" in out
+    assert f"Workday {lapsed}: needs a new sign-in" in out
+    assert sessions.load_workday_session(settings, live)[0]["value"] == "fresh"
+    assert sessions.workday_status(settings, live)["state"] == "signed_in"
+    assert sessions.workday_status(settings, gone)["state"] == "needs_sign_in"

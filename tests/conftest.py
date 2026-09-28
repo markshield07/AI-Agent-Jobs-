@@ -5,6 +5,21 @@ import pytest
 from jobagent.config import Settings
 from jobagent.db.database import open_database
 
+# What the test run itself needs from the environment; everything else under
+# JOBAGENT_ is the machine's own set-up (auto mode, a raised cap) and stays out.
+_TEST_ENV = ("JOBAGENT_BROWSER_EXECUTABLE", "JOBAGENT_REQUIRE_BROWSER")
+
+
+@pytest.fixture(autouse=True)
+def _no_local_setup(monkeypatch):
+    """Tests never read the checkout's .env or the shell's JOBAGENT_ settings."""
+    import os
+
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+    for name in list(os.environ):
+        if name.startswith("JOBAGENT_") and name not in _TEST_ENV:
+            monkeypatch.delenv(name)
+
 
 @pytest.fixture
 def settings(tmp_path) -> Settings:

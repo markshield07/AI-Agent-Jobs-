@@ -24,6 +24,7 @@ import threading
 import time
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -199,6 +200,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Workday: after signing in, don't run the applications waiting on it.",
     )
+    login.add_argument(
+        "--keep-alive",
+        action="store_true",
+        help="Workday: visit each company's Candidate Home with its saved sign-in every "
+        "--every minutes, to keep the sign-in from ending; runs until stopped.",
+    )
+    login.add_argument(
+        "--every", type=float, default=30, help="--keep-alive: minutes between visits (30)."
+    )
+    login.add_argument("--once", action="store_true", help="--keep-alive: one round, then stop.")
     login.add_argument("--forget", action="store_true", help="Delete the saved sign-in.")
     login.add_argument(
         "--timeout",
@@ -637,6 +648,8 @@ def _login_workday(args: argparse.Namespace, settings: Settings) -> int:
     from jobagent.apply import sessions
     from jobagent.apply.browser.session import BrowserUnavailable, interactive_login
 
+    if args.keep_alive:
+        return _keep_workday_alive(settings, every_min=args.every, once=args.once)
     if args.status and not args.url:
         hosts = sessions.workday_hosts(settings)
         if not hosts:
@@ -789,6 +802,63 @@ def _check_workday(
     except BrowserUnavailable as exc:
         print(f"Could not open a browser to check: {exc}", file=sys.stderr)
     return found
+
+
+def _keep_workday_alive(settings: Settings, *, every_min: float, once: bool) -> int:
+    """Visit each signed-in company's Candidate Home now and every `every_min`
+    minutes, keeping the cookies each visit leaves; a company whose sign-in
+    has ended is marked for a new one and left alone until it gets it."""
+    from jobagent.apply import sessions
+    from jobagent.apply.browser.session import BrowserUnavailable, open_browser
+    from jobagent.apply.handlers.workday import WorkdayHandler
+
+    if every_min < 5:
+        print("--every must be at least 5 minutes.", file=sys.stderr)
+        return 2
+    while True:
+        stamp = datetime.now().strftime("%H:%M")
+        hosts = [
+            h
+            for h in sessions.workday_hosts(settings)
+            if sessions.workday_status(settings, h)["saved"]
+        ]
+        if not hosts:
+            print(f"{stamp} Workday: no company sign-ins saved.")
+        try:
+            with open_browser(settings) as browser:
+                for host in hosts:
+                    status = sessions.workday_status(settings, host)
+                    if status["state"] == "needs_sign_in":
+                        print(
+                            f"{stamp} Workday {host}: needs a new sign-in: "
+                            f"{status['login_command']}"
+                        )
+                        continue
+                    if not status["url"]:
+                        print(f"{stamp} Workday {host}: no posting on file to find its site by.")
+                        continue
+                    with browser.new_page() as page:
+                        state = WorkdayHandler().keep_alive(page, status["url"])
+                        kept = state == "signed_in" and sessions.refresh_workday_session(
+                            settings, host, {"cookies": page.context.cookies()}
+                        )
+                    if state == "signed_out":
+                        sessions.record_workday_check(settings, host, "signed_out")
+                        print(
+                            f"{stamp} Workday {host}: the sign-in has ended; sign in again: "
+                            f"{status['login_command']}"
+                        )
+                    elif kept:
+                        print(f"{stamp} Workday {host}: still signed in; cookies refreshed.")
+                    else:
+                        print(
+                            f"{stamp} Workday {host}: could not tell ({state}); tried again later."
+                        )
+        except BrowserUnavailable as exc:
+            print(f"Could not open a browser: {exc}", file=sys.stderr)
+        if once:
+            return 0
+        time.sleep(every_min * 60)
 
 
 def _run_waiting(settings: Settings, job_ids: list[str], *, host: str | None = None) -> int:

@@ -263,6 +263,40 @@ _CLOSED = (
 )
 
 
+# Candidate Home, signed in: the person's own applications.
+_HOME = re.compile(r"\bmy applications\b|\bcandidate home\b|\bactive applications\b", re.I)
+_LOCALE = re.compile(r"^[a-z]{2}(?:-[A-Za-z]{2})?$")
+
+
+def _home_shown(page: Any) -> bool:
+    return bool(_HOME.search(page_text(page)))
+
+
+def candidate_home_url(url: str) -> str:
+    """The company's Candidate Home, from one of its postings:
+    https://acme.wd5.myworkdayjobs.com/en-US/acmecareers/job/... ->
+    https://acme.wd5.myworkdayjobs.com/en-US/acmecareers/userHome."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return url
+    parts = [p for p in parsed.path.split("/") if p]
+    site: list[str] = []
+    for part in parts:
+        if part in ("job", "details", "userHome", "apply"):
+            break
+        site.append(part)
+        if not _LOCALE.match(part):
+            break
+    return f"{parsed.scheme}://{parsed.netloc}/{'/'.join(site + ['userHome'])}"
+
+
+# What a posting says once an application to it has gone in.
+_APPLIED = re.compile(
+    r"you applied for this job on[^.\n]*|you(?:'ve| have) (?:already )?applied[^.\n]*",
+    re.IGNORECASE,
+)
+
+
 @dataclass(slots=True)
 class _Widget:
     kind: str  # dropdown, prompt or date
@@ -471,6 +505,36 @@ class WorkdayHandler(WizardHandler):
                 except Exception:
                     pass
 
+    def keep_alive(self, page: Any, url: str, *, timeout_s: float | None = None) -> str:
+        """Visit the company's Candidate Home with the saved sign-in, as a
+        person checking their applications would: signed_in (the visit may
+        extend the session; the caller keeps the cookies it left), signed_out,
+        unknown, or timed_out. Nothing is pressed."""
+        budget = self.check_timeout_s if timeout_s is None else timeout_s
+        self._deadline = time.monotonic() + budget
+        self.settle_ms = min(self.settle_ms, 4_000)
+        try:
+            page.set_default_timeout(10_000)
+        except Exception:
+            pass
+        home = candidate_home_url(url)
+        try:
+            page.goto(home, wait_until="domcontentloaded", timeout=self._left_ms(30_000))
+            wait_settled(page, self._left_ms(self.settle_ms))
+            click_first_visible(page, COOKIE_BUTTON_SELECTORS)
+            # Candidate Home draws its sign-in or its list a moment after load.
+            self._wait_until(page, lambda: self.signed_out(page) or _home_shown(page))
+            if self.signed_out(page):
+                return "signed_out"
+            if _home_shown(page):
+                return "signed_in"
+            return "timed_out" if self._late() else "unknown"
+        except Exception as exc:
+            log.info("workday: could not open %s: %s", home, exc)
+            return "timed_out" if self._late() else "unknown"
+        finally:
+            self._deadline = None
+
     def _late(self) -> bool:
         return self._deadline is not None and time.monotonic() >= self._deadline
 
@@ -484,6 +548,45 @@ class WorkdayHandler(WizardHandler):
         now = time.monotonic()
         self.timings.append((stage, now - began))
         return now
+
+    def _confirmation(self, page: Any, before_url: str, before_text: str) -> str | None:
+        """Workday's own word that the application went in.
+
+        Live, Submit greys out while the application is sent, sometimes for a
+        long while, and the thank-you page may never come. So: the page's own
+        confirmation, waited for; else the posting itself, which says "You
+        applied for this job on <date>" once it is in."""
+        base = super()._confirmation
+
+        def settled() -> bool:
+            return bool(base(page, before_url, before_text) or self._step_errors(page, None))
+
+        self._wait_until(page, settled)
+        found = base(page, before_url, before_text)
+        if found or self._step_errors(page, None):
+            return found
+        return self._applied_on_posting(page)
+
+    def _applied_on_posting(self, page: Any) -> str | None:
+        if not self._posting:
+            return None
+        try:
+            other = page.context.new_page()
+        except Exception:
+            return None
+        try:
+            other.goto(self._posting, wait_until="domcontentloaded", timeout=30_000)
+            wait_settled(other, self.settle_ms)
+            found = _APPLIED.search(page_text(other))
+        except Exception as exc:
+            log.info("workday: could not reopen the posting to confirm: %s", exc)
+            found = None
+        finally:
+            try:
+                other.close()
+            except Exception:
+                pass
+        return f"the posting now says: {found.group(0).strip()}" if found else None
 
     def login_hint(self) -> str:
         host = urlparse(self._posting).hostname or ""

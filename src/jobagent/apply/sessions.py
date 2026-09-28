@@ -325,6 +325,22 @@ def record_workday_check(settings: Settings, host: str, state: str) -> None:
     _write_private(workday_session_path(settings, host), payload)
 
 
+def refresh_workday_session(settings: Settings, host: str, state: dict[str, Any]) -> bool:
+    """Keep the cookies a signed-in visit to the company's site left, and
+    record the visit as a check that the sign-in works. The time of the
+    sign-in itself (saved_at) stays. False when the browser held none."""
+    payload = _workday_payload(settings, host)
+    cookies = workday_cookies(state, host)
+    if not payload or not cookies:
+        return False
+    payload["cookies"] = cookies
+    payload["checked_at"] = _now_exact()
+    payload["checked"] = "signed_in"
+    payload["refreshed_at"] = payload["checked_at"]
+    _write_private(workday_session_path(settings, host), payload)
+    return True
+
+
 def workday_waiting(settings: Settings, host: str) -> list[str]:
     """Jobs whose application stopped at this company's sign-in page."""
     return [str(j) for j in _workday_payload(settings, host).get("waiting") or []]

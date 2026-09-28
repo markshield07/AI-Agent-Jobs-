@@ -30,6 +30,8 @@
     invalid      Application Questions will not save and shows an error
     closed       the posting no longer takes applications and has no Apply button
     unconfirmed  Submit shows nothing afterwards
+    greyed       Submit greys out and nothing shows, but the posting, opened again
+                 (with the same ?token=), says "You applied for this job on ...".
     draft        an earlier run saved a draft: the posting offers Continue Application, which
                  opens the first unsaved step (My Information) with no start choice
     stuck        Apply Manually leaves the loading page up for good
@@ -64,18 +66,19 @@
   <h2 data-automation-id="jobPostingHeader">Network Engineering Manager</h2>
   <div>Remote, USA</div>
   <div data-variant="closed"><p>This job posting is no longer accepting applications.</p></div>
-  <div data-variant=",manual,signed_out,needs_input,invalid,unconfirmed,stuck">
+  <div data-variant=",manual,signed_out,needs_input,invalid,unconfirmed,stuck,greyed">
     <a data-automation-id="adventureButton" role="button" href="#apply">Apply</a>
   </div>
   <div data-variant="draft">
     <a href="#apply" role="button" data-automation-id="continueButton">Continue Application</a>
   </div>
+  <p id="applied-note" hidden></p>
   <p>Lead the team that runs our warehouse robot network.</p>
 </section>
 
 <div id="start" role="dialog" hidden>
   <h3>Start Your Application</h3>
-  <div data-variant=",signed_out,needs_input,invalid,unconfirmed">
+  <div data-variant=",signed_out,needs_input,invalid,unconfirmed,greyed">
     <a data-automation-id="autofillWithResume" role="button" href="#autofill">Autofill with Resume</a>
   </div>
   <a data-automation-id="applyManually" role="button" href="#manual">Apply Manually</a>
@@ -447,10 +450,18 @@
 <script>
 (function () {
   var variant = new URLSearchParams(location.search).get('variant') || '';
+  var token = new URLSearchParams(location.search).get('token') || '';
   Array.prototype.forEach.call(document.querySelectorAll('[data-variant]'), function (el) {
     var wanted = el.getAttribute('data-variant').split(',');
     if (wanted.indexOf(variant) < 0) el.parentNode.removeChild(el);
   });
+  var applied = null;
+  try { applied = token && localStorage.getItem('applied:' + token); } catch (e) {}
+  if (applied) {
+    var note = document.getElementById('applied-note');
+    note.textContent = 'You applied for this job on ' + applied + '.';
+    note.hidden = false;
+  }
   window.__steps = [];
   window.__answers = {};
   window.__uploads = 0;
@@ -664,6 +675,13 @@
     if (from === 'review') {
       window.__submitted = true;
       if (variant === 'unconfirmed') { flow.innerHTML = ''; return; }
+      if (variant === 'greyed') {
+        // Live: Submit greys out and stays so; only the posting later says it went in.
+        var submit = flow.querySelector('[data-automation-id="pageFooterNextButton"]');
+        if (submit) submit.disabled = true;
+        try { localStorage.setItem('applied:' + token, '09/28/2026'); } catch (e) {}
+        return;
+      }
       show('sent');
       return;
     }

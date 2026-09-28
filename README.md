@@ -274,6 +274,21 @@ dashboard say which company and how many applications are waiting, and the
 next `jobagent login workday <posting URL>` runs them straight after you
 press Enter (`--no-retry` to leave them).
 
+To keep sign-ins from ending between runs, leave this running alongside
+`jobagent run`:
+
+```
+jobagent login workday --keep-alive            # every 30 minutes (--every N), until stopped
+```
+
+It opens each signed-in company's Candidate Home (their "My Applications"
+page) the way you would, presses nothing, and keeps the cookies the visit
+leaves. A company whose sign-in has ended anyway is marked for a new one.
+
+After Submit, Workday may grey the button out and show nothing more; the
+agent then opens the posting again and counts "You applied for this job on
+..." as the confirmation.
+
 The agent presses Apply, picks **Autofill with Resume** (Workday reads the
 tailored resume into My Experience) or **Apply Manually** where that is all
 there is, and then goes step by step: My Information, My Experience,

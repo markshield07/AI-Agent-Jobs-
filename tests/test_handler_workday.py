@@ -461,6 +461,16 @@ def test_auto_submits_and_reads_the_confirmation(page, packet, tmp_path):
 
 
 @pytest.mark.usefixtures("page")
+def test_a_submit_the_posting_then_calls_applied_is_submitted(page, packet):
+    """Live, CrowdStrike greyed Submit out and showed nothing, yet it had gone in."""
+    import uuid
+
+    result = run(page, packet, submit=True, variant=f"greyed&token={uuid.uuid4().hex}")
+    assert result.outcome == "submitted", result.error
+    assert result.confirmation == "the posting now says: You applied for this job on 09/28/2026"
+
+
+@pytest.mark.usefixtures("page")
 def test_submit_with_no_confirmation_is_unconfirmed(page, packet):
     result = run(page, packet, submit=True, variant="unconfirmed")
     assert js(page, "__submitted") is True
@@ -527,6 +537,44 @@ def test_the_sign_in_check_gives_up_on_time(page):
         "open the posting",
         "press Apply and Apply Manually",
     ]
+
+
+@pytest.mark.parametrize(
+    ("posting", "home"),
+    [
+        (
+            "https://crowdstrike.wd5.myworkdayjobs.com/crowdstrikecareers/job/USA---Remote/"
+            "Sr-Manager_R29587",
+            "https://crowdstrike.wd5.myworkdayjobs.com/crowdstrikecareers/userHome",
+        ),
+        (
+            "https://acme.wd1.myworkdayjobs.com/en-US/External/details/Engineer_R1?q=1",
+            "https://acme.wd1.myworkdayjobs.com/en-US/External/userHome",
+        ),
+    ],
+)
+def test_candidate_home_is_found_from_a_posting(posting, home):
+    from jobagent.apply.handlers.workday import candidate_home_url
+
+    assert candidate_home_url(posting) == home
+
+
+@pytest.mark.usefixtures("page")
+@pytest.mark.parametrize(
+    ("body", "state"),
+    [
+        ("<h2>Candidate Home</h2><h3>My Applications</h3><p>Active (1)</p>", "signed_in"),
+        ('<div data-automation-id="signInContent"><input type="password"></div>', "signed_out"),
+        ("<p>Something went wrong.</p>", "unknown"),
+    ],
+)
+def test_keep_alive_reads_candidate_home(page, tmp_path, body, state):
+    home = tmp_path / "home.html"
+    home.write_text(f"<!doctype html><html><body>{body}</body></html>")
+    handler = WorkdayHandler()
+    handler.step_timeout_ms = 1_000
+    handler.poll_ms = 50
+    assert handler.keep_alive(page, home.as_uri(), timeout_s=10) == state
 
 
 def test_the_login_hint_names_the_companys_site():

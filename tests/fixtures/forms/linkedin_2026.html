@@ -19,6 +19,15 @@
     needs_input  a question nobody on file answers
     external     no Easy Apply: "Apply on company website" through /safety/go/
     urnreview    Review shows the city as LinkedIn's id, urn:li:geo:103033862
+    radios       Luxoft's two Yes/No questions as the Mac captured them on 2026-09-28
+                 (capture-linkedin-radios-luxoft.html): the question is a <p> before a
+                 <fieldset role="radiogroup">, each choice a <div role="radio"> whose
+                 aria-label is the question, holding a named radio with an empty
+                 <label for> and the option's text in a <p> beside it
+    commute      Insight Global's "Are you comfortable commuting to this job's location? *"
+    unstarred    a Yes/No question with no star that the form will not leave empty
+    savedresume  a resume kept on LinkedIn from before, a choice labelled only by its file
+                 name (capture-linkedin-resume-radio.html), already selected
 -->
 <style>
   body { font-family: sans-serif; margin: 0; }
@@ -55,6 +64,21 @@
       return '<input ' + (required ? 'required="" ' : '') + 'id="' + id + '" dir="auto" type="text" value="' + value + '">';
     });
   };
+  // LinkedIn's Yes/No question, as captured from Luxoft's.
+  var radios = function (gid, question, star) {
+    var opt = function (id, text) {
+      return '<div role="radio" tabindex="0" aria-label="' + question + ' " aria-checked="false"><div><div>' +
+        '<input id="' + id + '" type="radio" name="radio-group-' + gid + '"><label for="' + id + '"></label></div>' +
+        '<div><p>' + text + '</p></div></div></div>';
+    };
+    return '<div componentkey="easyApplyFieldFocus_ea_validation_p2_0_' + gid.replace(/\W/g, '') + '"><p>' + question + (star ? ' *' : '') + '</p>' +
+      '<fieldset aria-describedby="error-message-' + gid + '" role="radiogroup" data-q="' + gid + '"><div>' +
+      opt(gid + 'y', 'Yes') + opt(gid + 'n', 'No') + '</div></fieldset><p id="error-message-' + gid + '"></p></div>';
+  };
+  var chosenIn = function (fs) {
+    var on = fs.querySelector('input:checked');
+    return on ? on.closest('[role="radio"]').innerText.trim() : null;
+  };
   var button = function (label) {
     return '<button type="button" componentkey="k-' + label.replace(/\W/g, '') + '"><span><span>' + label + '</span></span></button>';
   };
@@ -80,7 +104,8 @@
       // an "Upload resume" button with no file box in the window until pressed.
       return '<div><div><p>Resume*</p><p>Select or upload a resume in DOC, DOCX, or PDF format that is less than 2MB</p></div>' +
         '<div><fieldset aria-describedby="error-message-_r_11_" role="radiogroup"><div><div id="easyApplyUploadedResumeRef"' +
-        ' componentkey="easyApplyUploadedResumeRef">' + (window.__resume ? chosen(window.__resume) : '') + '</div></div></fieldset>' +
+        ' componentkey="easyApplyUploadedResumeRef">' + (window.__resume ? chosen(window.__resume) : '') + '</div>' +
+        (variant === 'savedresume' ? kept_resume() : '') + '</div></fieldset>' +
         '<div><button type="button" componentkey="up-1"><span><span>Upload resume</span></span></button></div>' +
         '<p id="resume-error"></p></div></div>';
     } },
@@ -93,7 +118,13 @@
         }) +
         (variant === 'needs_input'
           ? text('_r_t_', 'NUMERIC', 'How many years of work experience do you have with Juniper Mist?*', '', true)
-          : '');
+          : '') +
+        (variant === 'radios'
+          ? radios('_r_j_', 'Do you have CISCO &amp; Load Balancing (F5) listed in your resume?', true) +
+            radios('_r_m_', 'Do you have Team Lead or Technical Lead experience listed in your resume?', true)
+          : '') +
+        (variant === 'commute' ? radios('_r_c1_', 'Are you comfortable commuting to this job\'s location?', true) : '') +
+        (variant === 'unstarred' ? radios('_r_u_', 'Do you have a valid driver\'s license?', false) : '');
     } },
     { name: 'review', title: 'Review your application', body: function () {
       var city = (kept.contact && kept.contact.city) || '';
@@ -101,6 +132,13 @@
       return '<p>Check your answers before you send them.</p><p>Location (city)</p><p>' + city + '</p>';
     } },
   ];
+  var SAVED = 'd8763d2995d3d0ac-87.pdf';
+  var kept_resume = function () {
+    var on = !window.__resume;
+    return '<div><div role="button" tabindex="0"><div><p>PDF</p></div><div><p><span>' + SAVED + '</span></p><p>9/28/2026</p></div></div>' +
+      '<div role="radio" tabindex="0" aria-label="' + SAVED + '" aria-checked="' + on + '"><div aria-label="' + SAVED + '">' +
+      '<input id="_r_e_" type="radio"' + (on ? ' checked' : '') + ' name="radio-group-_r_d_"><label for="_r_e_"></label></div></div></div>';
+  };
   var chosen = function (name) {
     return '<label><input type="radio" name="resume" checked> ' + name + '</label>';
   };
@@ -152,31 +190,60 @@
               window.__resume = name;
               var ref = document.getElementById('easyApplyUploadedResumeRef');
               if (ref) ref.innerHTML = chosen(name);
+              var old = document.getElementById('_r_e_');
+              if (old) { old.checked = false; old.closest('[role="radio"]').setAttribute('aria-checked', 'false'); }
             }, 600);
           });
           box.click();
         });
       });
+    // Like LinkedIn's: pressing the drawn choice selects the input inside it.
+    Array.from(dialog.querySelectorAll('[role="radio"]')).forEach(function (r) {
+      r.addEventListener('click', function () {
+        var box = r.querySelector('input');
+        if (box) box.checked = true;
+        sync(r.closest('fieldset'));
+      });
+    });
+    Array.from(dialog.querySelectorAll('fieldset input[type="radio"]')).forEach(function (box) {
+      box.addEventListener('change', function () { sync(box.closest('fieldset')); });
+    });
     Array.from(dialog.querySelectorAll('footer button')).forEach(function (b) {
       b.addEventListener('click', function () { step(b.textContent.trim()); });
+    });
+  };
+  var sync = function (fs) {
+    if (!fs) return;
+    fs.querySelectorAll('[role="radio"]').forEach(function (r) {
+      var box = r.querySelector('input');
+      r.setAttribute('aria-checked', box && box.checked ? 'true' : 'false');
     });
   };
   var step = function (label) {
     if (label === 'Back') { at -= 1; draw(); return; }
     if (label === 'Submit application') {
-      window.__submitted = { contact: kept.contact, questions: kept.questions, resume: window.__resume };
+      window.__submitted = { contact: kept.contact, questions: kept.questions, resume: kept.resume };
       dialog.innerHTML = '<div data-testid="dialog-content"><h2>Your application was sent to Stand8 Technology Consulting</h2>' +
         '<button type="button">Done</button></div>';
       return;
     }
     var missing = Array.from(dialog.querySelectorAll('[required]')).filter(function (el) { return !el.value; });
     if (missing.length) return;  // a required box left empty: the step stays
-    if (pages[at].name === 'resume' && !window.__resume) {
+    // Every Yes/No question must be answered, starred or not.
+    var blank = Array.from(dialog.querySelectorAll('fieldset[data-q]')).filter(function (fs) { return !chosenIn(fs); });
+    blank.forEach(function (fs) { document.getElementById('error-message-' + fs.getAttribute('data-q')).textContent = 'This field is required'; });
+    if (blank.length) return;
+    var saved = document.getElementById('_r_e_');
+    if (pages[at].name === 'resume' && !window.__resume && !(saved && saved.checked)) {
       document.getElementById('resume-error').textContent = 'A resume is required';
       return;
     }
     if (pages[at].name === 'contact') kept.contact = { first: val('_r_9_'), last: val('_r_b_'), phone: val('_r_e_'), email: val('_r_f_'), city: val('_r_k_') };
-    if (pages[at].name === 'questions') kept.questions = { auth: val('_r_q_'), sponsor: val('_r_s_'), mist: val('_r_t_') };
+    if (pages[at].name === 'resume') kept.resume = window.__resume || SAVED;
+    if (pages[at].name === 'questions') {
+      kept.questions = { auth: val('_r_q_'), sponsor: val('_r_s_'), mist: val('_r_t_') };
+      Array.from(dialog.querySelectorAll('fieldset[data-q]')).forEach(function (fs) { kept.questions[fs.getAttribute('data-q')] = chosenIn(fs); });
+    }
     at += 1;
     draw();
   };

@@ -70,13 +70,17 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
         r"\b(?:hear|heard|find\s+out|learn|found\s+out)\s+about\b|\bhow did you find\b",
     ),
     # Never guessed. These come from the answer bank or from the user.
+    # Sponsorship before authorization: "require work authorization
+    # sponsorship?" asks about sponsorship, and the two answers are opposite.
+    # "Authorized to work ... without sponsorship?" is still about authorization.
+    ("work_authorization", r"\bwithout\b[^?]{0,60}\bsponsor"),
+    ("visa_sponsorship", r"\bsponsor"),
     (
         "work_authorization",
         r"\bauthori[sz]ed\s+to\s+work\b|\blegally\s+(?:able|eligible|authori[sz]ed|permitted)\b"
         r"|\bwork\s+authori[sz]ation\b|\bright\s+to\s+work\b|\beligible\s+to\s+work\b"
         r"|\bwork\s+permit\b",
     ),
-    ("visa_sponsorship", r"\bsponsor"),
     ("citizenship", r"\bcitizen"),
     (
         "salary_expectation",
@@ -119,6 +123,10 @@ SENSITIVE: frozenset[str] = frozenset(
         "referral",
     }
 )
+_QUESTION_ORDER = tuple(
+    [(key, pattern) for key, pattern in _COMPILED if key in SENSITIVE]
+    + [(key, pattern) for key, pattern in _COMPILED if key not in SENSITIVE]
+)
 NEVER_GUESSED = "never guessed: answer it once and it is kept"
 NOT_ON_FILE = "no answer on file"
 NOT_GROUNDED = "the model could not answer it from the facts on file"
@@ -154,6 +162,14 @@ _MARKETING = re.compile(
     r"|\bfuture\s+(?:opportunit|roles|positions)|\bkeep\s+(?:me|my)\b|\bcontact\s+me\b",
     re.IGNORECASE,
 )
+# Legal attestations a form asks as a question: answered once by the person,
+# never drafted, whatever the model would make of them.
+_ATTESTATION = re.compile(
+    r"\bconflicts?\s+of\s+interest\b|\boutside\s+(?:employment|business|activit)"
+    r"|\bnon[-\s]?(?:compete|solicit)|\bconvicted\b|\bfelony\b|\bcriminal\b"
+    r"|\backnowledg|\battest\b|\bcertify\b",
+    re.IGNORECASE,
+)
 # "Why are you interested in working for us?": what the cover letter says,
 # in words already checked against the facts.
 _WHY_US = re.compile(
@@ -182,15 +198,33 @@ def question_key(label: str) -> str:
 
 
 def canonical_key(field: FormField) -> str | None:
-    """The canonical key `field` asks for, from its label first, then its name."""
+    """The canonical key `field` asks for, from its label first, then its name.
+
+    A question (a label with a "?" or more than a few words) is read by its
+    first sentence only, and the never-guessed keys are tried on it first:
+    "Are you eligible to work in the country ...?" is about work
+    authorization, not the country, and a conflict-of-interest question that
+    mentions a start date in its fine print is not asking for one.
+    """
     for text in (field.label, field.name or "", field.key):
         if not text:
             continue
-        haystack = text.replace("_", " ").replace("-", " ")
-        for key, pattern in _COMPILED:
+        haystack = _lead(text).replace("_", " ").replace("-", " ")
+        order = _QUESTION_ORDER if _is_question(text) else _COMPILED
+        for key, pattern in order:
             if pattern.search(haystack):
                 return key
     return None
+
+
+def _is_question(text: str) -> bool:
+    return "?" in text or len(text.split()) > 6
+
+
+def _lead(text: str) -> str:
+    """The first sentence of a label: up to its first "?", at most 200 characters."""
+    end = text.find("?")
+    return text[: end + 1 if end >= 0 else 200][:200]
 
 
 def answer_key_for(field: FormField) -> str:
@@ -433,7 +467,7 @@ class _Planner:
             if not self._apply_value(field, banked, "answer_bank"):
                 self._need(field, NO_OPTION)
             return
-        if key in SENSITIVE:
+        if key in SENSITIVE or _ATTESTATION.search(field.label):
             self._need(field, NEVER_GUESSED)
             return
         if key == "heard_about":

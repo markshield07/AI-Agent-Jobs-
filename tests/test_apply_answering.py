@@ -490,3 +490,61 @@ def test_why_this_company_is_answered_from_the_cover_letter(packet, label, from_
         assert sources(plan) == {"why": "cover_letter"}
     else:
         assert "why" not in fills(plan)
+
+
+@pytest.mark.parametrize(
+    ("label", "key"),
+    [
+        (
+            "Are you eligible to work in the country in which this position is located?",
+            "work_authorization",
+        ),
+        (
+            "Will you now or in the future require work authorization sponsorship?",
+            "visa_sponsorship",
+        ),
+        (
+            "Conflict of Interest If hired, do you expect that you will engage in any outside "
+            "employment that could conflict with our business? You do not need to disclose an "
+            "activity that will end before your start date.",
+            None,
+        ),
+        ("Country", "country"),
+        ("Address Line 1", "address"),
+        (
+            "Are you legally authorized to work in the United States without the need for "
+            "sponsorship?",
+            "work_authorization",
+        ),
+        ("Will you now or in the future require visa sponsorship?", "visa_sponsorship"),
+    ],
+)
+def test_long_questions_are_read_by_their_first_sentence(label, key):
+    assert canonical_key(F("k", label)) == key
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Conflict of Interest If hired, do you expect that you will engage in any outside "
+        "employment that could conflict with our business?",
+        "Acknowledgment: CrowdStrike is an AI-native company. Do you agree to these terms?",
+        "Are you bound by a non-compete agreement?",
+    ],
+)
+def test_legal_attestations_are_never_drafted(packet, label):
+    field = FormField(key="k", label=label, kind="select", required=True, options=["Yes", "No"])
+    calls = []
+    plan = answering.make_answerer(
+        packet, completer=lambda *a, **k: calls.append(a), allow_model=True
+    )([field])
+    assert calls == [], "never sent to the model"
+    assert [n.reason for n in plan.needed] == [answering.NEVER_GUESSED]
+    assert plan.needed[0].answer_key.startswith("q:")
+
+
+def test_an_attestation_answered_once_is_kept(packet):
+    label = "Conflict of Interest If hired, do you expect outside employment?"
+    packet.answers[answering.question_key(label)] = "No"
+    field = FormField(key="k", label=label, kind="select", required=True, options=["Yes", "No"])
+    assert fills(plan_fills([field], packet)) == {"k": "No"}

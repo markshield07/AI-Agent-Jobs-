@@ -389,6 +389,7 @@ class _Planner:
         self.plan = FillPlan()
         self.open: list[FormField] = []  # for the model, once, at the end
         self.used_links: set[str] = set()  # a link goes on the form once
+        self.agree_to_terms = False  # auto mode: a required terms box is agreed to
 
     # -- entry -----------------------------------------------------------
 
@@ -560,6 +561,12 @@ class _Planner:
         blanket = self._bank(CONSENT_KEY)
         if blanket is not None and _as_bool(blanket) is not None:
             self._fill(field, _as_bool(blanket), "answer_bank")
+        elif field.required and self.agree_to_terms:
+            self._fill(field, True, "auto_mode")
+            self.plan.notes.append(
+                f"agreed to {field.label!r} because the apply mode is auto; "
+                f"answer {CONSENT_KEY} No to stop agreeing to terms"
+            )
         elif field.required:
             self._need(field, NEVER_GUESSED)
         else:
@@ -859,17 +866,34 @@ def plan_fills(
     *,
     completer: Completer | None = None,
     allow_model: bool = True,
+    agree_to_terms: bool = False,
 ) -> FillPlan:
-    """The plan for `fields`: what goes where, from which source, and what is missing."""
-    return _Planner(packet, completer, allow_model).run(list(fields))
+    """The plan for `fields`: what goes where, from which source, and what is missing.
+
+    `agree_to_terms` (auto mode, which the person chose so applications go all
+    the way) ticks a required terms box when `consent_terms` has no answer,
+    as source auto_mode with a note, instead of stopping to ask."""
+    planner = _Planner(packet, completer, allow_model)
+    planner.agree_to_terms = agree_to_terms
+    return planner.run(list(fields))
 
 
 def make_answerer(
-    packet: Packet, *, completer: Completer | None = None, allow_model: bool = True
+    packet: Packet,
+    *,
+    completer: Completer | None = None,
+    allow_model: bool = True,
+    agree_to_terms: bool = False,
 ) -> Answerer:
     """Bind the packet and the model, so a handler only ever passes the fields."""
 
     def answer(fields: list[FormField]) -> FillPlan:
-        return plan_fills(fields, packet, completer=completer, allow_model=allow_model)
+        return plan_fills(
+            fields,
+            packet,
+            completer=completer,
+            allow_model=allow_model,
+            agree_to_terms=agree_to_terms,
+        )
 
     return answer

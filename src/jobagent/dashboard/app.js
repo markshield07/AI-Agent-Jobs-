@@ -380,7 +380,9 @@
         el('table', { class: 'table compact' }, el('tbody', {}, filled.map((f) =>
           el('tr', {}, el('td', {}, f.label || f.key),
             el('td', {}, f.file_path ? f.file_path.split('/').pop() : Array.isArray(f.value) ? f.value.join(', ') : String(f.value ?? ''),
-              f.source === 'prefilled' ? el('span', { class: 'job-meta' }, ' (from your profile)') : null)))))));
+              f.source === 'prefilled' ? el('span', { class: 'job-meta' }, ' (from your profile)')
+                : f.source === 'auto_mode' ? el('span', { class: 'job-meta' }, ' (agreed because you chose auto mode)')
+                : null)))))));
     }
 
     if (app.screenshot_path) {

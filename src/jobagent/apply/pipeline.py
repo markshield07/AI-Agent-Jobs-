@@ -277,7 +277,13 @@ def apply_to_job(
     notes: list[str] = []
     completer = _resolve_completer(settings, completer, notes)
     packet = build_packet(conn, job, variant, settings)
-    answerer = make_answerer(packet, completer=completer, allow_model=settings.apply_model_answers)
+    answerer = make_answerer(
+        packet,
+        completer=completer,
+        allow_model=settings.apply_model_answers,
+        # Auto mode is the person's own choice to send applications all the way.
+        agree_to_terms=mode == "auto",
+    )
     application_id = store.get_or_create_application(
         conn,
         job_id,

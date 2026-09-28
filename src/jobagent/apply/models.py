@@ -58,6 +58,7 @@ FillSource = Literal[
     "default",
     "skip",
     "prefilled",  # the site filled it from the signed-in account; left as it was
+    "auto_mode",  # agreed to a required terms box because the person chose auto mode
 ]
 
 MODES: tuple[str, ...] = ("dry_run", "review", "auto")

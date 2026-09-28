@@ -286,9 +286,12 @@ search box, dates in three boxes) and fills them the way you would. "How did
 you hear about us?" gets the board the job was found on; phone device type is
 Mobile; the self-identify form is signed with your name and today's date; the
 demographic questions are declined unless your answer bank says otherwise.
-A box agreeing to a company's terms or privacy policy is never ticked for you:
-the first form that has one stops and asks, and your answer (`consent_terms`)
-is used on every form after. "Why are you interested in working for us?" gets
+A box agreeing to a company's terms or privacy policy is never ticked by
+accident: in `dry_run` or `review` the first form that has a required one stops
+and asks, and your answer (`consent_terms`) is used on every form after. In
+`auto` mode, which sends applications all the way, a required box is ticked
+unless `consent_terms` is No, and the application shows it as "agreed because
+you chose auto mode". "Why are you interested in working for us?" gets
 your cover letter without its greeting and sign-off.
 
 Workday saves a draft at every "Save and Continue". A dry run therefore leaves

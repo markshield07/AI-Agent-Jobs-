@@ -589,3 +589,19 @@ def test_an_accommodation_request_is_not_the_disability_self_id(packet):
 )
 def test_a_form_answer_takes_the_letter_without_greeting_or_sign_off(letter, body):
     assert answering.letter_body(letter) == body
+
+
+def test_auto_mode_agrees_to_required_terms_and_says_so(packet):
+    fields = [
+        F("privacy", "I have read and agree to the privacy policy", kind="checkbox", required=True),
+        F("certify", "I certify that the information above is accurate", kind="checkbox"),
+    ]
+    plan = plan_fills(fields, packet, agree_to_terms=True)
+    assert fills(plan) == {"privacy": True}, "an optional box stays unticked"
+    assert sources(plan) == {"privacy": "auto_mode"}
+    assert any("because the apply mode is auto" in n for n in plan.notes)
+    assert plan.needed == []
+
+    packet.answers[answering.CONSENT_KEY] = "No"
+    plan = plan_fills(fields, packet, agree_to_terms=True)
+    assert fills(plan) == {"privacy": False, "certify": False}, "the person's No wins"

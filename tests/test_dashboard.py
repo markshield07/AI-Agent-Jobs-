@@ -198,7 +198,11 @@ def test_the_page_renders_the_numbers_and_every_tab(page, server):
     assert "jobagent login linkedin" in page.inner_text("#sessions")
     assert "Dry run" in page.inner_text("#config")
 
-    page.click("a[data-tab='profile']")
+    # Wait for the resume request itself: the page's words can show before
+    # its response event reaches the test, which then read no miss at all.
+    with page.expect_response(lambda r: r.url.endswith("/api/resume")) as resume:
+        page.click("a[data-tab='profile']")
+    assert resume.value.status == 404
     page.wait_for_selector("#resume-current")
     assert "No resume uploaded yet." in page.inner_text("#resume-current")
 

@@ -33,6 +33,13 @@ def _seed(conn):
             title=f"Engineer <b>{n}</b>",
             company=f"Co {n}",
             source=source,
+            location="Menifee, CA",
+            description=(
+                "**About the Role**\n\nYou will run <i>the</i> network for our offices.\n\n"
+                "**Responsibilities**\n\n* Keep BGP healthy\n* Lead the NOC"
+            ),
+            salary_min=120000 if n == 1 else None,
+            salary_max=150000 if n == 1 else None,
         )
         jid = jobs.upsert_jobs(conn, [raw]).new_ids[0]
         conn.execute(
@@ -159,6 +166,7 @@ def test_the_page_renders_the_numbers_and_every_tab(page, server):
 
     page.goto(server["url"] + "/#overview")
     page.wait_for_selector("#kpis .kpi")
+    page.wait_for_selector("#recent .job-card")
     kpis = dict(
         zip(
             page.locator("#kpis .kpi .label").all_inner_texts(),
@@ -172,6 +180,25 @@ def test_the_page_renders_the_numbers_and_every_tab(page, server):
     assert "Platform Engineering" in page.inner_text("#categories")
     assert "LinkedIn" in page.inner_text("#sites")
     assert page.inner_text("#mode-badge") == "Dry run"
+
+    # Job cards: the newest sent first, pay as listed or said to be missing,
+    # the posting's own words as text.
+    recent = page.locator("#recent .job-card")
+    assert recent.count() == 2
+    assert "Engineer <b>1</b>" in recent.nth(1).inner_text()
+    assert "$120k – $150k" in recent.nth(1).inner_text()
+    assert "Salary not listed" in recent.nth(0).inner_text()
+    assert "You will run <i>the</i> network" in recent.nth(0).inner_text()
+    assert page.locator("#recent i, #recent b").count() == 0
+    assert page.locator("#up-next .job-card").count() == 1
+    assert "Engineer <b>4</b>" in page.inner_text("#up-next")
+
+    page.click("#up-next .job-card")
+    page.wait_for_selector("#drawer:not([hidden]) .points")
+    assert "Keep BGP healthy" in page.inner_text("#drawer")
+    assert "Salary not listed" in page.inner_text("#drawer")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#drawer", state="hidden")
 
     page.click("#range button[data-days='7']")
     page.wait_for_function("document.querySelectorAll('#per-day rect.bar-applied').length === 7")
@@ -190,8 +217,11 @@ def test_the_page_renders_the_numbers_and_every_tab(page, server):
     assert "Years of Kubernetes?" in page.inner_text("#app-detail")
 
     page.click("a[data-tab='jobs']")
-    page.wait_for_selector("#job-table tbody tr")
-    assert "Engineer <b>4</b>" in page.inner_text("#job-table")
+    page.wait_for_selector("#job-list .job-card")
+    assert "Engineer <b>4</b>" in page.inner_text("#job-list")
+    page.fill("#job-search", "nothing like this")
+    page.wait_for_selector("#job-empty:not([hidden])")
+    assert page.locator("#job-list .job-card").count() == 0
 
     page.click("a[data-tab='settings']")
     page.wait_for_selector("#sessions .session")
@@ -219,6 +249,7 @@ def test_a_lapsed_workday_sign_in_is_flagged_with_its_waiting_jobs(page, server,
     posting = f"https://{host}/crowdstrikecareers/job/USA-Remote/Manager_R1"
     cookie = {"name": "PLAY_SESSION", "value": "x", "domain": host, "expires": -1}
     sessions.save_workday_session(settings, host, {"cookies": [cookie]}, url=posting)
+    sessions.record_keep_alive(settings, host, "unknown", how="candidate home")
     sessions.mark_workday_signed_out(settings, host, job_id="j1")
     errors: list[str] = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
@@ -232,6 +263,7 @@ def test_a_lapsed_workday_sign_in_is_flagged_with_its_waiting_jobs(page, server,
     row = page.inner_text("#sessions .session:has-text('crowdstrike')")
     assert "Sign in again" in row and f"jobagent login workday {posting}" in row
     assert "1 application wait" in row
+    assert "Keep-alive last visited" in row and "could not tell" in row
     assert errors == [], errors
 
 

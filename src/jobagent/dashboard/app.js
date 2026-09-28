@@ -116,6 +116,141 @@
     return promise.finally(() => { if (button) button.disabled = false; });
   }
 
+  // ---------------------------------------------------------- job cards --
+
+  // "$135k", "$142.5k": pay as people say it.
+  function money(n) {
+    if (n === null || n === undefined) return '';
+    if (n < 1000) return '$' + n.toLocaleString();
+    const k = n / 1000;
+    return '$' + (Number.isInteger(k) ? k : k.toFixed(1).replace(/\.0$/, '')) + 'k';
+  }
+
+  // The pay line for a job, or '' when the posting states none.
+  function payText(pay) {
+    if (!pay || (!pay.min && !pay.max)) return '';
+    if (pay.min && pay.max && pay.min !== pay.max) return `${money(pay.min)} – ${money(pay.max)}`;
+    if (pay.min && pay.max) return money(pay.min);
+    return pay.min ? `From ${money(pay.min)}` : `Up to ${money(pay.max)}`;
+  }
+
+  const PAY_FROM = { listing: 'as listed on the site', description: 'as stated in the job description' };
+
+  function payLine(pay) {
+    const text = payText(pay);
+    return text
+      ? el('div', { class: 'jc-pay', title: 'A year, ' + PAY_FROM[pay.from] }, text, el('small', {}, '/ yr'))
+      : el('div', { class: 'jc-pay none' }, 'Salary not listed');
+  }
+
+  // A steady colour per company, so the same employer looks the same everywhere.
+  function avatar(name, big) {
+    const text = String(name || '?').trim();
+    let hue = 0;
+    for (const ch of text.toLowerCase()) hue = (hue * 31 + ch.charCodeAt(0)) % 360;
+    const letters = text.split(/\s+/).filter((w) => /^[\p{L}\p{N}]/u.test(w)).slice(0, 2).map((w) => w[0]).join('') || '?';
+    return el('span', { class: 'avatar' + (big ? ' big' : ''), style: `--hue:${hue}`, 'aria-hidden': 'true' }, letters);
+  }
+
+  // "Menifee, CA" and a Remote pill, without saying remote twice.
+  function place(job) {
+    const where = job.location || '';
+    const remote = job.remote === true && !/remote/i.test(where);
+    return { where, remote };
+  }
+
+  function placePills(job) {
+    const p = place(job);
+    return p.remote || /remote/i.test(p.where) ? el('span', { class: 'pill remote' }, 'Remote') : null;
+  }
+
+  function jobCard(job, opts) {
+    const o = opts || {};
+    const p = place(job);
+    const sub = [job.company, p.where].filter(Boolean).join(' · ');
+    const open = () => o.onOpen(job);
+    return el('article', {
+      class: 'job-card', tabindex: '0', role: 'button', 'data-id': job.id,
+      'aria-label': `${job.title} at ${job.company}`,
+      onclick: open,
+      onkeydown: (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); open(); } },
+    },
+    el('div', { class: 'jc-top' },
+      avatar(job.company),
+      el('div', {}, el('div', { class: 'jc-title' }, job.title), el('div', { class: 'jc-sub' }, sub)),
+      o.badge || null),
+    payLine(job.pay),
+    job.summary
+      ? el('p', { class: 'jc-summary' }, job.summary)
+      : el('p', { class: 'jc-summary none' }, 'No description saved for this posting.'),
+    el('div', { class: 'jc-foot' }, o.foot || [], o.actions ? el('div', { class: 'row-actions', onclick: (e) => e.stopPropagation() }, o.actions) : null));
+  }
+
+  function matchPill(job) {
+    return job.score === null || job.score === undefined ? null
+      : el('span', { class: 'pill match', title: job.score_reason || 'How well the posting fits your search' }, 'Match ', el('b', {}, job.score));
+  }
+
+  // ------------------------------------------------------------- drawer --
+
+  let drawerReturn = null;
+
+  function openDrawer(parts) {
+    const drawer = document.getElementById('drawer');
+    drawerReturn = document.activeElement;
+    drawer.replaceChildren(el('button', { class: 'close', type: 'button', 'aria-label': 'Close', onclick: closeDrawer }, '×'), ...parts);
+    drawer.hidden = false;
+    document.getElementById('scrim').hidden = false;
+    drawer.scrollTop = 0;
+    drawer.querySelector('.close').focus();
+  }
+
+  function closeDrawer() {
+    document.getElementById('drawer').hidden = true;
+    document.getElementById('scrim').hidden = true;
+    if (drawerReturn && drawerReturn.focus) drawerReturn.focus();
+    drawerReturn = null;
+  }
+
+  // The posting in brief: who, where, pay, what the job is, what it asks.
+  function jobBrief(job, titleId) {
+    const p = place(job);
+    const pay = payText(job.pay);
+    const hl = job.highlights || {};
+    const parts = [
+      el('div', { class: 'brief-head' }, avatar(job.company, true),
+        el('div', {}, el('h3', { id: titleId || null }, job.title),
+          el('div', { class: 'job-meta' }, [job.company, p.where].filter(Boolean).join(' · ')))),
+      pay
+        ? el('div', { class: 'brief-pay' }, el('b', {}, pay + ' a year'), el('small', {}, PAY_FROM[job.pay.from] || ''))
+        : el('div', { class: 'brief-pay none' }, el('b', {}, 'Salary not listed'), el('small', {}, 'The posting gives no pay range')),
+      el('div', { class: 'brief-pills' },
+        placePills(job),
+        el('span', { class: 'pill' }, siteName(job.ats_type || job.source)),
+        job.category ? el('span', { class: 'pill' }, job.category) : null,
+        matchPill(job),
+        job.resume_ready ? el('span', { class: 'pill ready' }, 'Resume ready') : null,
+        job.posted_at ? el('span', { class: 'pill' }, 'Posted ' + when(job.posted_at)) : null),
+    ];
+    if (job.summary) parts.push(el('section', {}, el('h4', {}, 'About the role'), el('p', { class: 'brief-text' }, job.summary)));
+    if (hl.duties && hl.duties.length) parts.push(el('section', {}, el('h4', {}, "What you'd do"), el('ul', { class: 'points' }, hl.duties.map((t) => el('li', {}, t)))));
+    if (hl.needs && hl.needs.length) parts.push(el('section', {}, el('h4', {}, "What they're looking for"), el('ul', { class: 'points' }, hl.needs.map((t) => el('li', {}, t)))));
+    if (job.description) {
+      parts.push(el('section', {}, el('details', { class: 'full' }, el('summary', {}, 'Read the full description'),
+        el('div', { class: 'full-text' }, job.description))));
+    }
+    return parts;
+  }
+
+  async function openJob(id) {
+    const job = await api(`/api/jobs/${encodeURIComponent(id)}`);
+    const actions = [el('a', { class: 'button', href: job.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open posting')];
+    if (job.status !== 'queued' && job.status !== 'applied') actions.push(el('button', { type: 'button', onclick: (e) => setJob(job.id, 'queued', e.currentTarget) }, 'Queue'));
+    if (job.status === 'queued') actions.push(el('button', { type: 'button', title: 'Write the resume and cover letter for this job now', onclick: (e) => tailor(job.id, e.currentTarget) }, job.resume_ready ? 'Tailor again' : 'Tailor resume'));
+    if (job.status !== 'skipped' && job.status !== 'applied') actions.push(el('button', { type: 'button', class: 'ghost', onclick: (e) => setJob(job.id, 'skipped', e.currentTarget) }, 'Skip'));
+    openDrawer([...jobBrief(job, 'drawer-title'), el('div', { class: 'brief-actions' }, actions)]);
+  }
+
   // ------------------------------------------------------------- routing --
 
   const VIEWS = ['overview', 'applications', 'jobs', 'profile', 'settings'];
@@ -126,6 +261,8 @@
     const view = VIEWS.includes(name) ? name : 'overview';
     const params = new URLSearchParams(query || '');
     if (view === 'applications' && params.has('status')) state.appStatus = params.get('status');
+    if (!document.getElementById('drawer').hidden) closeDrawer();
+    document.getElementById('scrim').hidden = true;
     for (const v of VIEWS) document.getElementById('view-' + v).hidden = v !== view;
     for (const link of document.querySelectorAll('.tabs a')) {
       link.classList.toggle('active', link.dataset.tab === view);
@@ -136,13 +273,17 @@
   // ------------------------------------------------------------ overview --
 
   LOADERS.overview = async function () {
-    const [stats, activity, signIns] = await Promise.all([
+    const [stats, activity, signIns, cards] = await Promise.all([
       api(`/api/stats?days=${state.days}&tz_offset_minutes=${TZ}`),
-      api('/api/activity?limit=12'),
+      api('/api/activity?limit=8'),
       api('/api/sessions').catch(() => []),
+      api('/api/overview?limit=5'),
     ]);
+    renderHello(stats, cards);
     renderAttention(stats.attention, signIns);
     renderKpis(stats);
+    renderRecent(cards.recent);
+    renderUpNext(cards.up_next, cards.queued);
     renderPerDay(stats.per_day);
     const w = stats.window_totals;
     document.getElementById('window-note').textContent =
@@ -152,6 +293,19 @@
     renderSites(stats.by_site);
     renderActivity(activity);
   };
+
+  function renderHello(stats, cards) {
+    const hour = new Date().getHours();
+    document.getElementById('hello-title').textContent =
+      hour < 5 ? 'Working late' : hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+    const today = stats.per_day.length ? stats.per_day[stats.per_day.length - 1] : { applied: 0 };
+    const bits = [
+      `${today.applied} sent today`,
+      `${cards.queued} in the queue`,
+      `${stats.window_totals.responses} ${stats.window_totals.responses === 1 ? 'reply' : 'replies'} in the last ${stats.window.days} days`,
+    ];
+    document.getElementById('hello-line').textContent = bits.join(' · ');
+  }
 
   function renderAttention(a, signIns = []) {
     const box = document.getElementById('attention');
@@ -176,7 +330,7 @@
   function renderKpis(stats) {
     const t = stats.totals;
     const cards = [
-      ['Applied', t.applied, `${stats.window_totals.applied} in the last ${stats.window.days} days`],
+      ['Applied', t.applied, `${stats.window_totals.applied} in the last ${stats.window.days} days`, 'lead'],
       ['Heard back', t.responses, `${pct(t.response_rate)} response rate, ${t.replies_from_a_person} from a person`],
       ['Interviews', t.interviews, `${pct(t.interview_rate)} of applications`],
       ['Offers', t.offers, `${t.rejections} rejections`],
@@ -184,10 +338,32 @@
       ['Jobs found', t.discovered, `${t.queued} queued to apply`],
     ];
     document.getElementById('kpis').replaceChildren(
-      ...cards.map(([label, value, note]) =>
-        el('div', { class: 'kpi' }, el('div', { class: 'label' }, label),
+      ...cards.map(([label, value, note, tone]) =>
+        el('div', { class: 'kpi' + (tone ? ' ' + tone : '') }, el('div', { class: 'label' }, label),
           el('div', { class: 'value' }, value), el('div', { class: 'note' }, note)))
     );
+  }
+
+  function renderRecent(apps) {
+    const box = document.getElementById('recent');
+    if (!apps.length) { box.replaceChildren(el('p', { class: 'list-empty' }, 'Nothing sent yet. Applications appear here as they go out.')); return; }
+    box.replaceChildren(...apps.map((app) => jobCard(app.job, {
+      badge: badge(app.status),
+      foot: [el('span', { class: 'meta' }, `Sent ${when(app.submitted_at)} via ${siteName(app.ats)}`), placePills(app.job)],
+      onOpen: () => { state.selectedApp = app.id; location.hash = `applications?id=${app.id}`; },
+    })));
+  }
+
+  function renderUpNext(jobs, queued) {
+    document.getElementById('queued-count').textContent = queued ? `· ${queued}` : '';
+    const box = document.getElementById('up-next');
+    if (!jobs.length) { box.replaceChildren(el('p', { class: 'list-empty' }, 'The queue is empty. The next search fills it with jobs that match.')); return; }
+    box.replaceChildren(...jobs.map((job) => jobCard(job, {
+      foot: [matchPill(job), placePills(job),
+        job.resume_ready ? el('span', { class: 'pill ready' }, 'Resume ready') : el('span', { class: 'meta' }, 'Resume tailored at apply time'),
+        el('span', { class: 'spacer' }), el('span', { class: 'meta' }, siteName(job.ats_type || job.source))],
+      onOpen: () => openJob(job.id).catch((e) => toast(e.message, true)),
+    })));
   }
 
   let lastSeries = null;
@@ -214,9 +390,9 @@
       const x = left + i * slot + slot / 2;
       const g = svg('g', {});
       g.append(svg('title', {}, `${shortDate(d.date)}: ${d.applied} applied, ${d.responses} heard back, ${d.discovered} found`));
-      g.append(svg('rect', { class: 'bar-discovered', x: x - barW * 1.5, width: barW, y: y(d.discovered), height: Math.max(0, top + plotH - y(d.discovered)), rx: 1.5 }));
-      g.append(svg('rect', { class: 'bar-applied', x: x - barW / 2, width: barW, y: y(d.applied), height: Math.max(0, top + plotH - y(d.applied)), rx: 1.5 }));
-      g.append(svg('rect', { class: 'bar-responses', x: x + barW / 2, width: barW, y: y(d.responses), height: Math.max(0, top + plotH - y(d.responses)), rx: 1.5 }));
+      g.append(svg('rect', { class: 'bar-discovered', x: x - barW * 1.5, width: barW, y: y(d.discovered), height: Math.max(0, top + plotH - y(d.discovered)), rx: 2 }));
+      g.append(svg('rect', { class: 'bar-applied', x: x - barW / 2, width: barW, y: y(d.applied), height: Math.max(0, top + plotH - y(d.applied)), rx: 2 }));
+      g.append(svg('rect', { class: 'bar-responses', x: x + barW / 2, width: barW, y: y(d.responses), height: Math.max(0, top + plotH - y(d.responses)), rx: 2 }));
       g.append(svg('rect', { x: left + i * slot, width: slot, y: top, height: plotH, fill: 'transparent' }));
       root.append(g);
       const last = i === series.length - 1;
@@ -250,7 +426,7 @@
   function renderCategories(rows) {
     const box = document.getElementById('categories');
     if (!rows.length) { box.replaceChildren(el('p', { class: 'sub' }, 'No jobs found yet.')); return; }
-    const shown = rows.slice(0, 10);
+    const shown = rows.slice(0, 8);
     const max = Math.max(1, ...shown.map((r) => Math.max(r.applied, r.discovered)));
     const more = rows.length > shown.length ? [el('p', { class: 'sub' }, `and ${rows.length - shown.length} more`)] : [];
     box.replaceChildren(el('div', { class: 'hbars' }, shown.map((r) =>
@@ -315,12 +491,15 @@
 
     const body = document.querySelector('#app-table tbody');
     body.replaceChildren(...apps.map((app) => {
-      const row = el('tr', { class: 'clickable' + (app.id === state.selectedApp ? ' selected' : ''), 'data-id': app.id, onclick: () => openApp(app.id) },
-        el('td', {}, el('div', { class: 'job-title' }, app.job.title), el('div', { class: 'job-meta' }, app.job.company)),
-        el('td', {}, siteName(app.ats)),
+      const pay = payText(app.job.pay);
+      const p = place(app.job);
+      return el('tr', { class: 'clickable' + (app.id === state.selectedApp ? ' selected' : ''), 'data-id': app.id, onclick: () => openApp(app.id) },
+        el('td', {}, el('div', { class: 'job-cell' }, avatar(app.job.company),
+          el('div', {}, el('div', { class: 'job-title' }, app.job.title),
+            el('div', { class: 'job-meta' }, [app.job.company, p.where, siteName(app.ats)].filter(Boolean).join(' · '))))),
+        el('td', { class: 'pay-cell' + (pay ? '' : ' none') }, pay || 'Not listed'),
         el('td', {}, badge(app.status)),
-        el('td', {}, app.submitted_at ? when(app.submitted_at) : el('span', { class: 'job-meta' }, 'not sent')));
-      return row;
+        el('td', { class: 'job-meta nowrap' }, app.submitted_at ? when(app.submitted_at) : 'not sent'));
     }));
     document.getElementById('app-empty').hidden = apps.length > 0;
     const wanted = new URLSearchParams(location.hash.split('?')[1] || '').get('id');
@@ -333,7 +512,11 @@
     state.selectedApp = null;
     document.getElementById('app-detail').hidden = true;
     document.querySelector('#view-applications .split').classList.remove('open');
+    for (const tr of document.querySelectorAll('#app-table tbody tr')) tr.classList.remove('selected');
+    if (document.getElementById('drawer').hidden) document.getElementById('scrim').hidden = true;
   }
+
+  const narrow = () => window.matchMedia('(max-width: 860px)').matches;
 
   async function openApp(id) {
     state.selectedApp = id;
@@ -344,9 +527,11 @@
     const tries = Array.isArray(app.attempts) ? app.attempts.length : app.attempts || 0;
     const parts = [
       el('button', { class: 'close', type: 'button', 'aria-label': 'Close', onclick: closeApp }, '×'),
-      el('h3', {}, app.job.title),
-      el('div', { class: 'job-meta' }, `${app.job.company} · ${siteName(app.ats)} · `, el('a', { href: app.job.url, target: '_blank', rel: 'noopener noreferrer' }, 'posting')),
-      el('p', {}, badge(app.status), ' ', app.submitted_at ? `sent ${when(app.submitted_at)}` : `${tries} attempt${tries === 1 ? '' : 's'}, not sent`),
+      ...jobBrief(Object.assign({ ats_type: app.ats }, app.job)).slice(0, 2),
+      el('div', { class: 'brief-pills' }, badge(app.status),
+        el('span', { class: 'pill' }, app.submitted_at ? `Sent ${when(app.submitted_at)} via ${siteName(app.ats)}` : `${tries} attempt${tries === 1 ? '' : 's'}, not sent`),
+        placePills(app.job),
+        el('a', { class: 'pill', href: app.job.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open posting ↗')),
     ];
     if (last.error) parts.push(el('div', { class: 'error' }, last.error));
     if (last.confirmation) parts.push(el('p', { class: 'sub' }, `The page said: “${last.confirmation}”`));
@@ -367,6 +552,9 @@
           el('button', { type: 'button', onclick: (e) => logStatus(app.id, select.value, e.currentTarget) }, 'Save'))));
     }
 
+    // The posting itself, after anything waiting on a decision.
+    parts.push(...jobBrief(app.job).slice(3));
+
     if (app.events && app.events.length) {
       parts.push(el('section', {}, el('h4', {}, 'History'), el('ol', { class: 'feed' }, app.events.slice().reverse().map((ev) =>
         el('li', {}, el('span', { class: 'dot ' + (ev.kind === 'email' ? 'reply' : 'status') }),
@@ -376,13 +564,13 @@
 
     const filled = (last.filled || []);
     if (filled.length) {
-      parts.push(el('section', {}, el('h4', {}, `What went on the form (${filled.length})`),
+      parts.push(el('section', {}, el('details', { class: 'full' }, el('summary', {}, `What went on the form (${filled.length})`),
         el('table', { class: 'table compact' }, el('tbody', {}, filled.map((f) =>
           el('tr', {}, el('td', {}, f.label || f.key),
             el('td', {}, f.file_path ? f.file_path.split('/').pop() : Array.isArray(f.value) ? f.value.join(', ') : String(f.value ?? ''),
               f.source === 'prefilled' ? el('span', { class: 'job-meta' }, ' (from your profile)')
                 : f.source === 'auto_mode' ? el('span', { class: 'job-meta' }, ' (agreed because you chose auto mode)')
-                : null)))))));
+                : null))))))));
     }
 
     if (app.screenshot_path) {
@@ -392,7 +580,9 @@
     }
     pane.replaceChildren(...parts);
     pane.hidden = false;
+    pane.scrollTop = 0;
     document.querySelector('#view-applications .split').classList.add('open');
+    if (narrow()) document.getElementById('scrim').hidden = false;
     for (const tr of document.querySelectorAll('#app-table tbody tr')) {
       tr.classList.toggle('selected', Number(tr.dataset.id) === app.id);
     }
@@ -451,6 +641,8 @@
 
   // ---------------------------------------------------------------- jobs --
 
+  let shownJobs = [];
+
   LOADERS.jobs = async function () {
     const minScore = document.getElementById('job-min-score').value;
     const query = new URLSearchParams({ limit: '200' });
@@ -459,37 +651,54 @@
     const [counts, jobs] = await Promise.all([api('/api/jobs/counts'), api('/api/jobs?' + query)]);
     const order = ['queued', 'pending', 'needs_review', 'applied', 'failed', 'skipped'];
     document.getElementById('job-filters').replaceChildren(...order.map((status) =>
-      el('button', { type: 'button', 'aria-pressed': String(state.jobStatus === status), onclick: () => { state.jobStatus = status; LOADERS.jobs(); } },
+      el('button', { type: 'button', 'aria-pressed': String(state.jobStatus === status), onclick: () => { state.jobStatus = status; LOADERS.jobs().catch((e) => toast(e.message, true)); } },
         STATUS_LABEL[status], el('span', { class: 'count' }, counts[status] || 0))));
-
-    document.querySelector('#job-table tbody').replaceChildren(...jobs.map((job) => {
-      const actions = [];
-      if (job.status !== 'queued' && job.status !== 'applied') actions.push(el('button', { type: 'button', onclick: (e) => setJob(job.id, 'queued', e.currentTarget) }, 'Queue'));
-      if (job.status !== 'skipped' && job.status !== 'applied') actions.push(el('button', { type: 'button', onclick: (e) => setJob(job.id, 'skipped', e.currentTarget) }, 'Skip'));
-      if (job.status === 'queued') actions.push(el('button', { type: 'button', title: 'Write the resume and cover letter for this job now', onclick: (e) => tailor(job.id, e.currentTarget) }, 'Tailor'));
-      return el('tr', {},
-        el('td', {}, el('a', { class: 'job-title', href: job.url, target: '_blank', rel: 'noopener noreferrer' }, job.title),
-          el('div', { class: 'job-meta' }, [job.company, job.location, siteName(job.ats_type || job.source)].filter(Boolean).join(' · '))),
-        el('td', {}, job.category || el('span', { class: 'job-meta' }, '–')),
-        el('td', { class: 'num', title: job.score_reason || '' }, job.score ?? '–', job.tier ? el('div', { class: 'job-meta' }, `tier ${job.tier}`) : null),
-        el('td', { class: 'job-meta' }, when(job.scraped_at)),
-        el('td', {}, el('div', { class: 'row-actions' }, actions)));
-    }));
-    document.getElementById('job-empty').hidden = jobs.length > 0;
+    shownJobs = jobs;
+    renderJobs();
   };
 
+  function renderJobs() {
+    const words = document.getElementById('job-search').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const jobs = shownJobs.filter((job) => {
+      const text = [job.title, job.company, job.location, job.category].join(' ').toLowerCase();
+      return words.every((w) => text.includes(w));
+    });
+    document.getElementById('job-list').replaceChildren(...jobs.map((job) => {
+      const actions = [];
+      if (job.status !== 'queued' && job.status !== 'applied') actions.push(el('button', { type: 'button', class: 'small', onclick: (e) => setJob(job.id, 'queued', e.currentTarget) }, 'Queue'));
+      if (job.status === 'queued') actions.push(el('button', { type: 'button', class: 'small', title: 'Write the resume and cover letter for this job now', onclick: (e) => tailor(job.id, e.currentTarget) }, 'Tailor'));
+      if (job.status !== 'skipped' && job.status !== 'applied') actions.push(el('button', { type: 'button', class: 'small ghost', onclick: (e) => setJob(job.id, 'skipped', e.currentTarget) }, 'Skip'));
+      return jobCard(job, {
+        badge: job.status === state.jobStatus ? null : badge(job.status),
+        foot: [matchPill(job), placePills(job), job.resume_ready ? el('span', { class: 'pill ready' }, 'Resume ready') : null,
+          el('span', { class: 'meta' }, `${siteName(job.ats_type || job.source)} · found ${when(job.scraped_at)}`)],
+        actions,
+        onOpen: () => openJob(job.id).catch((e) => toast(e.message, true)),
+      });
+    }));
+    const empty = document.getElementById('job-empty');
+    empty.hidden = jobs.length > 0;
+    empty.textContent = shownJobs.length && !jobs.length
+      ? 'No job here matches that search.'
+      : 'Nothing here. Set what to search for under Settings, then press Find jobs.';
+  }
+
   document.getElementById('job-min-score').addEventListener('change', () => LOADERS.jobs().catch((e) => toast(e.message, true)));
+  document.getElementById('job-search').addEventListener('input', renderJobs);
 
   async function setJob(id, status, button) {
     try {
       await busy(button, api(`/api/jobs/${id}`, { method: 'PATCH', json: { status } }));
-      LOADERS.jobs();
+      toast(status === 'queued' ? 'Queued. It goes out on the next run.' : status === 'skipped' ? 'Skipped.' : 'Saved.');
+      closeDrawer();
+      route();
     } catch (e) {
       toast(e.message, true);
     }
   }
 
   async function tailor(id, button) {
+    const label = button.textContent;
     button.textContent = 'Tailoring…';
     try {
       const variant = await busy(button, api(`/api/jobs/${id}/tailor`, { method: 'POST' }));
@@ -497,7 +706,7 @@
     } catch (e) {
       toast(e.message, true);
     }
-    button.textContent = 'Tailor';
+    button.textContent = label;
   }
 
   // ------------------------------------------------------------- profile --
@@ -636,12 +845,14 @@
       unchecked: ['', `Saved ${when(s.saved_at)}, not checked`],
     }[s.state] || ['', s.state];
     const waiting = s.waiting ? ` ${s.waiting} application${s.waiting === 1 ? '' : 's'} wait for it and run right after.` : '';
+    const KEPT = { signed_in: 'still signed in', signed_out: 'the sign-in had ended', unknown: 'could not tell', timed_out: 'the site was slow', error: 'the visit failed' };
+    const kept = s.kept_alive_at ? ` Keep-alive last visited ${when(s.kept_alive_at)}: ${KEPT[s.keep_alive] || s.keep_alive}.` : '';
     const action = s.saved
       ? el('button', { type: 'button', class: 'danger', onclick: (e) => forgetSession(`workday/${encodeURIComponent(s.host)}`, e.currentTarget) }, 'Forget')
       : null;
     return el('div', { class: 'session' },
       el('div', {}, el('b', {}, s.label), ' ', el('span', { class: `badge ${badge[0]}` }, badge[1]),
-        el('div', { class: 'job-meta' }, 'Run ', el('code', {}, s.login_command), ' in a terminal on your machine.' + waiting)),
+        el('div', { class: 'job-meta' }, 'Run ', el('code', {}, s.login_command), ' in a terminal on your machine.' + waiting + kept)),
       action);
   }
 
@@ -706,6 +917,12 @@
   // ----------------------------------------------------------------- start --
 
   window.addEventListener('hashchange', route);
+  document.getElementById('scrim').addEventListener('click', () => { closeDrawer(); if (narrow()) closeApp(); });
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    if (!document.getElementById('drawer').hidden) closeDrawer();
+    else if (state.selectedApp && !document.getElementById('view-applications').hidden) closeApp();
+  });
   let resizeTimer = null;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);

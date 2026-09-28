@@ -441,21 +441,37 @@ end an application from anywhere.
 the same process as the API: no build step, no account, nothing loaded from
 anywhere else, light and dark to match your system.
 
-- **Overview**: applied, heard back (and the response rate), interviews, offers,
-  the median days to a reply, and jobs found; applications, replies and new
-  jobs per day over 7, 30 or 90 days; the funnel from found to offer; each job
-  category with what was found, applied to and answered; each site's response
-  rate; and the latest submissions and replies. Anything waiting on you (a
-  question to answer, an application to approve, one to check) is at the top.
-- **Applications**: every application by status. Open one to see what went on
-  the form, the screenshot, its history and the page's own words; answer the
-  question it is stuck on (saved for every later form), submit one a dry run
-  left at the button, or record an interview, offer or rejection.
-- **Jobs**: what discovery found, by status and score; queue, skip or tailor one.
+- **Overview**: what was sent today and what is queued; anything waiting on
+  you (a question to answer, an application to approve, a Workday sign-in to
+  renew); applied, heard back (and the response rate), interviews, offers, the
+  median days to a reply, and jobs found. Then two lists of job cards:
+  **Recently applied** and **Up next** (the queue, best match first). Each
+  card shows the title, company, place, the pay range and a few lines on the
+  role; tap one for the job's main duties and asks and its full description.
+  Below: applications, replies and new jobs per day over 7, 30 or 90 days, the
+  funnel from found to offer, the latest activity, each job category and each
+  site's response rate.
+- **Applications**: every application by status, with its pay. Open one to see
+  the job in brief, what went on the form, the screenshot, its history and the
+  page's own words; answer the question it is stuck on (saved for every later
+  form), submit one a dry run left at the button, or record an interview,
+  offer or rejection.
+- **Jobs**: what discovery found, as cards, by status and match score; search
+  them by title, company or place, and queue, skip or tailor one.
 - **Resume & answers**: upload the resume, add skills you have, switch facts
   off, keep the never-claim list, read the answer bank.
-- **Settings**: LinkedIn and Indeed sign-in status, the submission mode and
-  caps, and what to search for.
+- **Settings**: sign-in status for LinkedIn, Indeed and each Workday company,
+  the submission mode and caps, and what to search for.
+
+On a phone the sections move to a bar along the bottom and a job opens as a
+sheet from the bottom of the screen.
+
+**Pay** comes from the site's salary fields when it has them, or else from a
+yearly range written in the description ("$120,000 - $150,000", "$140K–$175K";
+several ranges, such as pay zones, give the lowest and highest). Hourly rates,
+single figures, bonuses and equity are left out rather than converted. A
+posting with none says **Salary not listed**; nothing is estimated. The job
+summary is the posting's own sentences about the role, cut short.
 
 The buttons at the top run a search, an apply pass (in the configured mode;
 it asks first when that mode is `auto`) and a mailbox check.
@@ -495,9 +511,9 @@ keeping a terminal open:
 | `GET`/`POST`/`DELETE` | `/api/never-claim` | The never-claim list |
 | `GET` | `/api/answers` | The answer bank, for form filling in phase 4 |
 | `GET`/`PUT` | `/api/search-criteria` | What to search for: titles, locations, keywords, boards, thresholds |
-| `GET` | `/api/jobs` | Discovered jobs, best first. Filter by `status`, `min_score`, `source` |
+| `GET` | `/api/jobs` | Discovered jobs, best first, as cards (`summary`, `pay`, `resume_ready`; no full description). Filter by `status`, `min_score`, `source` |
 | `GET` | `/api/jobs/counts` | How many jobs in each status |
-| `GET`/`PATCH` | `/api/jobs/{id}` | One job; `PATCH` to queue or skip it by hand |
+| `GET`/`PATCH` | `/api/jobs/{id}` | One job with its description, `summary`, `pay` and `highlights` (duties, needs); `PATCH` to queue or skip it by hand |
 | `GET` | `/api/runs` | Past discovery runs with their counts and token use |
 | `POST` | `/api/runs/discover` | Start a run in the background; `?wait=true` returns the report |
 | `POST` | `/api/jobs/{id}/tailor` | Tailor the resume to this job now; returns the variant, ready or rejected |
@@ -508,7 +524,7 @@ keeping a terminal open:
 | `GET` | `/api/variants/{id}/cover-letter` | The cover letter as plain text |
 | `POST` | `/api/apply` | Start an apply pass; `?wait=true` returns the report |
 | `GET` | `/api/apply/last` | The last apply pass's report |
-| `GET` | `/api/applications` | Applications, newest first. Filter by `status` |
+| `GET` | `/api/applications` | Applications, newest first, each job with `summary` and `pay`. Filter by `status` |
 | `GET` | `/api/applications/counts` | How many applications in each status |
 | `GET` | `/api/applications/{id}` | One application with its attempts and events |
 | `GET` | `/api/applications/{id}/screenshot` | The form as the agent left it |
@@ -522,6 +538,7 @@ keeping a terminal open:
 | `POST` | `/api/inbox/{id}/attach` | File a message against an application, and move its status |
 | `GET` | `/api/stats` | The dashboard's numbers: totals, per day (`days`, `tz_offset_minutes`), funnel, categories, sites |
 | `GET` | `/api/activity` | The newest submissions, replies and status changes |
+| `GET` | `/api/overview` | The overview's job cards: the latest sent (`recent`) and the queue (`up_next`), each with `summary` and `pay` |
 | `GET` | `/api/config` | The mode, caps and model route (never a key or password) |
 | `GET` | `/api/sessions` | Whether LinkedIn and Indeed are signed in, and until when (never the cookies) |
 | `DELETE` | `/api/sessions/{site}` | Forget a saved sign-in |
@@ -553,6 +570,7 @@ src/jobagent/
 │   │   ├── rules.py    The free 0 to 100 pass, with reasons
 │   │   └── classify.py The batched model pass that tiers the survivors
 │   ├── store.py        Jobs and runs on disk; dedupe on the way in
+│   ├── brief.py        A posting in brief for the dashboard: summary, duties, stated pay
 │   └── pipeline.py     One run, stage by stage
 ├── tailor/
 │   ├── models.py       The plan the model returns: facts to show, cited per bullet

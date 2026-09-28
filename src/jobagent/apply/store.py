@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from jobagent.db.database import transaction, utcnow
+from jobagent.discovery import brief
 from jobagent.discovery import store as jobs
 
 from .models import MODES, OUTCOMES, HandlerResult, NeededInput
@@ -168,6 +169,10 @@ _APPLICATION_SQL = """
 SELECT a.*, s.status, s.first_reply_at,
        j.title AS job_title, j.company AS job_company, j.url AS job_url,
        j.apply_url AS job_apply_url, j.status AS job_status,
+       j.location AS job_location, j.remote AS job_remote, j.source AS job_source,
+       j.category AS job_category, j.score AS job_score, j.posted_at AS job_posted_at,
+       j.salary_min AS job_salary_min, j.salary_max AS job_salary_max,
+       j.description AS job_description,
        (SELECT COUNT(*) FROM submission_attempts t WHERE t.application_id = a.id) AS attempts,
        (SELECT t.id FROM submission_attempts t WHERE t.application_id = a.id
         ORDER BY t.id DESC LIMIT 1) AS last_attempt_id
@@ -186,14 +191,21 @@ def list_applications(
     conn: sqlite3.Connection,
     *,
     status: str | None = None,
+    submitted: bool = False,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    where, params = "", []
+    """Newest first; with `submitted`, only those sent, most recently sent first."""
+    clauses, params = [], []
     if status:
-        where, params = "WHERE s.status = ? ", [status]
+        clauses.append("s.status = ?")
+        params.append(status)
+    if submitted:
+        clauses.append("a.submitted_at IS NOT NULL")
+    where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+    order = "ORDER BY a.submitted_at DESC, a.id DESC " if submitted else "ORDER BY a.id DESC "
     rows = conn.execute(
-        _APPLICATION_SQL + where + "ORDER BY a.id DESC LIMIT ? OFFSET ?",
+        _APPLICATION_SQL + where + order + "LIMIT ? OFFSET ?",
         [*params, limit, offset],
     ).fetchall()
     return [_application_dict(conn, r) for r in rows]
@@ -293,14 +305,26 @@ def _application_dict(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, A
     last = get_attempt(conn, d["last_attempt_id"]) if d.get("last_attempt_id") else None
     d["last_attempt"] = last
     d["needed"] = last["needed"] if last else []
-    d["job"] = {
+    remote = d.pop("job_remote")
+    job = {
         "id": d.pop("job_id"),
         "title": d.pop("job_title"),
         "company": d.pop("job_company"),
         "url": d.pop("job_url"),
         "apply_url": d.pop("job_apply_url"),
         "status": d.pop("job_status"),
+        "location": d.pop("job_location"),
+        "remote": None if remote is None else bool(remote),
+        "source": d.pop("job_source"),
+        "category": d.pop("job_category"),
+        "score": d.pop("job_score"),
+        "posted_at": d.pop("job_posted_at"),
+        "salary_min": d.pop("job_salary_min"),
+        "salary_max": d.pop("job_salary_max"),
+        "description": d.pop("job_description"),
     }
+    # Lists carry the short form; the one-application route adds the full text back.
+    d["job"] = brief.card(job)
     d.pop("last_attempt_id", None)
     return d
 

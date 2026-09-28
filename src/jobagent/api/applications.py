@@ -27,6 +27,8 @@ from jobagent.apply.pipeline import (
     retry_application,
     run_apply,
 )
+from jobagent.discovery import brief
+from jobagent.discovery import store as jobs_store
 
 log = logging.getLogger(__name__)
 
@@ -165,6 +167,10 @@ def _get(db, application_id: int) -> dict[str, Any]:
 def get_application(application_id: int, db: DbDep) -> dict[str, Any]:
     app = _get(db, application_id)
     conn = db.connection()
+    job = jobs_store.get_job(conn, app["job"]["id"])
+    if job is not None:
+        app["job"]["description"] = job.get("description")
+        app["job"]["highlights"] = brief.highlights(job.get("description"))
     app["attempts"] = store.list_attempts(conn, application_id)
     app["events"] = store.list_events(conn, application_id)
     return app

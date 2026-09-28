@@ -48,6 +48,10 @@ class PostingPlace:
 
     locations: list[str] = field(default_factory=list)
     remote: bool | None = None
+    # Schema.org places with a region and nothing finer ("Virginia" and no
+    # town or postal code): often a company default, so counted only when the
+    # page's title or description names the same region.
+    regions: list[str] = field(default_factory=list)
 
 
 def read_place(
@@ -56,6 +60,12 @@ def read_place(
     place = PostingPlace()
     for posting in _json_ld_postings(page):
         _from_json_ld(posting, place)
+    if place.regions:
+        headline = _headline(page).lower()
+        for region in place.regions:
+            if re.search(rf"\b{re.escape(region.lower())}\b", headline):
+                if region not in place.locations:
+                    place.locations.append(region)
     for selector in selectors:
         for text in _texts(page, selector):
             if text and text not in place.locations:
@@ -115,7 +125,9 @@ def _from_json_ld(posting: dict[str, Any], place: PostingPlace) -> None:
     locations = posting.get("jobLocation")
     for loc in locations if isinstance(locations, list) else [locations]:
         text = _address_text(loc)
-        if text and text not in place.locations:
+        if text and _region_only(loc):
+            place.regions.append(text)
+        elif text and text not in place.locations:
             place.locations.append(text)
     description = posting.get("description")
     if place.remote is None and isinstance(description, str):
@@ -134,6 +146,35 @@ def _address_text(loc: Any) -> str:
     parts = [address.get("addressLocality"), address.get("addressRegion")]
     text = ", ".join(str(p).strip() for p in parts if p and str(p).strip())
     return text or str(address.get("addressCountry") or "").strip()
+
+
+def _region_only(loc: Any) -> bool:
+    """A schema.org address with a region and no town or postal code (Serco's
+    "Virginia" for a San Diego job, its company default)."""
+    address = loc.get("address") if isinstance(loc, dict) else None
+    if not isinstance(address, dict):
+        return False
+    return bool(str(address.get("addressRegion") or "").strip()) and not any(
+        str(address.get(key) or "").strip()
+        for key in ("addressLocality", "postalCode", "streetAddress")
+    )
+
+
+def _headline(page: Any) -> str:
+    """The page's title and its meta description, where a posting names its place."""
+    try:
+        return str(
+            page.evaluate(
+                """() => [document.title,
+                    ...Array.from(document.querySelectorAll(
+                        'meta[name="description"], meta[property="og:title"],'
+                        + ' meta[property="og:description"]')).map((m) => m.content || '')
+                ].join(' ')"""
+            )
+            or ""
+        )
+    except Exception:
+        return ""
 
 
 def _json_ld_postings(page: Any) -> list[dict[str, Any]]:

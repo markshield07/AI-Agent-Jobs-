@@ -624,7 +624,8 @@ def test_auto_mode_agrees_to_required_terms_and_says_so(packet):
         ("Desired Salary Amount", "salary_expectation"),
         ("Security Clearance Level", "security_clearance"),
         ("Security Clearance Status", "clearance_status"),
-        ("Source", "heard_about"),
+        ("Source", "heard_about_source"),
+        ("Which job board?", "heard_about_source"),
         ("Best Time to Contact", "contact_time"),
         ("Preferred Contact Method", "contact_method"),
     ],
@@ -724,6 +725,12 @@ def test_how_to_reach_the_person_defaults_to_any_time_by_email(packet):
 
 
 def test_a_source_list_gets_the_board_the_job_was_found_on(packet):
+    widget = "api_key: undefined extensions:AwliWidget@https://www.linkedin.com/apply-with-linkedin"
+    packet.job["source"] = "indeed"
+    field = F("src", "Source", kind="select", required=True, options=[widget, "Indeed", "Other"])
+    assert fills(plan_fills([field], packet)) == {"src": "Indeed"}
+    field.options = [widget, "Dice", "Other"]
+    assert fills(plan_fills([field], packet)) == {"src": "Other"}, "never the widget's text"
     packet.job["source"] = "linkedin"
     field = F(
         "src", "Source", kind="select", required=True, options=["Indeed", "LinkedIn", "Other"]

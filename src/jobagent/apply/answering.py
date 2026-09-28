@@ -73,8 +73,14 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     ("referral", r"\breferred\s+by\b|\breferral\b|\bemployee\s+referr"),
     (
         "heard_about",
-        r"\b(?:hear|heard|find\s+out|learn|found\s+out)\s+about\b|\bhow did you find\b"
-        r"|^\W*(?:job\s+|applicant\s+|candidate\s+)?source\W*$",
+        r"\b(?:hear|heard|find\s+out|learn|found\s+out)\s+about\b|\bhow did you find\b",
+    ),
+    # The list a site shows once "How did you hear" is answered (Serco's
+    # "Source" after Job Board): which one, a question of its own.
+    (
+        "heard_about_source",
+        r"^\W*(?:job\s+|applicant\s+|candidate\s+|referral\s+)?source(?:\s+(?:name|detail))?\W*$"
+        r"|\bwhich\s+(?:job\s+board|website|site)\b",
     ),
     # How a recruiter should reach the person: plain defaults, overridable.
     ("contact_time", r"\b(?:best|preferred)\s+time\s+to\s+(?:contact|call|reach)\b"),
@@ -215,6 +221,9 @@ _WHY_US = re.compile(
 )
 _YES = frozenset({"yes", "y", "true", "1", "i do", "i am", "i have"})
 _NO = frozenset({"no", "n", "false", "0", "i do not", "i am not", "i have not"})
+# Text a page leaves among a list's choices that is no choice at all: another
+# site's widget (Apply with LinkedIn's hidden box) or a web address.
+_NOT_AN_OPTION = re.compile(r"api_key|AwliWidget|apply-with-linkedin|://", re.IGNORECASE)
 _BOARDS = frozenset({"linkedin", "indeed", "glassdoor", "ziprecruiter", "dice", "monster"})
 _ASKABLE = frozenset({"text", "textarea", "select", "multiselect", "radio", "number", "unknown"})
 _MAX_MODEL_QUESTIONS = 20
@@ -564,8 +573,8 @@ class _Planner:
         ):
             self._need(field, NEVER_GUESSED)
             return
-        if key == "heard_about":
-            self._plan_heard_about(field)
+        if key in ("heard_about", "heard_about_source"):
+            self._plan_heard_about(field, which=key == "heard_about_source")
             return
         body = letter_body(self.packet.cover_letter or "")
         if field.kind == "textarea" and body and _WHY_US.search(field.label):
@@ -770,14 +779,17 @@ class _Planner:
         else:
             self._skip(field, "no option fits")
 
-    def _plan_heard_about(self, field: FormField) -> None:
-        if field.options:
-            # The board the job was found on first ("LinkedIn" in a Source
-            # list), then the kind of place it is.
+    def _plan_heard_about(self, field: FormField, *, which: bool = False) -> None:
+        """How the person heard of the job: the board it was found on first
+        ("Indeed" in a Source list), then the kind of place that is. `which`
+        is the list asking which board, where only the board or Other fits."""
+        options = [o for o in field.options if not _NOT_AN_OPTION.search(o)]
+        if options:
             board = str(self.packet.job.get("source") or "").strip().lower()
             boards = [board] if board in _BOARDS else []
-            for wanted in (*boards, "job board", "linkedin", "online", "internet", "other"):
-                option = pick_option(wanted, field.options)
+            kinds = ["other"] if which else ["job board", "linkedin", "online", "internet", "other"]
+            for wanted in (*boards, *kinds):
+                option = pick_option(wanted, options)
                 if option:
                     self._fill(field, option, "default")
                     return

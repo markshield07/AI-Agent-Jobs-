@@ -20,6 +20,9 @@
     filter  a search filter's own "Apply" button comes before the job's Apply Now
     onetrust a OneTrust preference centre covers the page and takes every click
     indeedapply  no Apply at all; the page only preloads Indeed Apply
+    phenom  Apply Now leads to a Phenom-style step 1: an Apply-with-LinkedIn widget's hidden
+            file box, the resume behind an "Upload Resume" button, the fields in a form of
+            their own, and Next
 -->
 <style>
   body { font-family: sans-serif; margin: 0; }
@@ -66,7 +69,7 @@
       apply = '<button type="button" id="apply" onclick="window.open(\'' + go('form') + '\')">Apply for this job</button>';
     } else if (variant === 'consent') {
       apply = '<button type="button" id="apply">Apply</button>' +
-        '<div id="notice" role="dialog" class="hidden"><p>Certain jurisdictions require notice of ' +
+        '<div id="jdv_privacy_dailog" class="hidden"><p>Certain jurisdictions require notice of ' +
         'how we use your personal information.</p><button type="button" id="decline">Decline &amp; Close</button>' +
         '<button type="button" id="consent">Consent &amp; Continue</button>' +
         '<div id="inline" class="hidden">' + form + '</div></div>';
@@ -83,7 +86,7 @@
     } else if (variant === 'reveal') {
       apply = '<button type="button" id="apply">Apply</button><div id="inline" class="hidden">' + form + '</div>';
     } else {
-      var to = { link: 'form', choice: 'choice', guest: 'login', wall: 'login' }[variant] || 'form';
+      var to = { link: 'form', choice: 'choice', guest: 'login', wall: 'login', phenom: 'phenom' }[variant] || 'form';
       apply = '<a id="apply" href="' + go(to) + '">Apply Now</a>';
     }
     main.innerHTML = '<h1>Network Operations Manager</h1><p>Lead our NOC.</p>' +
@@ -96,13 +99,29 @@
     }
     if (variant === 'consent') {
       document.getElementById('apply').addEventListener('click', function () {
-        document.getElementById('notice').classList.remove('hidden');
+        document.getElementById('jdv_privacy_dailog').classList.remove('hidden');
       });
       document.getElementById('consent').addEventListener('click', function () {
         window.__consented = true;
         document.getElementById('inline').classList.remove('hidden');
       });
     }
+  } else if (step === 'phenom') {
+    main.innerHTML = '<div class="awli"><input type="file" name="api_key: undefined extensions:AwliWidget@https://www.linkedin.com/apply-with-linkedin-widget-v3" style="opacity:0;position:absolute;width:1px;height:1px"></div>' +
+      '<div class="resume-upload-wrapper"><input type="file" id="hidden-resume" style="display:none">' +
+      '<button type="button" class="upload-resume-btn" id="upload-btn">Upload Resume</button><span id="resume-name"></span></div>' +
+      '<form class="rjsf" id="phenom-form"><fieldset><legend>Application Form</legend>' +
+      '<label for="firstName">First Name</label><input id="firstName">' +
+      '<label for="lastName">Last Name</label><input id="lastName">' +
+      '<label for="email">Email</label><input id="email" type="email">' +
+      '<label for="phoneNumber">Mobile Phone</label><input id="phoneNumber" type="tel">' +
+      '</fieldset><button type="button" id="next">Next</button></form>';
+    var hidden = document.getElementById('hidden-resume');
+    document.getElementById('upload-btn').addEventListener('click', function () { hidden.click(); });
+    hidden.addEventListener('change', function () {
+      window.__resume = hidden.files[0] && hidden.files[0].name;
+      document.getElementById('resume-name').textContent = window.__resume || '';
+    });
   } else if (step === 'choice') {
     main.innerHTML = '<h1>How would you like to apply?</h1>' +
       '<button type="button" onclick="window.__opened.push(\'linkedin\')">Apply with LinkedIn</button>' +

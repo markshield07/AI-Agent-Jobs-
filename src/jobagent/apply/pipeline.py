@@ -37,7 +37,7 @@ from jobagent.db.database import utcnow
 from jobagent.discovery import store as jobs
 from jobagent.discovery.ats import detect_ats
 from jobagent.discovery.criteria import load_criteria
-from jobagent.discovery.scoring.rules import not_remote, place_matches
+from jobagent.discovery.scoring.rules import place_matches, score_rules
 from jobagent.llm.backend import Completer, LLMUnavailable, resolve_backend
 from jobagent.resume.facts import list_facts, list_never_claim
 from jobagent.tailor import store as variants
@@ -263,10 +263,11 @@ def apply_to_job(
         return _skipped(job_id, "already applied", app["id"] if app else None)
 
     url = job.get("apply_url") or job.get("url") or ""
-    # Queued before the rules knew better, or the places wanted changed since.
-    office = not_remote(job, load_criteria(conn))
-    if office:
-        return _wrong_place(conn, settings, job_id, url, office)
+    # Queued before the rules knew better, or the criteria changed since:
+    # today's hard rules (place, excluded words, companies, pay floor) again.
+    ruled_out = _ruled_out(job, load_criteria(conn))
+    if ruled_out:
+        return _wrong_place(conn, settings, job_id, url, ruled_out)
 
     variant = variants.latest_ready_variant(conn, job_id)
     if variant is None or not variant.pdf_path or not Path(variant.pdf_path).is_file():
@@ -456,6 +457,12 @@ def _note_workday_sign_in(settings: Settings, job_id: str, url: str, result: Han
             return
         sessions.record_workday_check(settings, host, "signed_in")
         sessions.clear_workday_waiting(settings, host, [job_id])
+
+
+def _ruled_out(job: Mapping[str, Any], criteria: Any) -> str | None:
+    """Why today's rules turn the job away outright, or None."""
+    verdict = score_rules(job, criteria, set())
+    return verdict.reason if verdict.disqualified else None
 
 
 def _site_cap_reached(conn: sqlite3.Connection, settings: Settings, handler: Handler) -> str | None:

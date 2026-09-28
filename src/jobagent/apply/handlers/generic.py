@@ -19,12 +19,14 @@ phone, location, LinkedIn, portfolio and a cover-letter textarea.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
+from jobagent.apply.answering import field_section
 from jobagent.apply.browser.dom import discover_fields, script
 from jobagent.apply.browser.fill import click_first_visible, detect_login_wall, wait_settled
 from jobagent.apply.handlers.base import COOKIE_BUTTON_SELECTORS, BaseHandler
-from jobagent.apply.models import FormField, HandlerResult
+from jobagent.apply.models import Fill, FormField, HandlerResult
 from jobagent.discovery.ats import detect_ats
 
 log = logging.getLogger(__name__)
@@ -32,6 +34,12 @@ log = logging.getLogger(__name__)
 APPLY_CONTROL_JS = script("apply_control.js")
 # Sites with a handler of their own: an Apply press that lands on one hands over.
 HANDED_OFF = frozenset({"workday", "greenhouse", "lever", "ashby"})
+
+_WIDGET = re.compile(r"api_key|AwliWidget|apply-with-linkedin|linkedin\.com/|indeed-apply", re.I)
+# The button a page draws over a hidden file box for the resume (Phenom).
+UPLOAD_BUTTON = re.compile(
+    r"^(upload|attach|add|choose)\s+(your\s+|a\s+)?(resume|cv|r[ée]sum[ée])\b", re.I
+)
 
 # What an application asks for. Two of these, or one file upload, and the page
 # is taken to be an application.
@@ -55,6 +63,7 @@ class GenericHandler(BaseHandler):
     def __init__(self) -> None:
         # Where an Apply press landed on a site another handler fills.
         self._handoff: str | None = None
+        self._resume = ""
 
     def matches(self, url: str) -> bool:
         """Never claims a URL: it is what `handler_for` falls back to, so a
@@ -151,6 +160,16 @@ class GenericHandler(BaseHandler):
             return False
         return True
 
+    def fill(self, page: Any, fields: list[FormField], plan: Any) -> tuple[list, list, list]:
+        """The plan, then the resume through the page's own Upload Resume
+        button when the form's file box is hidden where it could not be read."""
+        filled, unfilled, notes = super().fill(page, fields, plan)
+        resume = self._resume
+        if resume and not any(f.file_path for f in filled) and _upload_by_button(page, resume):
+            filled.append(Fill(key="resume", file_path=resume, source="resume", label="Resume"))
+            notes.append("uploaded the resume through the page's Upload Resume button")
+        return filled, unfilled, notes
+
     def discover(self, page: Any) -> list[FormField]:
         if self._handoff:
             return []
@@ -162,6 +181,7 @@ class GenericHandler(BaseHandler):
 
     def apply(self, page: Any, packet: Any, *args: Any, **kwargs: Any) -> Any:
         self._handoff = None
+        self._resume = getattr(packet, "resume_path", "") or ""
         result = super().apply(page, packet, *args, **kwargs)
         board = str(packet.job.get("url") or "")
         if result.outcome == "failed" and detect_ats(board) == "indeed" and _indeed_apply(page):
@@ -189,13 +209,20 @@ class GenericHandler(BaseHandler):
 
 
 def looks_like_an_application(fields: list[FormField]) -> bool:
-    """True when the form asks for what an application asks for."""
-    if any(f.kind == "file" for f in fields):
+    """True when the form asks for what an application asks for. A field's
+    part is read from its label too: pages rarely say "contact" themselves."""
+    if any(f.kind == "file" and not _widget(f) for f in fields):
         return True
-    wanted = {f.section for f in fields if f.section in _APPLICATION_SECTIONS}
+    sections = [field_section(f) for f in fields]
+    wanted = {s for s in sections if s in _APPLICATION_SECTIONS}
     if len(wanted) >= 2:
         return True
-    return len([f for f in fields if f.section in _APPLICATION_SECTIONS]) >= MIN_APPLICATION_FIELDS
+    return len([s for s in sections if s in _APPLICATION_SECTIONS]) >= MIN_APPLICATION_FIELDS
+
+
+def _widget(field: FormField) -> bool:
+    """Another site's apply widget (Apply with LinkedIn) hides a file box of its own."""
+    return bool(_WIDGET.search(f"{field.label} {field.key} {field.selector}"))
 
 
 def _the_application(page: Any, fields: list[FormField]) -> list[FormField]:
@@ -208,10 +235,11 @@ def _the_application(page: Any, fields: list[FormField]) -> list[FormField]:
     if len(groups) < 2:
         return fields
 
-    def weight(group: list[FormField]) -> tuple[int, int]:
-        files = sum(f.kind == "file" for f in group)
-        asked = sum(f.section in _APPLICATION_SECTIONS for f in group)
-        return files, asked
+    def weight(group: list[FormField]) -> tuple[int, int, int]:
+        shown = [f for f in group if not _widget(f) and _shown(page, f.selector)]
+        files = sum(f.kind == "file" for f in shown)
+        asked = sum(field_section(f) in _APPLICATION_SECTIONS for f in shown)
+        return files, asked, len(shown)
 
     return max(groups.values(), key=weight)
 
@@ -243,6 +271,24 @@ def _shown(page: Any, selector: str | None) -> bool:
         )
     except Exception:
         return False
+
+
+def _upload_by_button(page: Any, path: str) -> bool:
+    """Press a visible "Upload Resume" button and give the file chooser it opens the file."""
+    try:
+        buttons = page.locator('button, [role="button"], label, a')
+        for index in range(min(buttons.count(), 200)):
+            button = buttons.nth(index)
+            text = (button.inner_text(timeout=1000) or "").strip()
+            if not UPLOAD_BUTTON.search(text) or not button.is_visible():
+                continue
+            with page.expect_file_chooser(timeout=5000) as chooser:
+                button.click(timeout=5000)
+            chooser.value.set_files(path)
+            return True
+    except Exception as exc:
+        log.info("generic: could not upload the resume by its button: %s", exc)
+    return False
 
 
 def _clear_consent(page: Any) -> None:

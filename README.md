@@ -197,9 +197,15 @@ reading it (its spinner), and the page must then show the file as attached;
 if it never does, the application stops rather than go without it. After
 filling, it looks at the form again: a question an answer brought up (Serco's
 "Source" after "How did you hear") is answered, and a box the page emptied is
-filled again. A required field with no answer on file that the page already
-filled (a Country set to United States) keeps what the page chose, except for
-the questions only you answer.
+filled again. A list that comes up empty and stays empty is brought back by
+choosing the answer above it again. A required field with no answer on file
+that the page already filled (a Country set to United States) keeps what the
+page chose, except for the questions only you answer. An application that runs
+over several pages (Phenom's My Information, My Experience, Application
+Questions, Voluntary Information, Review) is filled a page at a time: Next is
+pressed only when every required question on the page has an answer, a page
+that will not go on stops the application with what the site said, and the
+last page's Submit is pressed only in `auto` mode.
 
 What goes on the form comes from three places, in order: your contact details
 and the tailored resume for that job, then the answer bank, then the model, and

@@ -27,7 +27,9 @@
             resume, which empties Last Name; then the file name. "How did you hear" = Job
             Board brings up a required Source whose choices come 1.2s later, and never if
             another answer is given in between; Division comes already chosen.
+            Next leads to My Experience (a link, a voluntary question), then Review and Submit.
     phenomsilent  the same, but the page never shows the uploaded file's name
+    phenomstuck   the same, but Next never goes on and shows an error
     signup  Apply Now leads to ADP's guest step: name, email and mobile, and a notice
             about a verification process
     community  Apply Now leads to a "Join our talent community" form and nothing else
@@ -96,7 +98,7 @@
       apply = '<button type="button" id="apply">Apply</button><div id="inline" class="hidden">' + form + '</div>';
     } else {
       var to = { link: 'form', choice: 'choice', guest: 'login', wall: 'login', phenom: 'phenom',
-        phenomsilent: 'phenom', signup: 'signup', community: 'signup', closed: 'form' }[variant] || 'form';
+        phenomsilent: 'phenom', phenomstuck: 'phenom', signup: 'signup', community: 'signup', closed: 'form' }[variant] || 'form';
       apply = '<a id="apply" href="' + go(to) + '">Apply Now</a>';
     }
     var deadline = variant === 'closed' ? '<p>Application Deadline: 9/27/2020</p>' : '';
@@ -164,6 +166,36 @@
           '<option value="45028">Indeed</option><option value="45030">LinkedIn</option>' +
           '<option value="45033">Other Site</option>';
       }, 1200);
+    });
+    // Next: page 2 (My Experience: a link and a voluntary question), then a
+    // Review page whose Submit sends it. Page 1's answers are kept for the test.
+    // phenomstuck: Next never goes on and says why.
+    document.getElementById('next').addEventListener('click', function () {
+      var val = function (id) { var el = document.getElementById(id); return el ? el.value : null; };
+      var text = function (id) { var el = document.getElementById(id); return el && el.selectedIndex >= 0 ? el.options[el.selectedIndex].text : null; };
+      if (variant === 'phenomstuck' || !val('firstName') || !val('source') || val('source') === '-1') {
+        document.getElementById('phenom-form').insertAdjacentHTML('beforeend',
+          '<div class="error" role="alert">Please enter a valid postal code.</div>');
+        return;
+      }
+      window.__page1 = { firstName: val('firstName'), lastName: val('lastName'), homePhone: val('homePhone'),
+        source: text('source'), division: text('division'), resume: window.__resume };
+      main.innerHTML = '<h2>My Experience</h2><form id="p2"><fieldset><legend>Links</legend>' +
+        '<label for="li">LinkedIn Profile</label><input id="li"></fieldset>' +
+        '<fieldset><legend>Voluntary Information</legend><label for="gender">Gender</label>' +
+        '<select id="gender"><option value="">Please Select</option><option>Male</option><option>Female</option>' +
+        '<option>I decline to self-identify</option></select></fieldset>' +
+        '<button type="button" id="back">Previous</button> <button type="button" id="next2">Next</button></form>';
+      document.getElementById('next2').addEventListener('click', function () {
+        var page2 = { linkedin: val('li'), gender: text('gender') };
+        main.innerHTML = '<h2>Review your application</h2><p>Check everything before you send it.</p>' +
+          '<button type="button" id="back2">Previous</button> <button type="button" id="submit-app">Submit</button>' +
+          '<div id="done" class="hidden"><h2>Thank you for applying</h2></div>';
+        document.getElementById('submit-app').addEventListener('click', function () {
+          window.__submitted = { page1: window.__page1, page2: page2 };
+          document.getElementById('done').classList.remove('hidden');
+        });
+      });
     });
   } else if (step === 'signup') {
     main.innerHTML = variant === 'community'

@@ -31,6 +31,7 @@ from jobagent.apply.browser.fill import (
     detect_login_wall,
     fill_field,
     page_text,
+    visible_errors,
     wait_settled,
 )
 from jobagent.apply.closing import deadline_passed
@@ -68,6 +69,7 @@ _CODE_CHECK = re.compile(
     re.I,
 )
 SIGN_UP_JS = script("sign_up.js")
+STEP_CONTROL_JS = script("step_control.js")
 # A page still busy with an upload: its spinner or progress bar is showing.
 BUSY_JS = """() => Array.from(document.querySelectorAll(
     '[aria-busy="true"], [role="progressbar"], [class*="spinner" i], [class*="loader" i],'
@@ -101,6 +103,9 @@ class GenericHandler(BaseHandler):
     # How many more looks at the form after filling it, for questions that
     # appear only once an answer is given (Serco's "Source" after "How did you hear").
     more_looks = 2
+    # How many pages a multi-page application may run to (Phenom: My
+    # Information, My Experience, Application Questions, Voluntary, Review).
+    max_pages = 8
     # How long a list that appeared late gets to fill in its choices.
     options_wait_ms = 8_000
     # Where the posting names its place: schema.org markup, ADP's location line.
@@ -116,6 +121,9 @@ class GenericHandler(BaseHandler):
         self._posting: str | None = None
         # Why the form found is a sign-up and not the application.
         self._sign_up: str | None = None
+        # The fields of the page on screen, and whether the resume went on.
+        self._page_fields: list[FormField] = []
+        self._resume_sent = False
 
     def matches(self, url: str) -> bool:
         """Never claims a URL: it is what `handler_for` falls back to, so a
@@ -227,13 +235,24 @@ class GenericHandler(BaseHandler):
         return True
 
     def fill(self, page: Any, fields: list[FormField], plan: Any) -> tuple[list, list, list]:
+        """This page of the application, then each page after it (Next), up
+        to the one that sends it; the Submit button itself is left to the
+        caller, which presses it only in auto mode."""
+        filled, unfilled, notes = self._fill_page(page, fields, plan)
+        self._page_fields = list(fields)
+        self._next_pages(page, fields, plan, filled, unfilled, notes)
+        return filled, unfilled, notes
+
+    def _fill_page(
+        self, page: Any, fields: list[FormField], plan: Any
+    ) -> tuple[list[Fill], list[NeededInput], list[str]]:
         """The resume first when it goes through the page's own Upload Resume
         button (the form's file box hidden where it could not be read): a page
         that reads the resume rewrites the form while its spinner shows, so the
         plan goes on after. Then the plan; then what the page already held for
         a field the plan could not answer; then another look for questions an
-        answer brought up."""
-        resume = self._resume
+        answer brought up. The resume goes by button once per application."""
+        resume = "" if self._resume_sent else self._resume
         by_button: list[Fill] = []
         notes: list[str] = []
         if resume and not any(f.file_path for f in plan.fills):
@@ -243,9 +262,85 @@ class GenericHandler(BaseHandler):
         notes.extend(more)
         if resume and not any(f.file_path for f in filled):
             self._resume_by_button(page, resume, filled, plan, notes)
+        self._resume_sent = self._resume_sent or any(f.file_path for f in filled)
         self._keep_prefilled(page, fields, plan, filled)
         self._look_again(page, fields, plan, filled, unfilled, notes)
         return filled, unfilled, notes
+
+    def _next_pages(
+        self,
+        page: Any,
+        fields: list[FormField],
+        plan: Any,
+        filled: list[Fill],
+        unfilled: list[NeededInput],
+        notes: list[str],
+    ) -> None:
+        """Press Next while the page's last button is Next and every required
+        question so far has an answer; fill each page it brings. A page that
+        stays put after Next (the site found something wrong) stops it with
+        what the page said."""
+        for number in range(2, self.max_pages + 1):
+            if any(n.required for n in [*plan.needed, *unfilled]) or self._answerer is None:
+                return
+            control = _page_end(page, self._page_fields)
+            if not control or control["kind"] != "next":
+                return
+            before = _page_mark(page, self._page_fields)
+            try:
+                page.locator('[data-jobagent-step="next"]').first.click(timeout=5000)
+            except Exception as exc:
+                notes.append(f"could not press {control['text']!r}: {exc}")
+                return
+            wait_settled(page, self.settle_ms)
+            _wait_idle(page, self.upload_wait_ms)
+            try:
+                found = [
+                    f
+                    for f in _the_application(page, discover_fields(page))
+                    if not _widget(f) and _shown(page, f.selector)
+                ]
+            except Exception as exc:
+                notes.append(f"could not read page {number}: {exc}")
+                return
+            if _page_mark(page, found) == before:
+                said = "; ".join(visible_errors(page)[:3]) or "it gave no reason"
+                unfilled.append(
+                    NeededInput(
+                        key=f"page-{number - 1}",
+                        label=f"Page {number - 1} of the application",
+                        kind="unknown",
+                        required=True,
+                        reason=f"the form stayed on page {number - 1} after "
+                        f"{control['text']!r}: {said}",
+                        answer_key=f"page-{number - 1}",
+                    )
+                )
+                return
+            notes.append(f"went on to page {number} with {control['text']!r}")
+            self._page_fields = found
+            if not found:
+                continue
+            extra = self._answerer(found)
+            done, lost, more = self._fill_page(page, found, extra)
+            fields.extend(found)
+            filled.extend(done)
+            unfilled.extend(lost)
+            notes.extend(more)
+            plan.needed.extend(extra.needed)
+            plan.notes.extend(extra.notes)
+            plan.input_tokens += extra.input_tokens
+            plan.output_tokens += extra.output_tokens
+
+    def submit_buttons(self, page: Any, fields: list[FormField]) -> list[str]:
+        """The button ending the last page reached. A page still ending in
+        Next was not the last one, and its Next is never pressed as Submit."""
+        current = self._page_fields or fields
+        control = _page_end(page, current)
+        if control and control["kind"] == "next":
+            return []
+        first = ['[data-jobagent-step="submit"]'] if control else []
+        return first + super().submit_buttons(page, current)
 
     def _resume_by_button(
         self, page: Any, resume: str, filled: list[Fill], plan: Any, notes: list[str]
@@ -404,6 +499,8 @@ class GenericHandler(BaseHandler):
         self._handoff = None
         self._posting = None
         self._sign_up = None
+        self._page_fields = []
+        self._resume_sent = False
         self._resume = getattr(packet, "resume_path", "") or ""
         self._wanted = list(getattr(packet, "wanted_places", None) or [])
         self._answerer = args[0] if args else kwargs.get("answerer")
@@ -521,6 +618,19 @@ def _upload_by_button(page: Any, path: str) -> bool:
     except Exception as exc:
         log.info("generic: could not upload the resume by its button: %s", exc)
     return False
+
+
+def _page_end(page: Any, fields: list[FormField]) -> dict[str, Any] | None:
+    """The button ending the page on screen: {kind: submit|next, text}, or None."""
+    try:
+        return page.evaluate(STEP_CONTROL_JS, [f.selector for f in fields if f.selector][:5])
+    except Exception:
+        return None
+
+
+def _page_mark(page: Any, fields: list[FormField]) -> tuple[str, ...]:
+    """What tells one page of a form from the next: the address and its fields."""
+    return (str(getattr(page, "url", "") or ""), *sorted(f"{f.selector}|{f.label}" for f in fields))
 
 
 def _wait_idle(page: Any, wait_ms: int) -> None:

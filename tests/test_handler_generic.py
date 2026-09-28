@@ -210,20 +210,43 @@ def test_a_phenom_step_takes_the_fields_and_the_resume_by_its_button(page, packe
     assert result.outcome == "dry_run", (result.error, result.needed)
     values = {f.key: f.value for f in result.filled}
     assert values["firstName"] == "Mark" and values["email"] == "mark@example.com"
-    assert page.evaluate("() => window.__resume") == "mark-shield.pdf"
     assert not any("api_key" in f.key for f in result.filled), "not LinkedIn's widget box"
+    first = page.evaluate("() => window.__page1")
+    assert first["resume"] == "mark-shield.pdf"
     # The resume went first and the page finished reading it before the form
     # was filled: the Last Name it emptied was filled after.
-    assert page.input_value("#lastName") == "Shield"
-    assert "homePhone" not in values, "no second number on file; not the mobile again"
-    assert page.input_value("#homePhone") == ""
+    assert first["lastName"] == "Shield"
+    assert "homePhone" not in values and first["homePhone"] == "", "not the mobile again"
     # What the page chose itself stays; a question an answer brought up is filled.
-    assert values["division"] == "Networks"
+    assert values["division"] == "Networks" and first["division"] == "Networks"
     assert {f.key: f.source for f in result.filled}["division"] == "prefilled"
     assert values["sourceType"] == "Job Board"
-    assert values["source"] == "Indeed", "the board the job was found on"
+    assert values["source"] == "Indeed" and first["source"] == "Indeed", "the job's board"
     assert values["cust_Preferred"] == "Email"
-    assert page.eval_on_selector("#source", "el => el.options[el.selectedIndex].text") == "Indeed"
+    # Page 2 filled after Next; the dry run stops at Review without sending.
+    assert values["li"] == "https://www.linkedin.com/in/markshield"
+    assert values["gender"] == "I decline to self-identify"
+    assert page.is_visible("#submit-app")
+    assert page.evaluate("() => window.__submitted || null") is None
+
+
+def test_a_multi_page_application_is_sent_from_its_last_page(page, packet):
+    packet.job["source"] = "indeed"
+    result = run_flow(page, packet, "phenom", submit=True)
+    assert result.outcome == "submitted", (result.error, result.needed)
+    sent = page.evaluate("() => window.__submitted")
+    assert sent["page1"]["firstName"] == "Mark" and sent["page1"]["source"] == "Indeed"
+    assert sent["page2"]["gender"] == "I decline to self-identify"
+
+
+def test_a_page_that_will_not_go_on_stops_with_what_it_said(page, packet):
+    packet.job["source"] = "indeed"
+    result = run_flow(page, packet, "phenomstuck", submit=True)
+    assert result.outcome == "needs_input"
+    stuck = [n for n in result.needed if n.required]
+    assert [n.key for n in stuck] == ["page-1"]
+    assert "Please enter a valid postal code" in stuck[0].reason
+    assert page.evaluate("() => window.__submitted || null") is None
 
 
 def test_a_resume_the_page_never_shows_is_not_taken_as_attached(page, packet):

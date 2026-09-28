@@ -32,6 +32,8 @@
     unconfirmed  Submit shows nothing afterwards
     draft        an earlier run saved a draft: the posting offers Continue Application, which
                  opens the first unsaved step (My Information) with no start choice
+    stuck        Apply Manually leaves the loading page up for good
+  Without autofill (manual, draft) My Experience has one empty work entry, as live.
 -->
 <style>
   body { font-family: -apple-system, Helvetica, Arial, sans-serif; margin: 0; color: #222; }
@@ -59,7 +61,7 @@
   <h2 data-automation-id="jobPostingHeader">Network Engineering Manager</h2>
   <div>Remote, USA</div>
   <div data-variant="closed"><p>This job posting is no longer accepting applications.</p></div>
-  <div data-variant=",manual,signed_out,needs_input,invalid,unconfirmed">
+  <div data-variant=",manual,signed_out,needs_input,invalid,unconfirmed,stuck">
     <a data-automation-id="adventureButton" role="button" href="#apply">Apply</a>
   </div>
   <div data-variant="draft">
@@ -287,6 +289,56 @@
       </div>
     </div>
   </div>
+  <!-- Copied from the live CrowdStrike page (2026-09-28): with Apply Manually or a saved
+       draft there is one empty entry. Its text boxes and checkbox carry bare names, its
+       dates and textarea the entry's id, and the 5 is Workday's own number, not a position. -->
+  <div data-not-autofill="1">
+    <h3>Work Experience</h3>
+    <div data-automation-id="workExperienceSection" data-fkit-id="workExperience-5">
+      <h4>Work Experience 1</h4>
+      <div data-automation-id="formField-jobTitle" data-fkit-id="workExperience-5--jobTitle">
+        <label for="workExperience-5--jobTitle"><span>Job Title<abbr>*</abbr></span></label>
+        <input type="text" id="workExperience-5--jobTitle" name="jobTitle" aria-required="true" value="">
+      </div>
+      <div data-automation-id="formField-companyName" data-fkit-id="workExperience-5--companyName">
+        <label for="workExperience-5--companyName"><span>Company<abbr>*</abbr></span></label>
+        <input type="text" id="workExperience-5--companyName" name="companyName" aria-required="true" value="">
+      </div>
+      <div data-automation-id="formField-location" data-fkit-id="workExperience-5--location">
+        <label for="workExperience-5--location"><span>Location</span></label>
+        <input type="text" id="workExperience-5--location" name="location" value="">
+      </div>
+      <div data-automation-id="formField-currentlyWorkHere" data-fkit-id="workExperience-5--currentlyWorkHere">
+        <label for="workExperience-5--currentlyWorkHere">I currently work here</label>
+        <input id="workExperience-5--currentlyWorkHere" type="checkbox" name="currentlyWorkHere" aria-required="false">
+      </div>
+      <div data-automation-id="formField-startDate" data-fkit-id="workExperience-5--startDate">
+        <fieldset><legend><label id="workExperience-5-from"><span>From<abbr>*</abbr></span></label></legend>
+        <div aria-hidden="true" id="helpText-workExperience-5--startDate">current value is MM/YYYY</div>
+        <div id="workExperience-5--startDate" role="group" data-automation-id="dateInputWrapper" class="date">
+          <div id="workExperience-5--startDate-dateSectionMonth"><div data-automation-id="dateSectionMonth-display">MM</div>
+            <input role="spinbutton" aria-label="Month" aria-valuemax="12" aria-valuemin="1" id="workExperience-5--startDate-dateSectionMonth-input" data-automation-id="dateSectionMonth-input" value=""></div>
+          <span>/</span>
+          <div id="workExperience-5--startDate-dateSectionYear"><div data-automation-id="dateSectionYear-display">YYYY</div>
+            <input role="spinbutton" aria-label="Year" id="workExperience-5--startDate-dateSectionYear-input" data-automation-id="dateSectionYear-input" value=""></div>
+        </div></fieldset>
+      </div>
+      <div data-automation-id="formField-endDate" data-fkit-id="workExperience-5--endDate">
+        <fieldset><legend><label id="workExperience-5-to"><span>To<abbr>*</abbr></span></label></legend>
+        <div id="workExperience-5--endDate" role="group" data-automation-id="dateInputWrapper" class="date">
+          <div id="workExperience-5--endDate-dateSectionMonth"><div data-automation-id="dateSectionMonth-display">MM</div>
+            <input role="spinbutton" aria-label="Month" aria-valuemax="12" aria-valuemin="1" id="workExperience-5--endDate-dateSectionMonth-input" data-automation-id="dateSectionMonth-input" value=""></div>
+          <span>/</span>
+          <div id="workExperience-5--endDate-dateSectionYear"><div data-automation-id="dateSectionYear-display">YYYY</div>
+            <input role="spinbutton" aria-label="Year" id="workExperience-5--endDate-dateSectionYear-input" data-automation-id="dateSectionYear-input" value=""></div>
+        </div></fieldset>
+      </div>
+      <div data-automation-id="formField-roleDescription" data-fkit-id="workExperience-5--roleDescription">
+        <label for="workExperience-5--roleDescription"><span>Role Description</span></label>
+        <textarea id="workExperience-5--roleDescription" aria-required="false"></textarea>
+      </div>
+    </div>
+  </div>
   <div data-fkit-id="resumeAttachments--null">
     <h3>Resume/CV</h3>
     <div data-automation-id="formField-" data-fkit-id="resumeAttachments--attachments">
@@ -434,6 +486,7 @@
       document.getElementById('posting').hidden = true;
       document.getElementById('flow-page').hidden = false;
       if (variant === 'signed_out') { show('signin'); return; }
+      if (variant === 'stuck') { flow.innerHTML = '<div data-automation-id="applyFlowLoadingPage"><p>Loading</p></div>'; return; }
       later(path === 'autofill' ? 'autofill' : 'info');
     });
   });
@@ -513,6 +566,9 @@
     Array.prototype.forEach.call(flow.querySelectorAll('[data-only-autofill]'), function (el) {
       if (path !== 'autofill') el.parentNode.removeChild(el);
     });
+    Array.prototype.forEach.call(flow.querySelectorAll('[data-not-autofill]'), function (el) {
+      if (path === 'autofill') el.parentNode.removeChild(el);
+    });
     Array.prototype.forEach.call(flow.querySelectorAll('input[type="file"]'), function (f) {
       f.addEventListener('change', function () { window.__uploads += f.files.length; });
     });
@@ -560,12 +616,14 @@
         var f = w.getAttribute('data-fkit-id');
         var part = function (p) { var el = document.getElementById(f + '--' + p); return el ? el.value : ''; };
         return { title: part('jobTitle'), company: part('companyName'), location: part('location'),
+          description: part('roleDescription'),
           current: document.getElementById(f + '--currentlyWorkHere').checked,
           from: part('startDate-dateSectionMonth-input') + '/' + part('startDate-dateSectionYear-input'),
           to: part('endDate-dateSectionMonth-input') + '/' + part('endDate-dateSectionYear-input') };
       });
       if (!r.files.length) { error('Error: The field Upload a file (5MB max) is required and must have a value.'); return; }
       for (var j = 0; j < a.jobs.length; j++) {
+        if (!a.jobs[j].title || !a.jobs[j].company) { error('Errors Found: Job Title and Company are required'); return; }
         if (a.jobs[j].from === '/' || (!a.jobs[j].current && a.jobs[j].to === '/')) { error('Errors Found: From and To are required'); return; }
       }
     }

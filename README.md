@@ -262,7 +262,9 @@ kept**: the company's Workday cookies are, in
 (about an hour on CrowdStrike's) while its cookies still look valid, so the
 cookies cannot tell you whether it works. `--status` opens each company's
 posting, presses Apply and Apply Manually, and reports what comes up: still
-signed in, or the sign-in page (add `--no-check` to skip that). A run that
+signed in, or the sign-in page (add `--no-check` to skip that). Each site
+gets 90 seconds (`--check-timeout` to change it); one that shows neither in
+that time is reported with how long each stage took and left as it was. A run that
 meets the sign-in page marks that company as needing a new sign-in; its
 other jobs then wait without opening the site, the run output and the
 dashboard say which company and how many applications are waiting, and the
@@ -272,7 +274,10 @@ press Enter (`--no-retry` to leave them).
 The agent presses Apply, picks **Autofill with Resume** (Workday reads the
 tailored resume into My Experience) or **Apply Manually** where that is all
 there is, and then goes step by step: My Information, My Experience,
-Application Questions, Voluntary Disclosures, Self Identify, Review. It reads
+Application Questions, Voluntary Disclosures, Self Identify, Review. In My
+Experience each job autofill listed gets its dates from the role on file with
+that employer, and an empty entry (Apply Manually, a saved draft) is filled
+from your most recent role: title, company, dates and its description. It reads
 Workday's own controls (dropdown buttons, the "How did you hear about us?"
 search box, dates in three boxes) and fills them the way you would. "How did
 you hear about us?" gets the board the job was found on; phone device type is

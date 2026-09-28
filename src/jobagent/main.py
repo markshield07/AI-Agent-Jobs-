@@ -21,6 +21,7 @@ import json
 import logging
 import sys
 import threading
+import time
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -186,6 +187,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     login.add_argument(
         "--no-check", action="store_true", help="Workday --status: don't open the sites."
+    )
+    login.add_argument(
+        "--check-timeout",
+        type=int,
+        default=90,
+        help="Workday --status: seconds each site may take to show whether it is signed in.",
     )
     login.add_argument(
         "--no-retry",
@@ -631,7 +638,7 @@ def _login_workday(args: argparse.Namespace, settings: Settings) -> int:
         if not hosts:
             print("Workday: no company sign-ins saved. Run: jobagent login workday <posting URL>")
         if hosts and not args.no_check:
-            _check_workday(settings, hosts)
+            _check_workday(settings, hosts, timeout_s=args.check_timeout)
         for host in hosts:
             print(_workday_line(sessions.workday_status(settings, host)))
         return 0
@@ -653,7 +660,7 @@ def _login_workday(args: argparse.Namespace, settings: Settings) -> int:
         return 0
     if args.status:
         if not args.no_check and sessions.workday_status(settings, host)["saved"]:
-            _check_workday(settings, [host], url=args.url)
+            _check_workday(settings, [host], url=args.url, timeout_s=args.check_timeout)
         print(_workday_line(sessions.workday_status(settings, host)))
         return 0
 
@@ -717,7 +724,9 @@ def _workday_line(status: dict[str, object]) -> str:
     return f"Workday {host}: {text}."
 
 
-def _check_workday(settings: Settings, hosts: list[str], url: str | None = None) -> None:
+def _check_workday(
+    settings: Settings, hosts: list[str], url: str | None = None, *, timeout_s: float = 90
+) -> None:
     """Open each company's posting with the saved sign-in and record what shows."""
     from jobagent.apply import sessions
     from jobagent.apply.browser.session import BrowserUnavailable, open_browser
@@ -730,8 +739,21 @@ def _check_workday(settings: Settings, hosts: list[str], url: str | None = None)
                 if not where:
                     print(f"Workday {host}: no posting on file to check it with.")
                     continue
+                handler = WorkdayHandler()
+                began = time.monotonic()
                 with browser.new_page() as page:
-                    state = WorkdayHandler().check_session(page, where)
+                    state = handler.check_session(page, where, timeout_s=timeout_s)
+                took = time.monotonic() - began
+                stages = ", ".join(f"{name} {secs:.0f}s" for name, secs in handler.timings)
+                if state == "timed_out":
+                    print(
+                        f"Workday {host}: {where} showed neither a step nor a sign-in page "
+                        f"within {timeout_s:.0f}s ({stages or 'the posting did not open'}); "
+                        "not recorded. Sign in again if its applications stop."
+                    )
+                    continue
+                if took > 30:
+                    print(f"Workday {host}: the check took {took:.0f}s ({stages}).")
                 if state == "unknown":
                     print(f"Workday {host}: could not tell from {where} (closed posting?).")
                     continue

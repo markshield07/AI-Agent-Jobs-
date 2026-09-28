@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any
@@ -342,6 +343,8 @@ class WorkdayHandler(WizardHandler):
     # The longest wait for the next step to be drawn after Save and Continue.
     step_timeout_ms = 20_000
     poll_ms = 250
+    # The longest a sign-in check may take, in seconds, whatever the site does.
+    check_timeout_s = 90.0
 
     def __init__(self) -> None:
         self._posting = ""
@@ -352,8 +355,13 @@ class WorkdayHandler(WizardHandler):
         self._roles: list[Any] = []
         # Work-history entry and part of each field, by key: ("workExperience-6", "startDate").
         self._entries: dict[str, tuple[str, str]] = {}
+        # The entries in the order the page shows them.
+        self._entry_order: list[str] = []
         # What each field of the step held when read, by key.
         self._values: dict[str, str] = {}
+        # When a sign-in check has to give up (time.monotonic()), and how long each stage took.
+        self._deadline: float | None = None
+        self.timings: list[tuple[str, float]] = []
 
     # -- the flow ------------------------------------------------------------
 
@@ -405,40 +413,77 @@ class WorkdayHandler(WizardHandler):
     def sign_in_target(self) -> str:
         return (urlparse(self._posting).hostname or "").lower() or self.site
 
-    def check_session(self, page: Any, url: str) -> str:
+    def check_session(self, page: Any, url: str, *, timeout_s: float | None = None) -> str:
         """Whether the saved sign-in still works on this company's site:
-        signed_in, signed_out, or unknown (the posting is closed, or the page
-        showed neither). Opens the posting, presses Apply and "Apply Manually",
-        and looks at what comes up; nothing is saved on the site."""
+        signed_in, signed_out, unknown (the posting is closed, or the page
+        showed neither), or timed_out when the site had not shown either
+        within `timeout_s` (check_timeout_s by default). Opens the posting,
+        presses Apply and "Apply Manually", and looks at what comes up;
+        nothing is saved on the site. `timings` says how long each stage took."""
+        budget = self.check_timeout_s if timeout_s is None else timeout_s
+        self._deadline = time.monotonic() + budget
+        self.timings = []
+        # A check needs none of the patience a whole application does.
+        self.settle_ms = min(self.settle_ms, 4_000)
+        self.step_timeout_ms = min(self.step_timeout_ms, 10_000)
+        try:
+            page.set_default_timeout(10_000)
+        except Exception:
+            pass
+        try:
+            return self._check(page, url)
+        finally:
+            self._deadline = None
+
+    def _check(self, page: Any, url: str) -> str:
         self._posting = self.application_url(url)
         # Apply Manually first: it opens the same sign-in without uploading anything.
         self.start_selectors = tuple(
             sorted(type(self).start_selectors, key=lambda sel: "applyManually" not in sel)
         )
+        began = time.monotonic()
         try:
-            page.goto(self._posting, wait_until="domcontentloaded", timeout=self.settle_ms * 3)
+            page.goto(self._posting, wait_until="domcontentloaded", timeout=self._left_ms(30_000))
         except Exception as exc:
             log.info("workday: could not open %s: %s", self._posting, exc)
-            return "unknown"
-        wait_settled(page, self.settle_ms)
+            return "timed_out" if self._late() else "unknown"
+        wait_settled(page, self._left_ms(self.settle_ms))
         click_first_visible(page, COOKIE_BUTTON_SELECTORS)
+        began = self._timed("open the posting", began)
         if self.signed_out(page):
             return "signed_out"
+        if self._late():
+            return "timed_out"
         flow = self.open_flow(page)
+        self._timed("press Apply and Apply Manually", began)
         if flow is None:
-            return "unknown"
+            return "timed_out" if self._late() else "unknown"
         try:
             if self.signed_out(flow):
                 return "signed_out"
             if _arrived(self.step_marker(flow), "") or self._in_flow(flow):
                 return "signed_in"
-            return "unknown"
+            return "timed_out" if self._late() else "unknown"
         finally:
             if flow is not page:
                 try:
                     flow.close()
                 except Exception:
                     pass
+
+    def _late(self) -> bool:
+        return self._deadline is not None and time.monotonic() >= self._deadline
+
+    def _left_ms(self, most: int) -> int:
+        """`most`, or what is left of a sign-in check's time if that is less."""
+        if self._deadline is None:
+            return most
+        return max(1_000, min(most, int((self._deadline - time.monotonic()) * 1000)))
+
+    def _timed(self, stage: str, began: float) -> float:
+        now = time.monotonic()
+        self.timings.append((stage, now - began))
+        return now
 
     def login_hint(self) -> str:
         host = urlparse(self._posting).hostname or ""
@@ -491,7 +536,7 @@ class WorkdayHandler(WizardHandler):
 
     def _wait_until(self, page: Any, done: Any) -> bool:
         waited = 0
-        while waited < self.step_timeout_ms:
+        while waited < self.step_timeout_ms and not self._late():
             if done():
                 return True
             page.wait_for_timeout(self.poll_ms)
@@ -504,7 +549,7 @@ class WorkdayHandler(WizardHandler):
         screen has stopped growing: Workday draws a step's wrapper first and
         its questions over the next moments."""
         last, steady, waited = -1, 0, 0
-        while steady < 3 and waited < self.step_timeout_ms:
+        while steady < 3 and waited < self.step_timeout_ms and not self._late():
             try:
                 count = int(page.evaluate(_FIELD_COUNT_JS) or 0)
             except Exception:
@@ -571,8 +616,9 @@ class WorkdayHandler(WizardHandler):
             parts = tuple((raw.get("parts") or []) + [None, None, None])[:3]
             self._widgets[field.key] = _Widget(kind=kind, value=value, parts=parts)
             fields.append(field)
+        fields = self._in_page_order(page, fields)
         self._read_entries(page, fields)
-        return self._in_page_order(page, fields)
+        return fields
 
     @staticmethod
     def _one_per_entry(page: Any, fields: list[FormField]) -> list[FormField]:
@@ -611,20 +657,42 @@ class WorkdayHandler(WizardHandler):
 
     def _read_entries(self, page: Any, fields: list[FormField]) -> None:
         """Mark the fields of each work-history entry (My Experience) as that
-        entry's: their Location is where the job was, not where the person lives."""
+        entry's: their Location is where the job was, not where the person lives.
+
+        Inside an entry the text boxes and the checkbox carry bare names
+        (jobTitle, currentlyWorkHere) and the dates and the textarea the
+        entry's id, so each is keyed by its box's id (workExperience-5--jobTitle)
+        to keep it with its entry. The number in that id is Workday's own and
+        says nothing about position: the label says which entry it is, counted
+        in the order the page shows them."""
         self._entries = {}
+        self._entry_order = []
         if not fields:
             return
         try:
             ids = list(page.evaluate(_FKIT_JS, [f.selector for f in fields]) or [])
         except Exception:
             return
+        taken = {f.key for f in fields}
         for field, fkit in zip(fields, ids, strict=False):
             found = _ENTRY.match(str(fkit or ""))
             if found is None or field.kind == "file":
                 continue
+            entry, part = found.group(1), found.group(2)
+            if field.key != fkit and fkit not in taken:
+                taken.discard(field.key)
+                taken.add(fkit)
+                if field.key in self._widgets:
+                    self._widgets[fkit] = self._widgets.pop(field.key)
+                field.key = fkit
+            if entry not in self._entry_order:
+                self._entry_order.append(entry)
             field.section = "experience"
-            self._entries[field.key] = (found.group(1), found.group(2))
+            self._entries[field.key] = (entry, part)
+        for field in fields:
+            spot = self._entries.get(field.key)
+            if spot is not None:
+                field.label = f"{field.label} ({_entry_name(spot[0], self._entry_order)})"
 
     def _read_files(self, page: Any, fields: list[FormField]) -> dict[str, str]:
         """Label the resume upload as the resume; return the files Workday holds, by selector."""
@@ -731,31 +799,46 @@ class WorkdayHandler(WizardHandler):
             plan.needed[:] = [n for n in plan.needed if n.key != field.key]
 
     def _add_history(self, fields: list[FormField], plan: FillPlan) -> None:
-        """The dates of each work-history entry, from the role it names.
+        """Each work-history entry, from the role it names or, when empty, the next role.
 
         Workday's autofill makes an entry per job with its title and company
         but leaves From and To empty. The role fact with that employer (else
         that title) gives them: From as MM/YYYY, and "I currently work here"
-        ticked, To left empty, when the role runs to the present."""
+        ticked, To left empty, when the role runs to the present. An entry
+        with neither title nor company (Apply Manually, a saved draft) takes
+        the most recent role no other entry names, in page order, and gets its
+        title, company and description too."""
         if not self._roles or not self._entries:
             return
-        values = dict(self._values)
-        values.update({f.key: str(f.value) for f in plan.fills if isinstance(f.value, str)})
         parts: dict[str, dict[str, str]] = {}
         for key, (entry, part) in self._entries.items():
             parts.setdefault(entry, {})[part] = key
 
         def named(entry: str, pattern: str) -> str:
             keys = [k for p, k in parts[entry].items() if re.search(pattern, p, re.I)]
-            return next((values[k] for k in keys if values.get(k)), "")
+            return next((self._values[k].strip() for k in keys if self._values.get(k)), "")
 
-        planned = {f.key for f in plan.fills}
-        for entry in parts:
-            role = _match_role(
-                self._roles, named(entry, r"title"), named(entry, r"company|employer")
-            )
-            if role is None:
+        # Only jobs: a school entry has no role to take its dates from.
+        order = [e for e in self._entry_order if e in parts] + [
+            e for e in parts if e not in self._entry_order
+        ]
+        order = [e for e in order if e.startswith("workExperience")]
+        chosen: dict[str, tuple[Any, bool]] = {}
+        for entry in order:
+            title, company = named(entry, r"title"), named(entry, r"company|employer")
+            if title or company:
+                role = _match_role(self._roles, title, company)
+                if role is not None:
+                    chosen[entry] = (role, False)
+        used = {id(role) for role, _ in chosen.values()}
+        spare = [r for r in _by_recency(self._roles) if id(r) not in used]
+        for entry in order:
+            if entry in chosen or named(entry, r"title|company|employer") or not spare:
                 continue
+            chosen[entry] = (spare.pop(0), True)
+
+        planned = {f.key for f in plan.fills if f.source == "prefilled"}
+        for entry, (role, empty) in chosen.items():
             detail = getattr(role, "detail", {}) or {}
             end = str(detail.get("end") or "")
             current = bool(_PRESENT.fullmatch(end.strip()))
@@ -771,16 +854,21 @@ class WorkdayHandler(WizardHandler):
                     value = None if current else _month_year(end)
                     if current:
                         # Not asked once "I currently work here" is ticked.
-                        plan.needed[:] = [n for n in plan.needed if n.key != field.key]
+                        _drop(plan, field.key)
                 elif field.kind == "checkbox" and re.search(r"current", part, re.I):
-                    plan.needed[:] = [n for n in plan.needed if n.key != field.key]
+                    _drop(plan, field.key)
                     value = True if current else None
+                elif empty and field.kind in ("text", "textarea"):
+                    value = _entry_text(part, role, detail)
+                    if value is None:
+                        # Nothing on file for it (the job's location): left as it is.
+                        _drop(plan, field.key)
                 if value is None:
                     continue
+                _drop(plan, field.key)
                 plan.fills.append(
                     Fill(key=field.key, value=value, source="resume", label=field.label)
                 )
-                plan.needed[:] = [n for n in plan.needed if n.key != field.key]
 
     def _fill_one(self, page: Any, field: FormField, fill: Fill) -> str | None:
         widget = self._widgets.get(field.key)
@@ -873,6 +961,48 @@ def _arrived(marker: str, before: str) -> bool:
 # A work-history field: "workExperience-6--startDate" is entry workExperience-6, part startDate.
 _ENTRY = re.compile(r"^((?:workExperience|education)-\d+)--(\w+)$")
 _PRESENT = re.compile(r"present|current|now|today|ongoing", re.I)
+
+
+def _entry_name(entry: str, order: list[str]) -> str:
+    """ "work experience 1": the entry's place on the page, not the number in its id."""
+    kind = "education" if entry.startswith("education") else "work experience"
+    same = [e for e in order if e.split("-")[0] == entry.split("-")[0]]
+    return f"{kind} {same.index(entry) + 1}" if entry in same else kind
+
+
+def _entry_text(part: str, role: Any, detail: dict[str, Any]) -> str | None:
+    """What an empty entry's text box takes from the role it was given."""
+    if re.search(r"title", part, re.I):
+        found = detail.get("title")
+    elif re.search(r"company|employer", part, re.I):
+        found = detail.get("employer")
+    elif re.search(r"location", part, re.I):
+        found = detail.get("location")
+    elif re.search(r"description|summary", part, re.I):
+        found = getattr(role, "text", "")
+    else:
+        return None
+    text = str(found or "").strip()
+    return text or None
+
+
+def _by_recency(roles: list[Any]) -> list[Any]:
+    """The roles, the current one first, then by start date, latest first."""
+
+    def when(role: Any) -> tuple[int, int, int]:
+        detail = getattr(role, "detail", {}) or {}
+        current = bool(_PRESENT.fullmatch(str(detail.get("end") or "").strip()))
+        parsed = parse_date(str(detail.get("start") or ""))
+        year, month = (parsed[2], parsed[0] or 0) if parsed else (0, 0)
+        return (-int(current), -year, -month)
+
+    return sorted(roles, key=when)
+
+
+def _drop(plan: FillPlan, key: str) -> None:
+    """Take a field out of what the plan fills and asks, for the handler to answer it."""
+    plan.fills[:] = [f for f in plan.fills if f.key != key]
+    plan.needed[:] = [n for n in plan.needed if n.key != key]
 
 
 def _norm(text: str) -> str:

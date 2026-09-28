@@ -554,13 +554,53 @@ def test_login_workday_status_opens_the_site_to_see_if_the_sign_in_works(
     checked = []
     monkeypatch.setattr("jobagent.apply.browser.session.open_browser", fake_open)
     monkeypatch.setattr(
-        WorkdayHandler, "check_session", lambda self, page, url: checked.append(url) or "signed_out"
+        WorkdayHandler,
+        "check_session",
+        lambda self, page, url, **kw: checked.append(url) or "signed_out",
     )
     main.run(["login", "workday", "--status"])
     out = capsys.readouterr().out
     assert checked == [posting]
     assert f"Workday {host}: the sign-in has ended; sign in again: jobagent login workday" in out
     assert "1 application(s) waiting on it" in out
+
+
+def test_login_workday_status_says_when_the_check_ran_out_of_time(
+    cli_settings, settings, monkeypatch, capsys
+):
+    from contextlib import contextmanager
+
+    from jobagent.apply import sessions
+    from jobagent.apply.handlers.workday import WorkdayHandler
+
+    host = "acme.wd5.myworkdayjobs.com"
+    posting = f"https://{host}/careers/job/Remote/Engineer_R1"
+    cookie = {"name": "PLAY_SESSION", "value": "x", "domain": host, "path": "/", "expires": -1}
+    sessions.save_workday_session(settings, host, {"cookies": [cookie]}, url=posting)
+
+    class Browser:
+        @contextmanager
+        def new_page(self):
+            yield object()
+
+    @contextmanager
+    def fake_open(settings_):
+        yield Browser()
+
+    given = []
+
+    def stuck(self, page, url, *, timeout_s=None):
+        given.append(timeout_s)
+        self.timings = [("open the posting", 3.0), ("press Apply and Apply Manually", 42.0)]
+        return "timed_out"
+
+    monkeypatch.setattr("jobagent.apply.browser.session.open_browser", fake_open)
+    monkeypatch.setattr(WorkdayHandler, "check_session", stuck)
+    main.run(["login", "workday", posting, "--status", "--check-timeout", "45"])
+    out = capsys.readouterr().out
+    assert given == [45]
+    assert "within 45s (open the posting 3s, press Apply and Apply Manually 42s)" in out
+    assert sessions.workday_status(settings, host)["state"] == "unchecked"
 
 
 def test_login_workday_runs_the_applications_waiting_on_it(

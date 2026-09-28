@@ -20,7 +20,7 @@ import pytest
 from jobagent.apply.answering import make_answerer, question_key
 from jobagent.apply.handlers import default_handlers, handler_for
 from jobagent.apply.handlers.workday import WorkdayHandler, parse_date
-from jobagent.apply.models import Packet
+from jobagent.apply.models import Fill, FillPlan, FormField, NeededInput, Packet
 from jobagent.resume.facts import Fact
 
 FIXTURE = Path(__file__).parent / "fixtures" / "forms" / "workday.html"
@@ -261,6 +261,7 @@ def test_work_history_dates_come_from_the_role_each_entry_names(page, packet):
             "title": "Network Operations Manager",
             "company": "Globex",
             "location": "",
+            "description": "Ran the network operations center.",
             "current": True,
             "from": "04/2018",
             "to": "/",
@@ -269,12 +270,13 @@ def test_work_history_dates_come_from_the_role_each_entry_names(page, packet):
             "title": "Network Engineer",
             "company": "Initech",
             "location": "",
+            "description": "Built the campus network.",
             "current": False,
             "from": "06/2012",
             "to": "03/2018",
         },
     ]
-    assert not any(n.label == "Location" for n in result.needed)
+    assert not any(n.key.endswith("--location") for n in result.needed)
 
 
 @pytest.mark.usefixtures("page")
@@ -285,6 +287,91 @@ def test_an_entry_no_role_on_file_names_is_asked_about(page, packet):
     asked = sorted(n.key for n in result.needed if n.required)
     assert asked == ["workExperience-7--endDate", "workExperience-7--startDate"]
     assert all(n.answer_key.startswith("q:") for n in result.needed), "never the contact keys"
+
+
+@pytest.mark.usefixtures("page")
+def test_an_empty_entry_takes_the_most_recent_role(page, packet):
+    # Live, Apply Manually and a saved draft show one empty entry, workExperience-5.
+    packet.facts.reverse()
+    result = run(page, packet, variant="manual")
+    assert result.outcome == "dry_run", result.error
+    assert js(page, "__answers")["jobs"] == [
+        {
+            "title": "Network Operations Manager",
+            "company": "Globex Corporation",
+            "location": "",
+            "description": "Ran the network operations center at Globex",
+            "current": True,
+            "from": "04/2018",
+            "to": "/",
+        }
+    ]
+    assert not [n for n in result.needed if n.required]
+
+
+@pytest.mark.usefixtures("page")
+def test_entry_fields_keep_their_entry_and_say_which_one_it_is(page, packet):
+    result = run(page, packet, variant="manual")
+    entry = {f.key: f.label for f in result.fields if f.key.startswith("workExperience-")}
+    assert entry["workExperience-5--jobTitle"] == "Job Title (work experience 1)"
+    assert entry["workExperience-5--companyName"] == "Company (work experience 1)"
+    assert (
+        entry["workExperience-5--currentlyWorkHere"] == "I currently work here (work experience 1)"
+    )
+    assert entry["workExperience-5--roleDescription"] == "Role Description (work experience 1)"
+    assert not {"jobTitle", "companyName", "location", "currentlyWorkHere"} & {
+        f.key for f in result.fields
+    }
+
+
+@pytest.mark.usefixtures("page")
+def test_entries_are_counted_in_page_order(page, packet):
+    result = run(page, packet)
+    labels = {f.key: f.label for f in result.fields}
+    assert labels["workExperience-6--jobTitle"] == "Job Title (work experience 1)"
+    assert labels["workExperience-7--startDate"] == "From (work experience 2)"
+
+
+def test_the_role_given_to_an_empty_entry_outranks_a_model_guess():
+    handler = WorkdayHandler()
+    fields = [
+        FormField(key="workExperience-5--jobTitle", label="Job Title", kind="text", required=True),
+        FormField(
+            key="workExperience-5--roleDescription", label="Role Description", kind="textarea"
+        ),
+    ]
+    handler._entries = {
+        "workExperience-5--jobTitle": ("workExperience-5", "jobTitle"),
+        "workExperience-5--roleDescription": ("workExperience-5", "roleDescription"),
+    }
+    handler._entry_order = ["workExperience-5"]
+    handler._values = {}
+    handler._roles = [
+        Fact(
+            kind="role",
+            text="Help desk",
+            detail={"title": "Technician", "start": "2004", "end": "2006"},
+        ),
+        Fact(
+            kind="role",
+            text="Field teams",
+            detail={"title": "Sr. Manager", "start": "04/2018", "end": "current"},
+        ),
+    ]
+    plan = FillPlan(
+        fills=[Fill(key="workExperience-5--roleDescription", value="Help desk", source="model")],
+        needed=[
+            NeededInput(
+                key="workExperience-5--jobTitle", label="Job Title", kind="text", required=True
+            )
+        ],
+    )
+    handler._add_history(fields, plan)
+    assert {f.key: f.value for f in plan.fills} == {
+        "workExperience-5--jobTitle": "Sr. Manager",
+        "workExperience-5--roleDescription": "Field teams",
+    }
+    assert plan.needed == []
 
 
 @pytest.mark.usefixtures("page")
@@ -373,6 +460,22 @@ def test_the_sign_in_check_opens_the_posting_and_reads_what_comes_up(page, varia
     if variant == "":
         assert js(page, "__start") == "manual", "the check uploads nothing"
     assert js(page, "__submitted") is None
+
+
+@pytest.mark.usefixtures("page")
+def test_the_sign_in_check_gives_up_on_time(page):
+    """Live, a lapsed sign-in's check ran past five minutes."""
+    import time
+
+    handler = WorkdayHandler()
+    handler.poll_ms = 50
+    began = time.monotonic()
+    assert handler.check_session(page, fixture_url("stuck"), timeout_s=4) == "timed_out"
+    assert time.monotonic() - began < 12
+    assert [stage for stage, _ in handler.timings] == [
+        "open the posting",
+        "press Apply and Apply Manually",
+    ]
 
 
 def test_the_login_hint_names_the_companys_site():

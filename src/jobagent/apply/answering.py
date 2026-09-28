@@ -490,6 +490,11 @@ class _Planner:
 
     def _apply_value(self, field: FormField, value: str, source: str) -> bool:
         """Put `value` on `field` in the shape the control takes. False if it does not fit."""
+        if field.kind == "select" and not field.options and _section(field) == "contact":
+            # A typeahead that lists places only once something is typed
+            # (LinkedIn's "Location (city)"): the fill types it and takes the hit.
+            self._fill(field, value, source)
+            return True
         if field.kind in ("select", "radio"):
             option = pick_option(value, field.options)
             if option is None:

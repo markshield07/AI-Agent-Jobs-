@@ -69,14 +69,16 @@ def _discover(conn: sqlite3.Connection, settings: Settings, limits: dict[str, in
 
 
 def _tailor(conn: sqlite3.Connection, settings: Settings, limits: dict[str, int]) -> StepResult:
+    from jobagent.apply.pipeline import in_apply_order
     from jobagent.discovery import store as jobs
     from jobagent.llm.backend import LLMError
     from jobagent.tailor import store as variants
     from jobagent.tailor.pipeline import TailorError, tailor_job
 
+    queued = jobs.list_jobs(conn, status="queued", limit=500)
     wanted = [
         job["id"]
-        for job in jobs.list_jobs(conn, status="queued", limit=500)
+        for job in in_apply_order(queued, settings.apply_site_list)
         if variants.latest_ready_variant(conn, job["id"]) is None
     ][: limits["tailor"]]
     ready = rejected = 0

@@ -64,6 +64,10 @@ _JOB_STATUS_FOR = {
 }
 
 
+# The start of the reason a job is skipped for applying outside JOBAGENT_APPLY_SITES.
+SET_ASIDE = "set aside"
+
+
 class ApplyError(RuntimeError):
     """The job cannot be applied to as things stand."""
 
@@ -265,6 +269,11 @@ def apply_to_job(
         return _skipped(job_id, "already applied", app["id"] if app else None)
 
     url = job.get("apply_url") or job.get("url") or ""
+    sites = settings.apply_site_list
+    if sites and not _allowed(url, sites) and _allowed(job.get("url") or "", sites):
+        # Found on LinkedIn or Indeed with a link to the company's site: the
+        # board's own posting decides whether it applies there after all.
+        url = job.get("url") or ""
     # Queued before the rules knew better, or the criteria changed since:
     # today's hard rules (place, excluded words, companies, pay floor) again.
     ruled_out = _ruled_out(job, load_criteria(conn))
@@ -275,11 +284,13 @@ def apply_to_job(
     if variant is None or not variant.pdf_path or not Path(variant.pdf_path).is_file():
         return _skipped(job_id, "no ready resume for this job; run tailor first")
 
-    ats = job.get("ats_type") or detect_ats(url)
+    ats = (job.get("ats_type") if url == job.get("apply_url") else None) or detect_ats(url)
     handlers = list(handlers) if handlers is not None else default_handlers(generic=allow_generic)
     handler = handler_for(url, ats, handlers)
     if handler is None:
         return _skipped(job_id, f"no handler for {ats or 'this site'}")
+    if sites and handler.ats not in sites:
+        return _set_aside(conn, job_id, sites)
     waiting_on = _workday_signed_out(settings, url) if handler.ats == "workday" else None
     if waiting_on:
         # The posting is public: no sign-in is asked for a job in the wrong place.
@@ -331,6 +342,9 @@ def apply_to_job(
                 page, packet, answerer, submit=submit, screenshot_path=str(screenshot)
             )
             onward = _company_site_handler(result, handler, handlers)
+            if sites and result.outcome == "blocked" and result.external_url:
+                if onward is None or onward.ats not in sites:
+                    return {**_set_aside(conn, job_id, sites), "notes": notes}
             if onward is not None:
                 onward_url = result.external_url or ""
                 notes.append(f"{handler.ats} sends this job to {onward_url}")
@@ -432,6 +446,24 @@ def _posting_elsewhere(
         return None
 
 
+def _allowed(url: str, sites: Sequence[str]) -> bool:
+    """Whether `url` is filled by the handler of one of `sites` (the generic
+    handler, a company's own site, only when "generic" is named)."""
+    if not url:
+        return False
+    named = [h for h in default_handlers(generic="generic" in sites) if h.ats in sites]
+    return handler_for(url, detect_ats(url), named) is not None
+
+
+def _set_aside(conn: sqlite3.Connection, job_id: str, sites: Sequence[str]) -> dict[str, Any]:
+    """Skip a job that applies somewhere other than `sites`, with a reason that
+    says so: a later change of JOBAGENT_APPLY_SITES can queue it again."""
+    reason = f"{SET_ASIDE}: applies on a site other than {', '.join(sites)}"
+    jobs.set_status(conn, job_id, "skipped", reason)
+    store.withdraw_unsent(conn, job_id, reason)
+    return _skipped(job_id, reason)
+
+
 def _wrong_place(
     conn: sqlite3.Connection, settings: Settings, job_id: str, url: str, reason: str
 ) -> dict[str, Any]:
@@ -506,17 +538,41 @@ def _company_site_handler(
     return handler_for(url, detect_ats(url), others)
 
 
-def _candidates(conn: sqlite3.Connection, job_ids: Iterable[str] | None, limit: int) -> list[str]:
+def _candidates(
+    conn: sqlite3.Connection,
+    job_ids: Iterable[str] | None,
+    limit: int,
+    sites: Sequence[str] = (),
+) -> list[str]:
     if job_ids:
         return list(dict.fromkeys(job_ids))
     picked: list[str] = []
-    for job in jobs.list_jobs(conn, status="queued", limit=max(limit * 5, 50)):
+    queued = jobs.list_jobs(conn, status="queued", limit=max(limit * 5, 50))
+    for job in in_apply_order(queued, sites):
         if variants.latest_ready_variant(conn, job["id"]) is None:
             continue
         picked.append(job["id"])
         if len(picked) >= limit:
             break
     return picked
+
+
+def in_apply_order(queued: Iterable[Mapping[str, Any]], sites: Sequence[str]) -> list[Any]:
+    """The queued jobs worth a resume and a try, given JOBAGENT_APPLY_SITES:
+    with no sites named, all of them as they are. Otherwise only jobs found on
+    one of the sites, and first those whose posting applies there too (no link
+    to a company's site), since those are the ones most likely to be sent."""
+    queued = list(queued)
+    if not sites:
+        return queued
+    on_site, maybe = [], []
+    for job in queued:
+        posting, apply = job.get("url") or "", job.get("apply_url") or ""
+        if apply and apply != posting and _allowed(apply, sites):
+            on_site.append(job)
+        elif _allowed(posting, sites):
+            (on_site if not apply or apply == posting else maybe).append(job)
+    return on_site + maybe
 
 
 def run_apply(
@@ -540,7 +596,7 @@ def run_apply(
     submit = mode == "auto"
     delay = settings.apply_delay_seconds if delay is None else delay
     report = ApplyReport(run_id=None, mode=mode)
-    candidates = _candidates(conn, job_ids, limit)
+    candidates = _candidates(conn, job_ids, limit, settings.apply_site_list)
     report.considered = len(candidates)
     if not candidates:
         report.notes.append("nothing to apply to: no queued job has a ready resume")

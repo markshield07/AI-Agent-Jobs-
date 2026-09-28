@@ -43,8 +43,12 @@ class JobSpySource:
         max_queries: int = 6,
         scrape: Callable[..., Any] | None = None,
         window: Callable[[], int] | None = None,
+        on_site_only: bool = False,
     ) -> None:
         self.max_queries = max_queries
+        # Only jobs that apply on the board's own form: LinkedIn's Easy Apply
+        # and Indeed Apply (JOBAGENT_APPLY_SITES=linkedin,indeed).
+        self.on_site_only = on_site_only
         self._scrape = scrape
         # Which slice of the queries this run takes when there are more than
         # the cap: the hour since the epoch by default, so hourly runs walk
@@ -60,7 +64,7 @@ class JobSpySource:
 
         seen: set[str] = set()
         for title, location in _queries(criteria, self.max_queries, self._window()):
-            for call, board_remote in _calls(criteria, title, location):
+            for call, board_remote in _calls(criteria, title, location, self.on_site_only):
                 try:
                     rows = _records(scrape(**call))
                 except ImportError as exc:
@@ -69,7 +73,7 @@ class JobSpySource:
                 except Exception as exc:
                     log.warning("jobspy: query %r in %r failed: %s", title, location, exc)
                     continue
-                if board_remote and call["hours_old"] is None:
+                if call["hours_old"] is None:
                     rows = [r for r in rows if _fresh(r.get("date_posted"), criteria.max_age_hours)]
                 usual = None if board_remote or not location else _usual_state(rows)
 
@@ -93,7 +97,7 @@ class JobSpySource:
 
 
 def _calls(
-    criteria: SearchCriteria, title: str, location: str | None
+    criteria: SearchCriteria, title: str, location: str | None, on_site_only: bool = False
 ) -> list[tuple[dict[str, Any], bool]]:
     """The scrape_jobs calls for one query, each with whether the boards'
     remote filter applies to it.
@@ -101,8 +105,18 @@ def _calls(
     Indeed takes one filter per search: given a max age, it drops the remote
     filter and returns every job in the country. So a Remote query asks
     Indeed on its own with the remote filter and no age, and the age is
-    checked here; the other boards take both at once."""
+    checked here; the other boards take both at once.
+
+    `on_site_only` searches LinkedIn and Indeed alone, for jobs that apply on
+    their own forms: LinkedIn's Easy Apply filter goes with the others, and a
+    place query asks Indeed for Indeed Apply jobs, again with no age. Indeed
+    cannot add that filter to its remote one, so a Remote query stays as it
+    was there and the posting itself shows how it applies."""
     sites = list(criteria.jobspy_sites)
+    if on_site_only:
+        sites = [site for site in sites if site in ("linkedin", "indeed")]
+        if not sites:
+            return []
     remote = location is not None and location.lower() == "remote"
     base = {
         "search_term": title,
@@ -112,6 +126,14 @@ def _calls(
         "hours_old": criteria.max_age_hours,
         "country_indeed": INDEED_COUNTRY,
     }
+    if on_site_only:
+        calls: list[tuple[dict[str, Any], bool]] = []
+        if "indeed" in sites:
+            indeed = {"site_name": ["indeed"], **base, "hours_old": None}
+            calls.append((indeed, True) if remote else ({**indeed, "easy_apply": True}, False))
+        if "linkedin" in sites:
+            calls.append(({"site_name": ["linkedin"], **base, "easy_apply": True}, remote))
+        return calls
     if not (remote and "indeed" in sites):
         return [({"site_name": sites, **base}, remote)]
     calls = [({"site_name": ["indeed"], **base, "hours_old": None}, True)]

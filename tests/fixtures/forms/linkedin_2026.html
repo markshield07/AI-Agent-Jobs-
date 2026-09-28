@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>IT Infrastructure Network Engineer | Stand8 Technology Consulting | LinkedIn</title>
+<!--
+  LinkedIn's posting and Easy Apply window as drawn in September 2026, after the Mac's
+  capture of Stand8's (capture-linkedin-easyapply-d3cb1545d6f8c2e7.html): class names are
+  obfuscated, the window is a native <dialog data-testid="dialog" aria-labelledby=
+  "dialog-header"> with no role="dialog" or artdeco classes, its buttons carry only their
+  text ("Next", "Review", "Submit application") and a componentkey, and each field sits in
+  a div[componentkey^="easyApplyFieldFocus_ea.q::"] with a <label for>. Dismiss opens a
+  second dialog, "Save this application?", with Discard and Save. The page around it has
+  a search box and a "Set alert for similar jobs" switch, which are not the application.
+
+  Pages: contact info (name and phone prefilled from the profile, an email list, a city
+  typeahead), resume and questions, review. Variants with ?variant=...:
+    needs_input  a question nobody on file answers
+    external     no Easy Apply: "Apply on company website" through /safety/go/
+-->
+<style>
+  body { font-family: sans-serif; margin: 0; }
+  .m1 { max-width: 760px; margin: 0 auto; padding: 16px; }
+  dialog { width: 560px; }
+  .m9 { display: block; margin-top: 8px; }
+  .hits { border: 1px solid #ccc; }
+  .hits div { padding: 4px; cursor: pointer; }
+</style>
+</head>
+<body>
+<header class="m2"><input class="m3" id="search" placeholder="Search" aria-label="Search"></header>
+<main class="m1" id="main"></main>
+<script>
+(function () {
+  var variant = new URLSearchParams(location.search).get('variant') || '';
+  window.__steps = [];
+  var main = document.getElementById('main');
+  var apply = variant === 'external'
+    ? '<a class="m4" aria-label="Apply on company website" href="https://www.linkedin.com/safety/go/?url=https%3A%2F%2Fcareers.stand8.com%2Fjobs%2F42&trk=x">Apply</a>'
+    : '<button class="m4" type="button" aria-label="Easy Apply to this job"><span>Easy Apply</span></button>';
+  main.innerHTML = '<h1>IT Infrastructure Network Engineer (CCNP or CCIE)</h1>' +
+    '<p>Stand8 Technology Consulting · Los Angeles, CA (Remote)</p>' + apply +
+    '<div class="m5"><label class="m6"><input type="checkbox" role="switch" id="alert"> Set alert for similar jobs</label></div>' +
+    '<p>We are looking for a network engineer.</p>';
+  if (variant === 'external') return;
+
+  var field = function (id, kind, label, attrs, inner) {
+    var key = 'easyApplyFieldFocus_ea.q::3654284' + id.replace(/\D/g, '') + '::' + kind + '::value.validation';
+    return '<div componentkey="' + key + '"><label for="' + id + '"><div>' + label + '</div></label><div>' + inner(attrs) + '</div></div>';
+  };
+  var text = function (id, kind, label, value, required) {
+    return field(id, kind, label, '', function () {
+      return '<input ' + (required ? 'required="" ' : '') + 'id="' + id + '" dir="auto" type="text" value="' + value + '">';
+    });
+  };
+  var button = function (label) {
+    return '<button type="button" componentkey="k-' + label.replace(/\W/g, '') + '"><span><span>' + label + '</span></span></button>';
+  };
+  var pages = [
+    { name: 'contact', title: 'Contact info', body: function () {
+      return text('_r_9_', 'FIRST_NAME', 'First name*', 'Mark', true) +
+        text('_r_a_', 'UNKNOWN', 'Middle name', '', false) +
+        text('_r_b_', 'LAST_NAME', 'Last name*', 'Shield', true) +
+        '<div><div><label for="_r_c_"><div>Phone country code</div></label><div><select id="_r_c_">' +
+        '<option value="" disabled hidden></option><option value="ca">Canada (+1)</option>' +
+        '<option value="us" selected>United States (+1)</option></select></div></div>' +
+        field('_r_e_', 'PHONE_MOBILE', 'Mobile phone number', '', function () {
+          return '<input id="_r_e_" dir="auto" type="tel" value="3105550100">';
+        }) + '</div>' +
+        '<div><label for="_r_f_"><div>Email address*</div></label><div><select id="_r_f_" required>' +
+        '<option value="">Select an option</option><option selected>mark@example.com</option></select></div></div>' +
+        '<div componentkey="easyApplyFieldFocus_ea.q::36542843762::UNKNOWN::value.validation"><p>Location (city)</p>' +
+        '<div data-expanded="false"><div><input id="_r_k_" data-testid="typeahead-input" autocomplete="off" dir="auto"' +
+        ' placeholder="Enter city or location" aria-autocomplete="list" value=""></div><div class="hits" id="hits"></div></div></div>';
+    } },
+    { name: 'questions', title: 'Resume and questions', body: function () {
+      return '<div componentkey="easyApplyFieldFocus_ea.q::1::RESUME::value.validation"><label for="_r_p_"><div>Upload resume</div></label>' +
+        '<input type="file" id="_r_p_" accept=".pdf,.doc,.docx"></div>' +
+        field('_r_q_', 'UNKNOWN', 'Are you legally authorized to work in the United States?*', '', function () {
+          return '<select id="_r_q_" required><option value="">Select an option</option><option>Yes</option><option>No</option></select>';
+        }) +
+        field('_r_s_', 'UNKNOWN', 'Will you now or in the future require sponsorship for employment visa status?*', '', function () {
+          return '<select id="_r_s_" required><option value="">Select an option</option><option>Yes</option><option>No</option></select>';
+        }) +
+        (variant === 'needs_input'
+          ? text('_r_t_', 'NUMERIC', 'How many years of work experience do you have with Juniper Mist?*', '', true)
+          : '');
+    } },
+    { name: 'review', title: 'Review your application', body: function () {
+      return '<p>Check your answers before you send them.</p>';
+    } },
+  ];
+  var at = 0;
+  var dialog = null;
+  var kept = {};
+  var val = function (id) { var el = document.getElementById(id); return el ? el.value : null; };
+  var draw = function () {
+    var p = pages[at];
+    window.__steps.push(p.name);
+    var foot = at === pages.length - 1 ? button('Submit application') : button(at === pages.length - 2 ? 'Review' : 'Next');
+    dialog.innerHTML = '<button type="button" aria-label="Dismiss"><span>×</span></button><div><header id="dialog-header">' +
+      '<h2>Apply to Stand8 Technology Consulting</h2></header><div data-testid="dialog-content">' +
+      '<div data-sdui-screen="com.linkedin.sdui.flagshipnav.jobs.easyapply.EasyApply"><div class="m7">' +
+      '<p>' + (at + 1) + '/' + pages.length + ' pages</p><div class="m8"><p>' + p.title + '</p>' + p.body() + '</div>' +
+      '<div><hr role="presentation"><footer>' + (at ? button('Back') : '') + foot + '</footer></div></div></div></div></div>';
+    dialog.querySelector('[aria-label="Dismiss"]').addEventListener('click', dismiss);
+    var loc = document.getElementById('_r_k_');
+    if (loc) loc.addEventListener('input', function () {
+      var hits = document.getElementById('hits');
+      hits.innerHTML = loc.value.length < 3 ? '' : '<div role="listbox"><div role="option">Menifee, California, United States</div></div>';
+      var opt = hits.querySelector('[role="option"]');
+      if (opt) opt.addEventListener('click', function () { loc.value = opt.textContent; hits.innerHTML = ''; });
+    });
+    var file = document.getElementById('_r_p_');
+    if (file) file.addEventListener('change', function () { window.__resume = file.files[0] && file.files[0].name; });
+    Array.from(dialog.querySelectorAll('footer button')).forEach(function (b) {
+      b.addEventListener('click', function () { step(b.textContent.trim()); });
+    });
+  };
+  var step = function (label) {
+    if (label === 'Back') { at -= 1; draw(); return; }
+    if (label === 'Submit application') {
+      window.__submitted = { contact: kept.contact, questions: kept.questions, resume: window.__resume };
+      dialog.innerHTML = '<div data-testid="dialog-content"><h2>Your application was sent to Stand8 Technology Consulting</h2>' +
+        '<button type="button">Done</button></div>';
+      return;
+    }
+    var missing = Array.from(dialog.querySelectorAll('[required]')).filter(function (el) { return !el.value; });
+    if (missing.length) return;  // a required box left empty: the step stays
+    if (pages[at].name === 'contact') kept.contact = { first: val('_r_9_'), last: val('_r_b_'), phone: val('_r_e_'), email: val('_r_f_'), city: val('_r_k_') };
+    if (pages[at].name === 'questions') kept.questions = { auth: val('_r_q_'), sponsor: val('_r_s_'), mist: val('_r_t_') };
+    at += 1;
+    draw();
+  };
+  var dismiss = function () {
+    var ask = document.createElement('dialog');
+    ask.setAttribute('data-testid', 'dialog');
+    ask.setAttribute('open', '');
+    ask.innerHTML = '<button type="button" aria-label="Dismiss"><span>×</span></button><div><div data-testid="dialog-content">' +
+      '<div><h2>Save this application?</h2><p>Save to return to this application later.</p><div>' +
+      button('Discard') + button('Save') + '</div></div></div></div>';
+    document.body.appendChild(ask);
+    ask.querySelectorAll('button').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var t = b.textContent.trim();
+        if (t === 'Discard') window.__discarded = true;
+        if (t === 'Save') window.__saved = true;
+        ask.remove();
+        if (t !== 'Save') { dialog.remove(); }
+      });
+    });
+  };
+  document.querySelector('[aria-label="Easy Apply to this job"]').addEventListener('click', function () {
+    dialog = document.createElement('dialog');
+    dialog.className = 'm6fmt9 m6fmt8';
+    dialog.setAttribute('data-testid', 'dialog');
+    dialog.setAttribute('aria-labelledby', 'dialog-header');
+    dialog.setAttribute('open', '');
+    document.body.appendChild(dialog);
+    draw();
+  });
+})();
+</script>
+</body>
+</html>

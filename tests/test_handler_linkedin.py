@@ -222,3 +222,55 @@ def test_a_next_that_does_nothing_stops_instead_of_looping(page, packet):
     assert result.outcome == "blocked"
     assert "did not move on" in result.error
     assert js(page, "__steps") == ["contact", "resume", "questions"]
+
+
+# ------------------------------------------------------ the 2026 layout --
+
+NEW = Path(__file__).parent / "fixtures" / "forms" / "linkedin_2026.html"
+
+
+def run_new(page, packet, *, submit=False, variant=""):
+    packet.job["url"] = NEW.as_uri() + (f"?variant={variant}" if variant else "")
+    packet.contact["location"] = "Menifee, California, United States"
+    answerer = make_answerer(packet, completer=None, allow_model=False)
+    return LinkedInHandler().apply(page, packet, answerer, submit=submit)
+
+
+@pytest.mark.usefixtures("page")
+def test_the_2026_window_is_walked_by_its_button_text_and_stops_at_submit(page, packet):
+    result = run_new(page, packet)
+    assert result.outcome == "dry_run", (result.error, result.needed)
+    assert js(page, "__steps") == ["contact", "questions", "review"]
+    assert js(page, "__submitted") is None
+    assert js(page, "__discarded") is True, "Dismiss, then Discard in the second window"
+    assert not any(f.selector in ("#search", "#alert") for f in result.fields), (
+        "the search box and the job-alert switch are not the application"
+    )
+
+
+@pytest.mark.usefixtures("page")
+def test_the_2026_window_is_sent_with_the_profile_answers_and_resume(page, packet):
+    result = run_new(page, packet, submit=True)
+    assert result.outcome == "submitted", (result.error, result.needed)
+    assert "application was sent to Stand8" in result.confirmation
+    sent = js(page, "__submitted")
+    assert sent["contact"]["first"] == "Mark" and sent["contact"]["email"] == "mark@example.com"
+    assert sent["contact"]["city"] == "Menifee, California, United States", "picked from the list"
+    assert sent["questions"] == {"auth": "Yes", "sponsor": "No", "mist": None}
+    assert sent["resume"] == "mark-shield.pdf"
+
+
+@pytest.mark.usefixtures("page")
+def test_a_2026_question_nobody_answers_stops_before_submit(page, packet):
+    result = run_new(page, packet, submit=True, variant="needs_input")
+    assert result.outcome == "needs_input"
+    asked = [n for n in result.needed if n.required]
+    assert len(asked) == 1 and "Juniper Mist" in asked[0].label
+    assert js(page, "__submitted") is None and js(page, "__discarded") is True
+
+
+@pytest.mark.usefixtures("page")
+def test_a_2026_company_website_posting_reports_where_it_goes(page, packet):
+    result = run_new(page, packet, submit=True, variant="external")
+    assert result.outcome == "blocked" and "company's own site" in result.error
+    assert result.external_url == "https://careers.stand8.com/jobs/42"

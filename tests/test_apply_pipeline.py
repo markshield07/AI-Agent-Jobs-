@@ -97,8 +97,10 @@ def ready_job(conn, tmp_path):
         letter=True,
         pdf=True,
         pdf_exists=True,
+        apply_url=None,
+        source="greenhouse",
     ) -> str:
-        raw = RawJob(url=url, title=title, company=company, source="greenhouse")
+        raw = RawJob(url=url, title=title, company=company, source=source, apply_url=apply_url)
         jid = jobs.upsert_jobs(conn, [raw]).new_ids[0]
         jobs.set_status(conn, jid, status)
         pdf_path = tmp_path / f"{jid}.pdf"
@@ -338,6 +340,88 @@ def test_a_company_site_posting_goes_on_to_that_sites_handler(conn, settings, re
     assert lever.calls[0]["packet"].job["apply_url"] == outward
     assert store.get_application(conn, record["application_id"])["ats"] == "lever"
     assert any(outward in note for note in record["notes"])
+
+
+def test_only_the_named_sites_a_linkedin_job_goes_to_linkedin_not_the_company_link(
+    conn, settings, ready_job
+):
+    settings.apply_sites = "linkedin, Indeed"
+    jid = ready_job(
+        "https://www.linkedin.com/jobs/view/1/",
+        apply_url="https://jobs.lever.co/acme/1",
+        source="linkedin",
+    )
+    linkedin = FakeHandler(ats="linkedin", hosts=("linkedin.com",))
+    lever = FakeHandler(ats="lever", hosts=("lever.co",))
+    record = apply_to_job(
+        conn,
+        jid,
+        settings,
+        handlers=[linkedin, lever],
+        completer=NeverCalled(),
+        browser=FakeBrowser(),
+    )
+    assert record["outcome"] == "dry_run" and record["handler"] == "linkedin"
+    assert not lever.calls
+
+
+def test_only_the_named_sites_a_posting_that_leaves_for_the_company_is_set_aside(
+    conn, settings, ready_job
+):
+    from jobagent.apply.pipeline import SET_ASIDE
+
+    settings.apply_sites = "linkedin,indeed"
+    jid = ready_job("https://www.linkedin.com/jobs/view/1/", source="linkedin")
+    linkedin = FakeHandler(
+        _result("blocked", error="company's own site", external_url="https://jobs.lever.co/a/1"),
+        ats="linkedin",
+        hosts=("linkedin.com",),
+    )
+    lever = FakeHandler(ats="lever", hosts=("lever.co",))
+    record = apply_to_job(
+        conn,
+        jid,
+        settings,
+        handlers=[linkedin, lever],
+        completer=NeverCalled(),
+        browser=FakeBrowser(),
+    )
+    assert record["outcome"] == "skipped" and record["reason"].startswith(SET_ASIDE)
+    assert not lever.calls, "the company's site is never opened"
+    job = jobs.get_job(conn, jid)
+    assert job["status"] == "skipped" and job["score_reason"].startswith(SET_ASIDE)
+    assert store.application_for_job(conn, jid) is None, "no application is left behind"
+
+
+def test_only_the_named_sites_a_company_board_job_is_set_aside_unopened(conn, settings, ready_job):
+    settings.apply_sites = "linkedin,indeed"
+    jid = ready_job()
+    handler = FakeHandler()
+    record = _apply(conn, jid, settings, handler)
+    assert record["outcome"] == "skipped" and "linkedin, indeed" in record["reason"]
+    assert not handler.calls
+
+
+def test_only_the_named_sites_on_site_postings_come_first():
+    from jobagent.apply.pipeline import in_apply_order
+
+    queued = [
+        {"id": "company", "url": "https://boards.greenhouse.io/a/jobs/1", "apply_url": None},
+        {
+            "id": "indeed-out",
+            "url": "https://www.indeed.com/viewjob?jk=abc",
+            "apply_url": "https://careers.example.com/1",
+        },
+        {"id": "linkedin", "url": "https://www.linkedin.com/jobs/view/9/", "apply_url": None},
+        {
+            "id": "indeed",
+            "url": "https://www.indeed.com/viewjob?jk=def",
+            "apply_url": "https://www.indeed.com/viewjob?jk=def",
+        },
+    ]
+    order = [j["id"] for j in in_apply_order(queued, ("linkedin", "indeed"))]
+    assert order == ["linkedin", "indeed", "indeed-out"]
+    assert [j["id"] for j in in_apply_order(queued, ())] == [j["id"] for j in queued]
 
 
 def test_a_company_site_with_no_handler_stays_blocked(conn, settings, ready_job):

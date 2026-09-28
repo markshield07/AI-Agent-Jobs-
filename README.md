@@ -63,6 +63,7 @@ behind it, picked by `JOBAGENT_LLM_BACKEND` in `.env`:
 | `JOBAGENT_APPLY_MODE` | `dry_run` | `dry_run` fills and stops, `review` parks it for approval, `auto` submits |
 | `JOBAGENT_DAILY_APPLY_CAP` | `20` | Submissions in any trailing 24 hours, in `auto` mode |
 | `JOBAGENT_EASY_APPLY_DAILY_CAP` | `10` | LinkedIn's and Indeed's own caps, each, inside the daily one |
+| `JOBAGENT_APPLY_SITES` | (every site) | e.g. `linkedin,indeed`: apply only through those sites' own forms. Discovery then asks LinkedIn for Easy Apply jobs and Indeed for Indeed Apply jobs, and a job that sends you to a company's site is skipped with a reason starting "set aside" |
 | `JOBAGENT_APPLY_DELAY_SECONDS` | `45` | The pause between submissions, jittered |
 | `JOBAGENT_APPLY_MODEL_ANSWERS` | `true` | Let the model draft answers to open questions, from the fact base |
 | `JOBAGENT_HEADLESS` | `true` | `false`, or `--headed`, shows the browser window |

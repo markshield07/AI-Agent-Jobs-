@@ -124,12 +124,33 @@ def _label(control: dict[str, Any], group: bool = False) -> str:
     return clean_label(label)
 
 
+GROUP_ATTR = "data-jobagent-group"
+
+
 def _group_key(control: dict[str, Any]) -> str | None:
-    """Radios and checkboxes that share a name are one question."""
+    """Radios and checkboxes that share a name are one question; so are
+    radios with no name that the inventory found in one box (`group`)."""
     grouped = control["tag"] == "input" and control.get("type") in ("radio", "checkbox")
     if grouped and control.get("name"):
         return f"{control['type']}:{control['name']}"
+    if control.get("group"):
+        return f"radio@{control['group']}"
     return None
+
+
+def _group_selector(control: dict[str, Any]) -> str:
+    if control.get("name"):
+        return f'input[type="{control["type"]}"][name="{control["name"]}"]'
+    box = f'[{GROUP_ATTR}="{control["group"]}"]'
+    return f'{box} input[type="radio"], {box} [role="radio"]'
+
+
+def _group_key_name(control: dict[str, Any]) -> str:
+    """The field key of a group: its name, else its question, else its box."""
+    if control.get("name"):
+        return str(control["name"])
+    question = re.sub(r"[^a-z0-9]+", "-", _label(control, group=True).lower()).strip("-")
+    return f"radio-{question[:60]}" if question else f"radio-{control['group']}"
 
 
 def raw_controls(page: Any, root: str | None = None) -> list[dict[str, Any]]:
@@ -172,15 +193,18 @@ def discover_fields(
             existing = groups.get(group)
             option = control.get("option_label") or control.get("value") or ""
             if existing is None:
-                kind: FieldKind = "radio" if control["type"] == "radio" else "checkbox"
+                kind: FieldKind = "checkbox" if control.get("type") == "checkbox" else "radio"
+                key = _group_key_name(control)
+                if any(f.key == key for f in fields):
+                    key = f"{key}-{control.get('group') or index}"
                 field = FormField(
-                    key=control["name"],
+                    key=key,
                     label="",
                     kind=kind,
                     required=bool(control.get("required")),
                     options=[],
                     section=_section(control),
-                    selector=f'input[type="{control["type"]}"][name="{control["name"]}"]',
+                    selector=_group_selector(control),
                     name=control.get("name"),
                     help_text=control.get("help") or None,
                 )
@@ -231,11 +255,22 @@ def discover_fields(
 
 _VALUES_JS = r"""(selectors) => selectors.map((sel) => {
   let el = null;
-  try { el = document.querySelector(sel); } catch (e) { return null; }
+  let all = [];
+  try {
+    el = document.querySelector(sel);
+    all = Array.from(document.querySelectorAll(sel));
+  } catch (e) { return null; }
   if (!el) return null;
   const tag = el.tagName.toLowerCase();
   const type = (el.getAttribute('type') || '').toLowerCase();
   if (type === 'file') return el.files && el.files.length ? el.files[0].name : null;
+  const unnamed = type === 'radio' && !el.getAttribute('name') && all.length > 1;
+  if (el.getAttribute('role') === 'radio' || unnamed) {
+    // A group with no name, found by its box: the choice that is on.
+    const on = all.filter((n) => n.checked || n.getAttribute('aria-checked') === 'true');
+    const txt = (n) => (n.getAttribute('aria-label') || n.value || n.innerText || '').trim();
+    return on.length ? on.map(txt).join(', ') || 'on' : null;
+  }
   if (type === 'radio' || type === 'checkbox') {
     const name = el.getAttribute('name');
     if (!name) return el.checked ? (el.value || 'on') : null;

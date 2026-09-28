@@ -196,13 +196,23 @@ class WizardHandler(BaseHandler):
             return self._no_button(page, screenshot_path)
         if flow is not page:
             try:
-                return self._steps(flow, answerer, submit=submit, screenshot_path=screenshot_path)
+                return self._steps(
+                    flow, answerer, submit=submit, screenshot_path=screenshot_path, job=packet.job
+                )
             finally:
                 _close(flow)
-        return self._steps(page, answerer, submit=submit, screenshot_path=screenshot_path)
+        return self._steps(
+            page, answerer, submit=submit, screenshot_path=screenshot_path, job=packet.job
+        )
 
     def _steps(
-        self, page: Any, answerer: Answerer, *, submit: bool, screenshot_path: str | None
+        self,
+        page: Any,
+        answerer: Answerer,
+        *,
+        submit: bool,
+        screenshot_path: str | None,
+        job: dict[str, Any] | None = None,
     ) -> HandlerResult:
         wall = bot_check(page, self.bot_check_ms)
         if wall:
@@ -295,6 +305,13 @@ class WizardHandler(BaseHandler):
             wait_settled(page, self.settle_ms)
             self.wait_for_step(page, marker)
             errors = self._step_errors(page, root)
+            stuck = errors or self._signature(page, self._mark_root(page)) == before
+            empty = self._left_empty(page, job) if stuck else []
+            if empty:
+                # The step would not move for questions nothing answered:
+                # asked, whatever the plan thought of them.
+                needed.extend(n for n in empty if n.key not in {m.key for m in needed})
+                return self._stop(page, "needs_input", screenshot_path, **common())
             if errors:
                 return self._stop(
                     page,
@@ -359,6 +376,30 @@ class WizardHandler(BaseHandler):
         )
 
     # -- checks ------------------------------------------------------------
+
+    def _left_empty(self, page: Any, job: dict[str, Any] | None) -> list[NeededInput]:
+        """The required questions of the step on screen still left blank."""
+        from jobagent.apply.answering import answer_key_for
+
+        try:
+            fields = self.discover_step(page, self._mark_root(page))
+            values = self.prefilled(page, fields)
+        except Exception as exc:
+            log.debug("could not re-read the step: %s", exc)
+            return []
+        return [
+            NeededInput(
+                key=f.key,
+                label=f.label,
+                kind=f.kind,
+                required=True,
+                options=list(f.options),
+                reason="the form will not go on without it, and nothing on file answered it",
+                answer_key=answer_key_for(f, job),
+            )
+            for f in fields
+            if f.required and f.kind != "file" and f.key not in values and f.label
+        ]
 
     def signed_out(self, page: Any) -> bool:
         if self.signed_out_url.search(urlparse(page.url or "").path or ""):

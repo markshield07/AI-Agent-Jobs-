@@ -60,6 +60,10 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     ("city", r"^\W*(?:city|town|city\s*/\s*town|town\s*/\s*city)\W*$"),
     ("state", r"^\W*(?:state|province|region|state\s*/\s*province)\W*$"),
     ("country", r"\bcountry\b"),
+    # Whether the person can get to this job's place ("Are you comfortable
+    # commuting to this job's location?"): a question about the job, not the
+    # person's own location, and its answer differs from job to job.
+    ("commute_ok", r"\bcommut"),
     ("location", r"\blocation\b|\bcity\b|\bwhere (?:are|do) you (?:based|located|live)\b"),
     ("linkedin", r"\blinkedin\b"),
     ("github", r"\bgithub\b"),
@@ -149,6 +153,7 @@ SENSITIVE: frozenset[str] = frozenset(
         "salary_period",
         "start_date",
         "relocation",
+        "commute_ok",
         "work_arrangement",
         "security_clearance",
         "clearance_status",
@@ -260,11 +265,19 @@ def canonical_key(field: FormField) -> str | None:
         if not text:
             continue
         haystack = _lead(text).replace("_", " ").replace("-", " ")
-        order = _QUESTION_ORDER if _is_question(text) else _COMPILED
+        question = _is_question(text)
+        order = _QUESTION_ORDER if question else _COMPILED
         for key, pattern in order:
+            # "Do you have Team Lead experience listed in your resume?" asks
+            # about the resume; only an upload asks for it.
+            if question and key in _UPLOADS and field.kind != "file":
+                continue
             if pattern.search(haystack):
                 return key
     return None
+
+
+_UPLOADS = frozenset({"resume", "cover_letter"})
 
 
 def _is_question(text: str) -> bool:
@@ -308,8 +321,18 @@ def _is_terms_box(field: FormField) -> bool:
     )
 
 
-def answer_key_for(field: FormField) -> str:
-    """Where an answer to `field` lives, or would live, in the answer bank."""
+def commute_key(job: Mapping[str, Any] | None) -> str:
+    """The answer-bank key for whether the person can commute to `job`: one
+    per place ("commute_ok:long_beach_ca"), else per company, since the
+    answer for one job's place says nothing about another's."""
+    job = job or {}
+    where = _norm(job.get("location") or "") or _norm(job.get("company") or "")
+    return "commute_ok:" + where.replace(" ", "_") if where else "commute_ok"
+
+
+def answer_key_for(field: FormField, job: Mapping[str, Any] | None = None) -> str:
+    """Where an answer to `field` lives, or would live, in the answer bank.
+    `job` is the posting, for the questions whose answer depends on it."""
     if _is_terms_box(field):
         return CONSENT_KEY
     if field.section == "experience":
@@ -319,7 +342,10 @@ def answer_key_for(field: FormField) -> str:
         for key, pattern in _EEO_COMPILED:
             if pattern.search(field.label):
                 return key
-    return canonical_key(field) or question_key(field.label)
+    key = canonical_key(field)
+    if key == "commute_ok":
+        return commute_key(job)
+    return key or question_key(field.label)
 
 
 _CONTACT_KEYS = frozenset(
@@ -474,7 +500,7 @@ class _Planner:
                 required=field.required,
                 options=list(field.options),
                 reason=reason,
-                answer_key=answer_key_for(field),
+                answer_key=answer_key_for(field, self.packet.job),
             )
         )
 
@@ -563,8 +589,12 @@ class _Planner:
         if section == "cover_letter":
             self._value_or_need(field, self.packet.cover_letter, "cover_letter", NOT_ON_FILE)
             return
-        # Questions. The answer bank first, by canonical key and by label.
-        banked = self._bank(*(k for k in (key, question_key(field.label)) if k))
+        # Questions. The answer bank first, by canonical key and by label;
+        # a commute question only by this job's own key.
+        keys = (key, question_key(field.label))
+        if key == "commute_ok":
+            keys = (commute_key(self.packet.job), None)
+        banked = self._bank(*(k for k in keys if k))
         if banked is not None:
             if not self._apply_value(field, banked, "answer_bank"):
                 self._need(field, NO_OPTION)
@@ -852,6 +882,7 @@ class _Planner:
                 field = by_key.get(draft.key)
                 if field is None or field.key in settled:
                     continue
+                _take_stated_answer(draft, field)
                 problems = _check_draft(draft, field, facts, self.packet.never_claim, allow)
                 if problems:
                     objections[field.key] = problems
@@ -918,6 +949,28 @@ class DraftAnswers(BaseModel):
     answers: list[DraftAnswer] = Field(default_factory=list)
 
 
+_STATED = re.compile(r"^\W*(?:the\s+)?answer\s*(?:is|would\s+be|:)\s*[\"'“]?([^\"'”:;,.(]+)", re.I)
+
+
+def _take_stated_answer(draft: DraftAnswer, field: FormField) -> None:
+    """A choice drafted for a person that answers anyway ("The answer is Yes:
+    as Sr. Manager ... at GoTo ...") is taken as the option it names, and then
+    checked like any other: an option not on the list goes back to the model.
+    Free text marked for a person stays for a person."""
+    if not draft.needs_human:
+        return
+    stated = _STATED.match(draft.reason or "")
+    said = stated.group(1).strip() if stated else ""
+    if field.kind in ("select", "radio"):
+        if draft.option or said:
+            draft.option = draft.option or said
+            draft.needs_human = False
+    elif field.kind == "multiselect":
+        if draft.options or said:
+            draft.options = list(draft.options) or [said]
+            draft.needs_human = False
+
+
 def _check_draft(
     draft: DraftAnswer,
     field: FormField,
@@ -966,6 +1019,9 @@ _ANSWER_RULES = "\n".join(
         "- If the facts do not settle a question (anything about preferences, plans,",
         "  availability, eligibility, or anything you would have to invent), set",
         "  `needs_human` true and say why in `reason`. A blank is better than a guess.",
+        "- A question whether the candidate has some experience or skill, or has it on the",
+        "  resume, is settled by the facts when they show it: answer it (Yes) with",
+        "  `needs_human` false. Never put an answer only in `reason`.",
         "Return one entry per question key, in the same order.",
     ]
 )

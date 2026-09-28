@@ -199,18 +199,46 @@ def _input_label(page: Any, control: Any) -> str:
     return control.evaluate(script("input_label.js"))
 
 
-def _click_input(page: Any, control: Any) -> None:
-    """Check a radio or box, going through its label when the input itself is styled away."""
+def _click_input(page: Any, control: Any, want: bool = True) -> None:
+    """Check a radio or box, going through its label when the input itself is
+    styled away, else through the box that draws it (LinkedIn's
+    <div role="radio"> around the input), else by force."""
     try:
-        control.check(timeout=2000)
+        control.set_checked(want, timeout=2000)
         return
     except Exception:
         pass
     label = control.evaluate(script("label_selector.js"))
+    tries = []
     if label:
-        page.locator(label).first.click(timeout=3000)
-    else:
-        control.click(timeout=3000, force=True)
+        tries.append(lambda: page.locator(label).first.click(timeout=3000))
+    wrapper = control.locator("xpath=ancestor::*[@role='radio' or @role='checkbox'][1]")
+    tries.append(lambda: wrapper.first.click(timeout=3000))
+    tries.append(lambda: control.click(timeout=3000, force=True))
+    error: Exception | None = None
+    for attempt in tries:
+        try:
+            attempt()
+        except Exception as exc:
+            error = error or exc
+            continue
+        if _is_on(control) == want:
+            return
+    if error is not None:
+        raise error
+    raise LookupError("the choice would not stay selected")
+
+
+def _is_on(control: Any) -> bool:
+    try:
+        return bool(
+            control.evaluate(
+                "el => el.checked || el.getAttribute('aria-checked') === 'true'"
+                " || !!(el.closest('[aria-checked=\"true\"]'))"
+            )
+        )
+    except Exception:
+        return False
 
 
 def _choose(page: Any, field: FormField, wanted: list[str], *, exclusive: bool) -> None:
@@ -248,7 +276,7 @@ def _set_checkbox(page: Any, field: FormField, flag: bool) -> None:
     except Exception:
         checked = False
     if checked != flag:
-        _click_input(page, control)
+        _click_input(page, control, flag)
 
 
 def fill_field(page: Any, field: FormField, fill: Fill) -> str | None:

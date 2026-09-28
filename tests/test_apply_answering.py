@@ -443,6 +443,58 @@ def test_model_may_decline_and_optional_questions_are_then_skipped(packet):
     assert any("hobby" in note.lower() or "fun" in note.lower() for note in plan.notes)
 
 
+def test_a_choice_the_model_answers_while_asking_for_a_person_is_taken(packet):
+    # Luxoft's, 2026-09-28: the model marked it for a person and answered anyway.
+    field = F(
+        "lead",
+        "Do you have Team Lead or Technical Lead experience listed in your resume?",
+        kind="radio",
+        options=["Yes", "No"],
+        required=True,
+    )
+    reason = "The answer is Yes: as Sr. Manager Field Engineering at GoTo he leads the team."
+    completer = FakeCompleter(
+        DraftAnswers(answers=[DraftAnswer(key="lead", needs_human=True, reason=reason)])
+    )
+    plan = plan_fills([field], packet, completer=completer)
+    assert fills(plan) == {"lead": "Yes"} and plan.needed == []
+
+
+def test_free_text_the_model_marks_for_a_person_stays_with_the_person(packet):
+    field = F("why", "Why do you want this role?", kind="textarea", required=True)
+    completer = FakeCompleter(
+        DraftAnswers(
+            answers=[DraftAnswer(key="why", answer="Because.", needs_human=True, reason="a plan")]
+        )
+    )
+    plan = plan_fills([field], packet, completer=completer)
+    assert plan.fills == [] and plan.needed[0].key == "why"
+
+
+def test_a_question_about_the_resume_is_not_the_resume_upload():
+    field = F("q", "Do you have CISCO & Load Balancing (F5) listed in your resume?", kind="radio")
+    assert answering.canonical_key(field) is None
+    assert answering.canonical_key(F("cv", "Resume", kind="file")) == "resume"
+
+
+def test_the_commute_question_is_kept_per_place(packet):
+    field = F(
+        "c",
+        "Are you comfortable commuting to this job's location?",
+        kind="radio",
+        options=["Yes", "No"],
+        required=True,
+    )
+    assert answering.canonical_key(field) == "commute_ok"
+    packet.job["location"] = "Long Beach, CA"
+    assert answering.answer_key_for(field, packet.job) == "commute_ok:long_beach_ca"
+    packet.answers["commute_ok"] = "Yes"  # not this place's answer
+    plan = plan_fills([field], packet)
+    assert plan.fills == [] and plan.needed[0].answer_key == "commute_ok:long_beach_ca"
+    packet.answers["commute_ok:long_beach_ca"] = "No"
+    assert fills(plan_fills([field], packet)) == {"c": "No"}
+
+
 def test_model_option_outside_the_choices_is_refused(packet):
     field = F("level", "Seniority", kind="select", options=["Junior", "Senior"], required=True)
     completer = FakeCompleter(

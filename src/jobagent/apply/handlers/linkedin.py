@@ -47,15 +47,23 @@ _MARK_UPLOAD_JS = r"""([root, attr]) => {
   return true;
 }"""
 _ROOT_TEXT = "(sel) => (document.querySelector(sel) || document.body).innerText || ''"
-# Whether the step shows the file as the chosen resume: its name, or a
-# checked choice in the resume list.
-_RESUME_SHOWN_JS = r"""([root, name]) => {
+# What the resume step shows: how often the file's name appears, how many
+# resume choices there are, and the words of the chosen one. A resume kept
+# from before is already chosen, and may carry the same name as the upload
+# (the same tailored file, sent again), so the upload shows as a change.
+_RESUME_STATE_JS = r"""([root, name]) => {
   const scope = document.querySelector(root) || document;
   const text = (scope.innerText || '').toLowerCase();
-  if (name && text.includes(name.toLowerCase())) return true;
-  const ref = scope.querySelector('#easyApplyUploadedResumeRef, [role="radiogroup"]');
-  const picked = 'input:checked, [aria-checked="true"], [aria-selected="true"]';
-  return !!(ref && ref.querySelector(picked));
+  const want = (name || '').toLowerCase();
+  const count = want ? text.split(want).length - 1 : 0;
+  const choices = scope.querySelectorAll('input[type="radio"], [role="radio"]:not(:has(input))');
+  const on = Array.from(choices)
+    .find((c) => c.checked || c.getAttribute('aria-checked') === 'true');
+  const box = on && (on.closest('[role="radio"]') || on.closest('label') || on.parentElement);
+  const words = box
+    ? ((box.innerText || '') + ' ' + (box.getAttribute('aria-label') || '')).toLowerCase()
+    : '';
+  return {count, choices: choices.length, chosen: !!on, named: !!want && words.includes(want)};
 }"""
 
 
@@ -123,6 +131,8 @@ class LinkedInHandler(WizardHandler):
         "[data-test-form-element-error-messages]",
         "[componentkey^='easyApplyFieldFocus'] [role='alert']",
         "[componentkey^='easyApplyFieldFocus'] [data-testid*='error' i]",
+        # The 2026 window's "This field is required" under a question.
+        "[id^='error-message-']",
     )
     success_signals = (
         "application was sent",
@@ -167,8 +177,10 @@ class LinkedInHandler(WizardHandler):
 
     def discover_step(self, page: Any, root: str | None) -> list[FormField]:
         """The step's fields; on the resume step with no file box, the
-        "Upload resume" button as the resume's upload."""
-        fields = super().discover_step(page, root)
+        "Upload resume" button as the resume's upload. The resumes LinkedIn
+        kept from before, a choice labelled by each file's name, are not a
+        question: the tailored one is uploaded, and LinkedIn picks it."""
+        fields = [f for f in super().discover_step(page, root) if not _resume_choice(f)]
         if any(f.kind == "file" for f in fields):
             return fields
         try:
@@ -203,20 +215,35 @@ class LinkedInHandler(WizardHandler):
         if not fill.file_path:
             return "no resume file to upload"
         name = Path(fill.file_path).name
+        before = self._resume_state(page, name)
         try:
             with page.expect_file_chooser(timeout=8000) as chooser:
                 page.locator(field.selector).first.click(timeout=5000)
             chooser.value.set_files(fill.file_path)
         except Exception as exc:
             return f"the Upload resume button gave no file chooser: {type(exc).__name__}"
-        for _ in range(30):  # the upload shows within seconds
+        for tick in range(30):  # the upload shows within seconds
             page.wait_for_timeout(500)
-            try:
-                if page.evaluate(_RESUME_SHOWN_JS, [ROOT, name]):
-                    return None
-            except Exception:
+            now = self._resume_state(page, name)
+            if not now:
                 continue
+            grew = before is not None and (
+                now["count"] > before["count"] or now["choices"] > before["choices"]
+            )
+            if now["chosen"] and (grew or before is None):
+                return None
+            # The same file sent again may take the old one's place.
+            if tick >= 7 and now["named"]:
+                return None
         return "LinkedIn never showed the uploaded resume"
+
+    @staticmethod
+    def _resume_state(page: Any, name: str) -> dict[str, Any] | None:
+        try:
+            state = page.evaluate(_RESUME_STATE_JS, [ROOT, name])
+        except Exception:
+            return None
+        return state if isinstance(state, dict) else None
 
     def discard(self, page: Any) -> None:
         """Close the modal and discard the draft, so nothing half-filled stays saved."""
@@ -234,6 +261,19 @@ class LinkedInHandler(WizardHandler):
                 "button:has-text('Discard')",
             ),
         )
+
+
+_FILE_NAME = re.compile(r"\S\.(?:pdf|docx?|rtf|txt|odt)\b", re.IGNORECASE)
+
+
+def _resume_choice(field: FormField) -> bool:
+    """LinkedIn's list of resumes uploaded before ("d8763d2995d3d0ac-87.pdf")."""
+    if field.kind != "radio":
+        return False
+    named = [o for o in field.options if o]
+    if named and all(_FILE_NAME.search(o) for o in named):
+        return True
+    return bool(_FILE_NAME.search(field.label or "")) and not field.options
 
 
 def _typeahead(page: Any, field: FormField, value: str) -> str | None:

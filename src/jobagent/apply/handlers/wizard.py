@@ -142,6 +142,11 @@ class WizardHandler(BaseHandler):
         """Which step is on screen, where the site names it. Empty means unknown."""
         return ""
 
+    def review_problem(self, page: Any, root: str | None) -> str | None:
+        """Why the step with the Submit button must not be sent as it shows,
+        or None. The default finds nothing."""
+        return None
+
     def wait_for_step(self, page: Any, before: str) -> None:
         """After Next, wait until the step after `before` is drawn. A site that
         swaps steps without a page load (Workday) keeps the old one on screen
@@ -261,6 +266,9 @@ class WizardHandler(BaseHandler):
                 return self._stop(page, "needs_input", screenshot_path, **common())
 
             if self._submit_visible(page, root):
+                problem = self.review_problem(page, root)
+                if problem:
+                    return self._stop(page, "blocked", screenshot_path, error=problem, **common())
                 if not submit:
                     return self._stop(page, "dry_run", screenshot_path, **common())
                 return self._send(page, root, screenshot_path, common())

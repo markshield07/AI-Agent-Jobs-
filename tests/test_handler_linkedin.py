@@ -275,3 +275,10 @@ def test_a_2026_company_website_posting_reports_where_it_goes(page, packet):
     result = run_new(page, packet, submit=True, variant="external")
     assert result.outcome == "blocked" and "company's own site" in result.error
     assert result.external_url == "https://careers.stand8.com/jobs/42"
+
+
+@pytest.mark.usefixtures("page")
+def test_a_review_that_shows_a_linkedin_id_for_an_answer_is_never_sent(page, packet):
+    result = run_new(page, packet, submit=True, variant="urnreview")
+    assert result.outcome == "blocked" and "urn:li:geo:103033862" in result.error
+    assert js(page, "__submitted") is None and js(page, "__discarded") is True

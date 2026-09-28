@@ -46,6 +46,7 @@ _MARK_UPLOAD_JS = r"""([root, attr]) => {
   button.setAttribute(attr, 'resume');
   return true;
 }"""
+_ROOT_TEXT = "(sel) => (document.querySelector(sel) || document.body).innerText || ''"
 # Whether the step shows the file as the chosen resume: its name, or a
 # checked choice in the resume list.
 _RESUME_SHOWN_JS = r"""([root, name]) => {
@@ -149,6 +150,21 @@ class LinkedInHandler(WizardHandler):
             return f"https://www.linkedin.com/jobs/view/{found.group(1)}/"
         return url
 
+    def review_problem(self, page: Any, root: str | None) -> str | None:
+        """An answer shown as LinkedIn's own id ("urn:li:geo:103033862") where
+        its name should be: sent, the employer would read the id."""
+        try:
+            text = str(page.evaluate(_ROOT_TEXT, root or "body") or "")
+        except Exception:
+            return None
+        found = re.search(r"urn:li:[a-z_]+:\S+", text, re.IGNORECASE)
+        if not found:
+            return None
+        return (
+            f"the review shows {found.group(0)!r} where an answer should be; "
+            "not sent. Check the screenshot"
+        )
+
     def discover_step(self, page: Any, root: str | None) -> list[FormField]:
         """The step's fields; on the resume step with no file box, the
         "Upload resume" button as the resume's upload."""
@@ -180,6 +196,8 @@ class LinkedInHandler(WizardHandler):
         return fill_plan(page, fields, plan, fill_one=self._fill_one)
 
     def _fill_one(self, page: Any, field: FormField, fill: Fill) -> str | None:
+        if field.kind == "select" and not field.options and isinstance(fill.value, str):
+            return _typeahead(page, field, fill.value)
         if field.key != UPLOAD_KEY:
             return fill_field(page, field, fill)
         if not fill.file_path:
@@ -216,3 +234,50 @@ class LinkedInHandler(WizardHandler):
                 "button:has-text('Discard')",
             ),
         )
+
+
+def _typeahead(page: Any, field: FormField, value: str) -> str | None:
+    """A LinkedIn typeahead ("Location (city)"): type the first part of the
+    value, then press the suggestion that matches it the way a person would.
+    A click the page does not take as a real one leaves the place's id in the
+    box ("urn:li:geo:..."), which then goes out as the answer; a box that ends
+    up holding one, or nothing, is emptied and reported."""
+    box = page.locator(field.selector).first
+    typed = value.split(",")[0].strip() or value
+    try:
+        box.click(timeout=3000)
+        box.fill("", timeout=3000)
+        box.press_sequentially(typed, delay=60, timeout=10_000)
+        options = page.locator("[role='option']")
+        for _ in range(12):
+            page.wait_for_timeout(250)
+            if options.count() and options.first.is_visible():
+                break
+        texts = [t.strip() for t in options.all_inner_texts()]
+        want, start = _plain(value), _plain(typed)
+        pick = next((i for i, t in enumerate(texts) if _plain(t) == want), None)
+        if pick is None:
+            pick = next((i for i, t in enumerate(texts) if _plain(t).startswith(start)), None)
+        if pick is not None:
+            options.nth(pick).click(timeout=3000)
+        else:
+            box.press("ArrowDown")
+            box.press("Enter")
+        page.wait_for_timeout(300)
+        got = (box.input_value(timeout=2000) or "").strip()
+    except Exception as exc:
+        first = str(exc).splitlines()[0][:150] if str(exc) else ""
+        got, error = "", f"{type(exc).__name__}: {first}"
+    else:
+        error = None
+    if got and not got.lower().startswith("urn:") and _plain(typed) in _plain(got):
+        return None
+    try:
+        box.fill("", timeout=2000)
+    except Exception:
+        pass
+    return error or f"LinkedIn did not take {value!r} from its list (the box showed {got!r})"
+
+
+def _plain(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()

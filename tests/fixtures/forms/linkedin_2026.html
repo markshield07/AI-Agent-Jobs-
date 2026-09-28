@@ -18,6 +18,7 @@
   resume" button whose file box only exists once it is pressed), questions, review. Variants with ?variant=...:
     needs_input  a question nobody on file answers
     external     no Easy Apply: "Apply on company website" through /safety/go/
+    urnreview    Review shows the city as LinkedIn's id, urn:li:geo:103033862
 -->
 <style>
   body { font-family: sans-serif; margin: 0; }
@@ -95,7 +96,9 @@
           : '');
     } },
     { name: 'review', title: 'Review your application', body: function () {
-      return '<p>Check your answers before you send them.</p>';
+      var city = (kept.contact && kept.contact.city) || '';
+      if (variant === 'urnreview') city = 'urn:li:geo:103033862';
+      return '<p>Check your answers before you send them.</p><p>Location (city)</p><p>' + city + '</p>';
     } },
   ];
   var chosen = function (name) {
@@ -120,7 +123,20 @@
       var hits = document.getElementById('hits');
       hits.innerHTML = loc.value.length < 3 ? '' : '<div role="listbox"><div role="option">Menifee, California, United States</div></div>';
       var opt = hits.querySelector('[role="option"]');
-      if (opt) opt.addEventListener('click', function () { loc.value = opt.textContent; hits.innerHTML = ''; });
+      // Like the live one on 2026-09-28: a click the page did not see as a real
+      // one leaves the place's id in the box ("urn:li:geo:..."), shown on Review.
+      if (opt) opt.addEventListener('click', function (e) {
+        loc.value = e.isTrusted ? opt.textContent : 'urn:li:geo:103033862';
+        hits.innerHTML = '';
+      });
+    });
+    if (loc) loc.addEventListener('keydown', function (e) {
+      var opt = document.querySelector('#hits [role="option"]');
+      if (e.key === 'ArrowDown' && opt) opt.setAttribute('aria-selected', 'true');
+      if (e.key === 'Enter' && opt && opt.getAttribute('aria-selected') === 'true') {
+        loc.value = opt.textContent;
+        document.getElementById('hits').innerHTML = '';
+      }
     });
     Array.from(dialog.querySelectorAll('button')).filter(function (b) { return b.textContent.trim() === 'Upload resume'; })
       .forEach(function (b) {

@@ -310,6 +310,27 @@ def test_linkedin_pages_are_spaced_and_a_429_ends_that_sites_fetches(conn, monke
         "www.linkedin.com3",
         "www.indeed.com4",
     ]
-    assert len(waits) == 1 and waits[0] > 2
+    assert len(waits) == 1 and waits[0] > 5
     assert any("too many requests" in note for note in report.notes)
     assert report.enriched == 2
+
+
+def test_a_run_reads_only_so_many_linkedin_pages(conn, monkeypatch):
+    from jobagent.discovery import pipeline
+
+    store.upsert_jobs(
+        conn,
+        [
+            RawJob(
+                url=f"https://www.linkedin.com/jobs/view/{n}/", title="T", company="C", source="x"
+            )
+            for n in range(5)
+        ],
+    )
+    asked: list[str] = []
+    monkeypatch.setattr(pipeline, "ENRICH_CAPS", {"linkedin.com": 3})
+    monkeypatch.setattr(
+        pipeline, "enrich_description", lambda url, **kw: asked.append(url) or "x" * 500
+    )
+    pipeline._enrich(conn, RunReport(run_id=0), client=None, completer=None, sleep=lambda s: None)
+    assert len(asked) == 3

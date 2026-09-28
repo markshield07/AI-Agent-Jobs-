@@ -24,6 +24,7 @@ from typing import Any
 from jobagent.discovery.ats import detect_ats
 from jobagent.discovery.criteria import SearchCriteria
 from jobagent.discovery.models import RawJob
+from jobagent.discovery.sources.filters import title_matches
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +76,8 @@ class JobSpySource:
                     continue
                 if call["hours_old"] is None:
                     rows = [r for r in rows if _fresh(r.get("date_posted"), criteria.max_age_hours)]
+                if call.get("easy_apply") and call["site_name"] == ["indeed"]:
+                    rows = [r for r in rows if title_matches(str(r.get("title") or ""), criteria)]
                 usual = None if board_remote or not location else _usual_state(rows)
 
                 for row in rows:
@@ -108,11 +111,9 @@ def _calls(
     checked here; the other boards take both at once.
 
     `on_site_only` searches LinkedIn and Indeed alone, for jobs that apply on
-    their own forms: LinkedIn's Easy Apply filter goes with the others, and a
-    place query asks Indeed for Indeed Apply jobs, again with no age. Indeed
-    cannot add that filter to its remote one, so a Remote query asks it
-    twice: with the remote filter, and for Indeed Apply jobs in "Remote". The
-    title goes to Indeed in quotes, as a phrase."""
+    their own forms: LinkedIn's Easy Apply filter goes with the others. Indeed
+    is asked twice: its usual search, and its Indeed Apply search (no age, the
+    title in quotes, "Remote" as the place for a Remote query)."""
     sites = list(criteria.jobspy_sites)
     if on_site_only:
         sites = [site for site in sites if site in ("linkedin", "indeed")]
@@ -130,18 +131,23 @@ def _calls(
     if on_site_only:
         calls: list[tuple[dict[str, Any], bool]] = []
         if "indeed" in sites:
-            # In quotes, Indeed matches the title as a phrase: its Indeed Apply
-            # search otherwise pads the list with any job sharing one word.
-            indeed = {"site_name": ["indeed"], **base, "hours_old": None}
-            indeed["search_term"] = f'"{title.strip(chr(34))}"'
-            apply_here = {**indeed, "easy_apply": True}
+            # Indeed's usual search (its remote filter for a Remote query),
+            # whose postings with no company link apply on Indeed; then its
+            # Indeed Apply search, which cannot go with the remote filter or an
+            # age and, even with the title in quotes, returned jobs sharing no
+            # more than a word of it (2026-09-28): only matching titles are kept.
+            usual = {"site_name": ["indeed"], **base}
+            calls.append(({**usual, "hours_old": None}, True) if remote else (usual, False))
+            apply_here = {
+                **usual,
+                "search_term": f'"{title.strip(chr(34))}"',
+                "hours_old": None,
+                "easy_apply": True,
+                "is_remote": False,
+            }
             if remote:
-                # The remote filter and the Indeed Apply one cannot go together:
-                # both searches, the second in the place Indeed calls "Remote".
-                calls.append((indeed, True))
-                calls.append(({**apply_here, "location": "Remote", "is_remote": False}, False))
-            else:
-                calls.append((apply_here, False))
+                apply_here["location"] = "Remote"
+            calls.append((apply_here, False))
         if "linkedin" in sites:
             calls.append(({"site_name": ["linkedin"], **base, "easy_apply": True}, remote))
         return calls

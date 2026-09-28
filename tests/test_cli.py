@@ -553,6 +553,7 @@ def test_login_workday_status_opens_the_site_to_see_if_the_sign_in_works(
 
     checked = []
     monkeypatch.setattr("jobagent.apply.browser.session.open_browser", fake_open)
+    monkeypatch.setattr(WorkdayHandler, "keep_alive", lambda self, page, url, **kw: "unknown")
     monkeypatch.setattr(
         WorkdayHandler,
         "check_session",
@@ -560,9 +561,44 @@ def test_login_workday_status_opens_the_site_to_see_if_the_sign_in_works(
     )
     main.run(["login", "workday", "--status"])
     out = capsys.readouterr().out
-    assert checked == [posting]
+    assert checked == [posting], "the posting when Candidate Home cannot tell"
     assert f"Workday {host}: the sign-in has ended; sign in again: jobagent login workday" in out
     assert "1 application(s) waiting on it" in out
+
+
+def test_login_workday_status_asks_candidate_home_before_the_posting(
+    cli_settings, settings, monkeypatch, capsys
+):
+    from contextlib import contextmanager
+
+    from jobagent.apply import sessions
+    from jobagent.apply.handlers.workday import WorkdayHandler
+
+    host = "acme.wd5.myworkdayjobs.com"
+    posting = f"https://{host}/careers/job/Remote/Engineer_R1"  # applied to, or closed
+    cookie = {"name": "PLAY_SESSION", "value": "x", "domain": host, "path": "/", "expires": -1}
+    sessions.save_workday_session(settings, host, {"cookies": [cookie]}, url=posting)
+
+    class Browser:
+        @contextmanager
+        def new_page(self):
+            yield object()
+
+    @contextmanager
+    def fake_open(settings_):
+        yield Browser()
+
+    postings = []
+    monkeypatch.setattr("jobagent.apply.browser.session.open_browser", fake_open)
+    monkeypatch.setattr(WorkdayHandler, "keep_alive", lambda self, page, url, **kw: "signed_in")
+    monkeypatch.setattr(
+        WorkdayHandler, "check_session", lambda self, page, url, **kw: postings.append(url)
+    )
+    main.run(["login", "workday", "--status"])
+    out = capsys.readouterr().out
+    assert postings == [], "Candidate Home answered; the posting is not opened"
+    assert "could not tell" not in out
+    assert sessions.workday_status(settings, host)["state"] == "signed_in"
 
 
 def test_login_workday_status_says_when_the_check_ran_out_of_time(
@@ -595,10 +631,11 @@ def test_login_workday_status_says_when_the_check_ran_out_of_time(
         return "timed_out"
 
     monkeypatch.setattr("jobagent.apply.browser.session.open_browser", fake_open)
+    monkeypatch.setattr(WorkdayHandler, "keep_alive", stuck)
     monkeypatch.setattr(WorkdayHandler, "check_session", stuck)
     main.run(["login", "workday", posting, "--status", "--check-timeout", "45"])
     out = capsys.readouterr().out
-    assert given == [45]
+    assert given == [45, 45]
     assert "within 45s (open the posting 3s, press Apply and Apply Manually 42s)" in out
     assert sessions.workday_status(settings, host)["state"] == "unchecked"
 

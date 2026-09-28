@@ -768,8 +768,10 @@ def _workday_line(status: dict[str, object]) -> str:
 def _check_workday(
     settings: Settings, hosts: list[str], url: str | None = None, *, timeout_s: float = 90
 ) -> dict[str, str]:
-    """Open each company's posting with the saved sign-in and record what shows;
-    return what each host showed."""
+    """Open each company's Candidate Home with the saved sign-in, and its
+    posting when that page cannot be read, and record what shows; return what
+    each host showed. Candidate Home first: the posting on file may be one
+    already applied to, or closed, which shows no sign-in either way."""
     from jobagent.apply import sessions
     from jobagent.apply.browser.session import BrowserUnavailable, open_browser
     from jobagent.apply.handlers.workday import WorkdayHandler
@@ -785,7 +787,13 @@ def _check_workday(
                 handler = WorkdayHandler()
                 began = time.monotonic()
                 with browser.new_page() as page:
-                    state = handler.check_session(page, where, timeout_s=timeout_s)
+                    try:
+                        state = handler.keep_alive(page, where, timeout_s=timeout_s)
+                    except Exception:  # the posting is the fallback
+                        state = "unknown"
+                    if state in ("unknown", "timed_out"):
+                        handler = WorkdayHandler()
+                        state = handler.check_session(page, where, timeout_s=timeout_s)
                 took = time.monotonic() - began
                 found[host] = state
                 stages = ", ".join(f"{name} {secs:.0f}s" for name, secs in handler.timings)

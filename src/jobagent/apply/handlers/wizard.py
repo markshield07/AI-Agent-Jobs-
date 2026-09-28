@@ -38,6 +38,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 from jobagent.apply.browser.dom import current_values, discover_fields
 from jobagent.apply.browser.fill import (
+    bot_check,
     click_first_visible,
     detect_captcha,
     page_text,
@@ -103,6 +104,12 @@ class WizardHandler(BaseHandler):
     # Hosts that are still the site's own flow after the apply button.
     own_hosts: tuple[str, ...] = ()
     max_steps: int = 12
+    # How long a bot check ("Just a moment...") is given to pass on its own.
+    bot_check_ms: int = 20_000
+    # Upload the tailored resume even where the site shows one already. True
+    # where that one is the account's old resume (LinkedIn); False where it
+    # is the one this run uploaded a step earlier (Workday).
+    refill_files: bool = True
 
     # -- what subclasses may override --------------------------------------
 
@@ -125,6 +132,29 @@ class WizardHandler(BaseHandler):
     def discard(self, page: Any) -> None:
         """Close the form without sending it. The default leaves the page as it is."""
 
+    def discover_step(self, page: Any, root: str | None) -> list[FormField]:
+        """The fields of the step on screen. A site with controls of its own
+        (Workday's dropdown buttons) adds them here."""
+        return discover_fields(page, root=root)
+
+    def prefilled(self, page: Any, fields: list[FormField]) -> dict[str, str]:
+        """What the site already put in the step's fields, by field key."""
+        return current_values(page, fields)
+
+    def step_marker(self, page: Any) -> str:
+        """Which step is on screen, where the site names it. Empty means unknown."""
+        return ""
+
+    def review_problem(self, page: Any, root: str | None) -> str | None:
+        """Why the step with the Submit button must not be sent as it shows,
+        or None. The default finds nothing."""
+        return None
+
+    def wait_for_step(self, page: Any, before: str) -> None:
+        """After Next, wait until the step after `before` is drawn. A site that
+        swaps steps without a page load (Workday) keeps the old one on screen
+        for a while, and reading it then reads the step just left."""
+
     # -- the shared flow ---------------------------------------------------
 
     def apply(
@@ -144,23 +174,49 @@ class WizardHandler(BaseHandler):
         except Exception as exc:
             return HandlerResult(outcome="failed", error=f"could not open {url}: {_brief(exc)}")
         wait_settled(page, self.settle_ms)
+        wall = bot_check(page, self.bot_check_ms)
+        if wall:
+            return self._result(page, "blocked", screenshot_path, error=self.bot_check_hint(wall))
         click_first_visible(page, COOKIE_BUTTON_SELECTORS)
 
+        # Before any sign-in: a job in the wrong place needs no account.
+        elsewhere = self.wrong_place(page, packet.wanted_places)
+        if elsewhere:
+            return HandlerResult(outcome="blocked", error=elsewhere, wrong_place=elsewhere)
         if self.signed_out(page):
-            return self._result(page, "blocked", screenshot_path, error=self.login_hint())
+            return self._result(
+                page,
+                "blocked",
+                screenshot_path,
+                error=self.login_hint(),
+                sign_in=self.sign_in_target(),
+            )
         flow = self.open_flow(page)
         if flow is None:
             return self._no_button(page, screenshot_path)
         if flow is not page:
             try:
-                return self._steps(flow, answerer, submit=submit, screenshot_path=screenshot_path)
+                return self._steps(
+                    flow, answerer, submit=submit, screenshot_path=screenshot_path, job=packet.job
+                )
             finally:
                 _close(flow)
-        return self._steps(page, answerer, submit=submit, screenshot_path=screenshot_path)
+        return self._steps(
+            page, answerer, submit=submit, screenshot_path=screenshot_path, job=packet.job
+        )
 
     def _steps(
-        self, page: Any, answerer: Answerer, *, submit: bool, screenshot_path: str | None
+        self,
+        page: Any,
+        answerer: Answerer,
+        *,
+        submit: bool,
+        screenshot_path: str | None,
+        job: dict[str, Any] | None = None,
     ) -> HandlerResult:
+        wall = bot_check(page, self.bot_check_ms)
+        if wall:
+            return self._result(page, "blocked", screenshot_path, error=self.bot_check_hint(wall))
         if self._left_site(page):
             return self._stop(
                 page,
@@ -171,7 +227,13 @@ class WizardHandler(BaseHandler):
                 external_url=page.url,
             )
         if self.signed_out(page):
-            return self._stop(page, "blocked", screenshot_path, error=self.login_hint())
+            return self._stop(
+                page,
+                "blocked",
+                screenshot_path,
+                error=self.login_hint(),
+                sign_in=self.sign_in_target(),
+            )
 
         filled: list[Fill] = []
         needed: list[NeededInput] = []
@@ -184,7 +246,7 @@ class WizardHandler(BaseHandler):
         for step in range(1, self.max_steps + 1):
             root = self._mark_root(page)
             try:
-                fields = discover_fields(page, root=root)
+                fields = self.discover_step(page, root)
             except Exception as exc:
                 return self._stop(
                     page,
@@ -194,9 +256,9 @@ class WizardHandler(BaseHandler):
                     **common(),
                 )
             seen.extend(fields)
-            prefilled = current_values(page, fields)
+            prefilled = self.prefilled(page, fields)
             for field in fields:
-                if field.key in prefilled and field.kind != "file":
+                if field.key in prefilled and (field.kind != "file" or not self.refill_files):
                     filled.append(
                         Fill(
                             key=field.key,
@@ -205,7 +267,11 @@ class WizardHandler(BaseHandler):
                             label=field.label,
                         )
                     )
-            todo = [f for f in fields if f.key not in prefilled or f.kind == "file"]
+            todo = [
+                f
+                for f in fields
+                if f.key not in prefilled or (f.kind == "file" and self.refill_files)
+            ]
             if todo:
                 plan = answerer(todo)
                 done, unfilled, notes = self.fill(page, todo, plan)
@@ -219,11 +285,15 @@ class WizardHandler(BaseHandler):
                 return self._stop(page, "needs_input", screenshot_path, **common())
 
             if self._submit_visible(page, root):
+                problem = self.review_problem(page, root)
+                if problem:
+                    return self._stop(page, "blocked", screenshot_path, error=problem, **common())
                 if not submit:
                     return self._stop(page, "dry_run", screenshot_path, **common())
                 return self._send(page, root, screenshot_path, common())
 
             before = self._signature(page, root)
+            marker = self.step_marker(page)
             if not click_first_visible(page, self._scoped(root, self.next_selectors)):
                 captcha = detect_captcha(page)
                 error = (
@@ -233,7 +303,15 @@ class WizardHandler(BaseHandler):
                 )
                 return self._stop(page, "blocked", screenshot_path, error=error, **common())
             wait_settled(page, self.settle_ms)
+            self.wait_for_step(page, marker)
             errors = self._step_errors(page, root)
+            stuck = errors or self._signature(page, self._mark_root(page)) == before
+            empty = self._left_empty(page, job) if stuck else []
+            if empty:
+                # The step would not move for questions nothing answered:
+                # asked, whatever the plan thought of them.
+                needed.extend(n for n in empty if n.key not in {m.key for m in needed})
+                return self._stop(page, "needs_input", screenshot_path, **common())
             if errors:
                 return self._stop(
                     page,
@@ -299,10 +377,47 @@ class WizardHandler(BaseHandler):
 
     # -- checks ------------------------------------------------------------
 
+    def _left_empty(self, page: Any, job: dict[str, Any] | None) -> list[NeededInput]:
+        """The required questions of the step on screen still left blank."""
+        from jobagent.apply.answering import answer_key_for
+
+        try:
+            fields = self.discover_step(page, self._mark_root(page))
+            values = self.prefilled(page, fields)
+        except Exception as exc:
+            log.debug("could not re-read the step: %s", exc)
+            return []
+        return [
+            NeededInput(
+                key=f.key,
+                label=f.label,
+                kind=f.kind,
+                required=True,
+                options=list(f.options),
+                reason="the form will not go on without it, and nothing on file answered it",
+                answer_key=answer_key_for(f, job),
+            )
+            for f in fields
+            if f.required and f.kind != "file" and f.key not in values and f.label
+        ]
+
     def signed_out(self, page: Any) -> bool:
         if self.signed_out_url.search(urlparse(page.url or "").path or ""):
             return True
         return self._any_visible(page, self.signed_out_selectors)
+
+    def sign_in_target(self) -> str:
+        """What to sign in to again when the run meets a sign-in page."""
+        return self.site
+
+    def bot_check_hint(self, wall: str) -> str:
+        label = site_info(self.site).label if self.site else "the site"
+        return (
+            f"{wall}. Run `jobagent login {self.site}` and pass {label}'s check in the "
+            "window it opens, then try again"
+            if self.site
+            else wall
+        )
 
     def login_hint(self) -> str:
         label = site_info(self.site).label
@@ -323,9 +438,14 @@ class WizardHandler(BaseHandler):
                 page, "blocked", screenshot_path, error=error, external_url=external
             )
         if not self._has_session(page):
-            error = self.login_hint()
-        else:
-            error = f"no {label} apply button on the posting; it may be closed or already applied"
+            return self._result(
+                page,
+                "blocked",
+                screenshot_path,
+                error=self.login_hint(),
+                sign_in=self.sign_in_target(),
+            )
+        error = f"no {label} apply button on the posting; it may be closed or already applied"
         return self._result(page, "blocked", screenshot_path, error=error)
 
     def external_url(self, page: Any) -> str | None:

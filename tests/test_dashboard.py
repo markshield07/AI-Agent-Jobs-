@@ -198,13 +198,41 @@ def test_the_page_renders_the_numbers_and_every_tab(page, server):
     assert "jobagent login linkedin" in page.inner_text("#sessions")
     assert "Dry run" in page.inner_text("#config")
 
-    page.click("a[data-tab='profile']")
+    # Wait for the resume request itself: the page's words can show before
+    # its response event reaches the test, which then read no miss at all.
+    with page.expect_response(lambda r: r.url.endswith("/api/resume")) as resume:
+        page.click("a[data-tab='profile']")
+    assert resume.value.status == 404
     page.wait_for_selector("#resume-current")
     assert "No resume uploaded yet." in page.inner_text("#resume-current")
 
     assert errors == [], errors
     # The one expected miss: no resume uploaded, which the page says in words.
     assert [u.split("/", 3)[3] for u in failed] == ["api/resume"], failed
+
+
+@pytest.mark.usefixtures("page")
+def test_a_lapsed_workday_sign_in_is_flagged_with_its_waiting_jobs(page, server, settings):
+    from jobagent.apply import sessions
+
+    host = "crowdstrike.wd5.myworkdayjobs.com"
+    posting = f"https://{host}/crowdstrikecareers/job/USA-Remote/Manager_R1"
+    cookie = {"name": "PLAY_SESSION", "value": "x", "domain": host, "expires": -1}
+    sessions.save_workday_session(settings, host, {"cookies": [cookie]}, url=posting)
+    sessions.mark_workday_signed_out(settings, host, job_id="j1")
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+
+    page.goto(server["url"] + "/#overview")
+    page.wait_for_selector("#attention a[href='#settings']")
+    assert "Workday sign-in to renew (1 waiting)" in page.inner_text("#attention")
+
+    page.click("#attention a[href='#settings']")
+    page.wait_for_selector("#sessions .session:has-text('crowdstrike')")
+    row = page.inner_text("#sessions .session:has-text('crowdstrike')")
+    assert "Sign in again" in row and f"jobagent login workday {posting}" in row
+    assert "1 application wait" in row
+    assert errors == [], errors
 
 
 @pytest.mark.usefixtures("page")

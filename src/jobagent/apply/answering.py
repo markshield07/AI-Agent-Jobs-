@@ -38,9 +38,32 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     ("preferred_name", r"\bpreferred\s+(?:first\s+)?name\b|\bnickname\b"),
     ("full_name", r"^\W*(?:full\s+|legal\s+|your\s+)?name\W*$|\bfull\s+name\b"),
     ("email", r"\be-?mail\b"),
+    # Before "phone": the other boxes a phone number comes with (Workday).
+    ("phone_country", r"\bphone\s+code\b|\bcountry\s+(?:calling\s+|dialing\s+)?code\b"),
+    ("phone_extension", r"\bextension\b|\bext\b"),
+    # A second number ("Home Phone" beside "Mobile Phone") is not the mobile again.
+    (
+        "other_phone",
+        r"\b(?:home|work|office|business|alternate|alternative|secondary|other|evening|day)"
+        r"\s+(?:phone|telephone|tel|number)\b|\blandline\b",
+    ),
     ("phone", r"\b(?:phone|mobile|telephone|cell)\b"),
-    ("address", r"\b(?:street\s+)?address\b|\bpostal|\bzip\b|\bpost\s*code\b"),
+    # The parts of a postal address each have a key of their own, so a form
+    # that asks for street, city, state and ZIP separately (Workday) does not
+    # get the same answer four times, and each answer is kept apart.
+    ("postal_code", r"\bpostal|\bzip\b|\bpost\s*code\b"),
+    ("address_line_2", r"\baddress\s+line\s*2\b|\bapartment\b|\bapt\b|\bsuite\b"),
+    # Where a job was, not where the person lives (a work-history entry's
+    # "Employer Location"): never the home address.
+    ("employer_location", r"\b(?:employer|company|job|work|office)\s+(?:location|city|address)\b"),
+    ("address", r"\b(?:street\s+)?address\b"),
+    ("city", r"^\W*(?:city|town|city\s*/\s*town|town\s*/\s*city)\W*$"),
+    ("state", r"^\W*(?:state|province|region|state\s*/\s*province)\W*$"),
     ("country", r"\bcountry\b"),
+    # Whether the person can get to this job's place ("Are you comfortable
+    # commuting to this job's location?"): a question about the job, not the
+    # person's own location, and its answer differs from job to job.
+    ("commute_ok", r"\bcommut"),
     ("location", r"\blocation\b|\bcity\b|\bwhere (?:are|do) you (?:based|located|live)\b"),
     ("linkedin", r"\blinkedin\b"),
     ("github", r"\bgithub\b"),
@@ -59,15 +82,41 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
         "heard_about",
         r"\b(?:hear|heard|find\s+out|learn|found\s+out)\s+about\b|\bhow did you find\b",
     ),
+    # The list a site shows once "How did you hear" is answered (Serco's
+    # "Source" after Job Board): which one, a question of its own.
+    (
+        "heard_about_source",
+        r"^\W*(?:job\s+|applicant\s+|candidate\s+|referral\s+)?source(?:\s+(?:name|detail))?\W*$"
+        r"|\bwhich\s+(?:job\s+board|website|site)\b",
+    ),
+    # How a recruiter should reach the person: plain defaults, overridable.
+    ("contact_time", r"\b(?:best|preferred)\s+time\s+to\s+(?:contact|call|reach)\b"),
+    (
+        "contact_method",
+        r"\b(?:preferred|best)\s+(?:contact\s+method|method\s+of\s+contact|way\s+to\s+contact)"
+        r"|\bcontact\s+preference\b",
+    ),
     # Never guessed. These come from the answer bank or from the user.
+    # Sponsorship before authorization: "require work authorization
+    # sponsorship?" asks about sponsorship, and the two answers are opposite.
+    # "Authorized to work ... without sponsorship?" is still about authorization.
+    ("work_authorization", r"\bwithout\b[^?]{0,60}\bsponsor"),
+    ("visa_sponsorship", r"\bsponsor"),
     (
         "work_authorization",
         r"\bauthori[sz]ed\s+to\s+work\b|\blegally\s+(?:able|eligible|authori[sz]ed|permitted)\b"
         r"|\bwork\s+authori[sz]ation\b|\bright\s+to\s+work\b|\beligible\s+to\s+work\b"
         r"|\bwork\s+permit\b",
     ),
-    ("visa_sponsorship", r"\bsponsor"),
     ("citizenship", r"\bcitizen"),
+    # The parts of a salary a form asks for apart from the amount: they follow
+    # from salary_expectation, so they are tried before it.
+    ("salary_currency", r"\bcurrency\b"),
+    (
+        "salary_period",
+        r"\b(?:salary|pay|compensation|rate)\b.{0,30}\b(?:time\s*frame|period|frequency|basis|unit)\b"
+        r"|\bpay\s+(?:period|frequency)\b",
+    ),
     (
         "salary_expectation",
         r"\bsalary\b|\bcompensation\b|\bpay\s+expectation|\bdesired\s+pay\b|\bhourly\s+rate\b"
@@ -80,6 +129,8 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     ),
     ("relocation", r"\brelocat"),
     ("work_arrangement", r"\bremote\b|\bhybrid\b|\bon-?site\b|\bin[- ]office\b|\bin\s+person\b"),
+    # "Clearance Status" beside "Clearance Level" (Serco) is a second answer.
+    ("clearance_status", r"\bclearance\s+status\b"),
     ("security_clearance", r"\bclearance\b"),
     ("over_18", r"\b18\b|\beighteen\b|\blegal\s+age\b|\bage\s+of\s+majority\b"),
     ("background_check", r"\bbackground\s+check\b|\bdrug\s+(?:test|screen)"),
@@ -98,10 +149,14 @@ SENSITIVE: frozenset[str] = frozenset(
         "visa_sponsorship",
         "citizenship",
         "salary_expectation",
+        "salary_currency",
+        "salary_period",
         "start_date",
         "relocation",
+        "commute_ok",
         "work_arrangement",
         "security_clearance",
+        "clearance_status",
         "over_18",
         "background_check",
         "previously_employed",
@@ -109,7 +164,14 @@ SENSITIVE: frozenset[str] = frozenset(
         "referral",
     }
 )
+_QUESTION_ORDER = tuple(
+    [(key, pattern) for key, pattern in _COMPILED if key in SENSITIVE]
+    + [(key, pattern) for key, pattern in _COMPILED if key not in SENSITIVE]
+)
 NEVER_GUESSED = "never guessed: answer it once and it is kept"
+# One answer for every form's terms or privacy-policy box: whether to agree
+# to a company's application terms when its form asks. Never assumed.
+CONSENT_KEY = "consent_terms"
 NOT_ON_FILE = "no answer on file"
 NOT_GROUNDED = "the model could not answer it from the facts on file"
 NO_MODEL = "no model to draft an answer"
@@ -129,14 +191,20 @@ _EEO_KEYS: tuple[tuple[str, str], ...] = (
     ("disability", r"\bdisabilit"),
 )
 _EEO_COMPILED = tuple((key, re.compile(p, re.IGNORECASE)) for key, p in _EEO_KEYS)
+# "Do you need an accommodation due to a disability?" asks for a request, not
+# the voluntary disability self-identification, and the answers are not
+# interchangeable: it is a question of its own, and never guessed.
+_ACCOMMODATION = re.compile(r"\baccommodat", re.IGNORECASE)
 _DECLINE = re.compile(
     r"decline|prefer not|don'?t wish|do not wish|rather not|not to (?:answer|say|disclose)"
-    r"|choose not|i don'?t want",
+    r"|choose not|i don'?t want|(?:do not|don'?t) want to (?:answer|disclose|say)",
     re.IGNORECASE,
 )
 _CONSENT = re.compile(
     r"\bprivacy\b|\bterms\b|\bconsent\b|\bagree\b|\backnowledge\b|\bcertify\b|\bauthori[sz]e\b"
-    r"|\bconfirm\b|\baccept\b|\bpolicy\b|\bgdpr\b|\bdata\s+(?:processing|retention)\b",
+    r"|\bconfirm\b|\baccept\b|\bpolicy\b|\bgdpr\b|\bdata\s+(?:processing|retention)\b"
+    r"|\bi\s+understand\b|\bi\s+have\s+read\b"
+    r"|\bby\s+(?:continuing|submitting|clicking|checking|applying|proceeding)\b",
     re.IGNORECASE,
 )
 _MARKETING = re.compile(
@@ -144,8 +212,28 @@ _MARKETING = re.compile(
     r"|\bfuture\s+(?:opportunit|roles|positions)|\bkeep\s+(?:me|my)\b|\bcontact\s+me\b",
     re.IGNORECASE,
 )
+# Legal attestations a form asks as a question: answered once by the person,
+# never drafted, whatever the model would make of them.
+_ATTESTATION = re.compile(
+    r"\bconflicts?\s+of\s+interest\b|\boutside\s+(?:employment|business|activit)"
+    r"|\bnon[-\s]?(?:compete|solicit)|\bconvicted\b|\bfelony\b|\bcriminal\b"
+    r"|\backnowledg|\battest\b|\bcertify\b",
+    re.IGNORECASE,
+)
+# "Why are you interested in working for us?": what the cover letter says,
+# in words already checked against the facts.
+_WHY_US = re.compile(
+    r"\bwhy\b[^?]*\b(?:interested|want\s+to\s+(?:work|join)|join(?:ing)?|appl(?:y|ying))\b"
+    r"|\binterest(?:ed)?\s+in\s+(?:working|joining)\b",
+    re.IGNORECASE,
+)
 _YES = frozenset({"yes", "y", "true", "1", "i do", "i am", "i have"})
 _NO = frozenset({"no", "n", "false", "0", "i do not", "i am not", "i have not"})
+# Text a page leaves among a list's choices that is no choice at all: another
+# site's widget (Apply with LinkedIn's hidden box) or a web address.
+_NOT_AN_OPTION = re.compile(r"api_key|AwliWidget|apply-with-linkedin|://", re.IGNORECASE)
+_BOARDS = frozenset({"linkedin", "indeed", "glassdoor", "ziprecruiter", "dice", "monster"})
+_BOARD_NAMES = {"linkedin": "LinkedIn", "ziprecruiter": "ZipRecruiter"}
 _ASKABLE = frozenset({"text", "textarea", "select", "multiselect", "radio", "number", "unknown"})
 _MAX_MODEL_QUESTIONS = 20
 _DESCRIPTION_CHARS = 2500
@@ -165,24 +253,126 @@ def question_key(label: str) -> str:
 
 
 def canonical_key(field: FormField) -> str | None:
-    """The canonical key `field` asks for, from its label first, then its name."""
+    """The canonical key `field` asks for, from its label first, then its name.
+
+    A question (a label with a "?" or more than a few words) is read by its
+    first sentence only, and the never-guessed keys are tried on it first:
+    "Are you eligible to work in the country ...?" is about work
+    authorization, not the country, and a conflict-of-interest question that
+    mentions a start date in its fine print is not asking for one.
+    """
     for text in (field.label, field.name or "", field.key):
         if not text:
             continue
-        haystack = text.replace("_", " ").replace("-", " ")
-        for key, pattern in _COMPILED:
+        haystack = _lead(text).replace("_", " ").replace("-", " ")
+        question = _is_question(text)
+        order = _QUESTION_ORDER if question else _COMPILED
+        for key, pattern in order:
+            # "Do you have Team Lead experience listed in your resume?" asks
+            # about the resume; only an upload asks for it.
+            if question and key in _UPLOADS and field.kind != "file":
+                continue
             if pattern.search(haystack):
                 return key
     return None
 
 
-def answer_key_for(field: FormField) -> str:
-    """Where an answer to `field` lives, or would live, in the answer bank."""
-    if _EEO.search(field.label):
+_UPLOADS = frozenset({"resume", "cover_letter"})
+
+
+def _is_question(text: str) -> bool:
+    return "?" in text or len(text.split()) > 6
+
+
+def _lead(text: str) -> str:
+    """The first sentence of a label: up to its first "?", at most 200 characters."""
+    end = text.find("?")
+    return text[: end + 1 if end >= 0 else 200][:200]
+
+
+_SALUTATION = re.compile(
+    r"^\s*(?:(?:dear|hello|hi|greetings)\b[^,:\n]{0,80}|to\s+whom\s+it\s+may\s+concern)[,:]?\s*",
+    re.IGNORECASE,
+)
+_CLOSING = re.compile(
+    r"\n\s*(?:(?:yours\s+)?sincerely|(?:best|kind|warm)(?:est)?\s+regards|regards|best|"
+    r"respectfully(?:\s+yours)?|yours\s+(?:truly|faithfully)|with\s+thanks|thank\s+you)"
+    r"\s*,[^\n]*(?:\n[^\n]{0,60}){0,3}\s*$",
+    re.IGNORECASE,
+)
+
+
+def letter_body(letter: str) -> str:
+    """The cover letter as a form answer: no "Dear ... Team," and no sign-off."""
+    text = _SALUTATION.sub("", letter.strip(), count=1) if _SALUTATION.match(letter) else letter
+    return _CLOSING.sub("", "\n" + text.strip()).strip()
+
+
+def _is_terms_box(field: FormField) -> bool:
+    """A box agreeing to terms or a privacy policy, not one asking for updates.
+    A required box is terms whatever else it mentions: Serco's privacy notice
+    speaks of "future positions", and the form cannot be sent without it."""
+    return (
+        field.kind == "checkbox"
+        and not field.options
+        and field.section in ("consent", "other", "questions", "eeo")
+        and bool(_CONSENT.search(field.label))
+        and (field.required or not _MARKETING.search(field.label))
+    )
+
+
+def commute_key(job: Mapping[str, Any] | None) -> str:
+    """The answer-bank key for whether the person can commute to `job`: one
+    per place ("commute_ok:long_beach_ca"), else per company, since the
+    answer for one job's place says nothing about another's."""
+    job = job or {}
+    where = _norm(job.get("location") or "") or _norm(job.get("company") or "")
+    return "commute_ok:" + where.replace(" ", "_") if where else "commute_ok"
+
+
+def answer_key_for(field: FormField, job: Mapping[str, Any] | None = None) -> str:
+    """Where an answer to `field` lives, or would live, in the answer bank.
+    `job` is the posting, for the questions whose answer depends on it."""
+    if _is_terms_box(field):
+        return CONSENT_KEY
+    if field.section == "experience":
+        # "Location" in a job held is not where the person lives.
+        return question_key(field.label)
+    if _EEO.search(field.label) and not _ACCOMMODATION.search(field.label):
         for key, pattern in _EEO_COMPILED:
             if pattern.search(field.label):
                 return key
-    return canonical_key(field) or question_key(field.label)
+    key = canonical_key(field)
+    if key == "commute_ok":
+        return commute_key(job)
+    return key or question_key(field.label)
+
+
+_CONTACT_KEYS = frozenset(
+    {
+        "first_name",
+        "last_name",
+        "full_name",
+        "preferred_name",
+        "email",
+        "phone",
+        "phone_country",
+        "other_phone",
+        "location",
+        "address",
+        "address_line_2",
+        "city",
+        "state",
+        "postal_code",
+        "country",
+    }
+)
+
+
+def field_section(field: FormField) -> str:
+    """What part of an application a field is (contact, resume, links...),
+    read from its label where the page did not say."""
+    return _section(field)
 
 
 def _section(field: FormField) -> str:
@@ -191,12 +381,13 @@ def _section(field: FormField) -> str:
     if field.kind == "checkbox" and not field.options:
         if _CONSENT.search(field.label) or _MARKETING.search(field.label):
             return "consent"
-    if _EEO.search(field.label):
+    if _EEO.search(field.label) and not _ACCOMMODATION.search(field.label):
         return "eeo"
+    if field.kind == "checkbox" and not field.options:
+        # A lone box ("I have a preferred name") holds no contact detail.
+        return "questions"
     key = canonical_key(field)
-    if key in ("first_name", "last_name", "full_name", "preferred_name", "email", "phone"):
-        return "contact"
-    if key in ("location", "address", "country"):
+    if key in _CONTACT_KEYS:
         return "contact"
     if key in ("linkedin", "github", "website"):
         return "links"
@@ -276,6 +467,7 @@ class _Planner:
         self.plan = FillPlan()
         self.open: list[FormField] = []  # for the model, once, at the end
         self.used_links: set[str] = set()  # a link goes on the form once
+        self.agree_to_terms = False  # auto mode: a required terms box is agreed to
 
     # -- entry -----------------------------------------------------------
 
@@ -308,7 +500,7 @@ class _Planner:
                 required=field.required,
                 options=list(field.options),
                 reason=reason,
-                answer_key=answer_key_for(field),
+                answer_key=answer_key_for(field, self.packet.job),
             )
         )
 
@@ -324,6 +516,11 @@ class _Planner:
 
     def _apply_value(self, field: FormField, value: str, source: str) -> bool:
         """Put `value` on `field` in the shape the control takes. False if it does not fit."""
+        if field.kind == "select" and not field.options and _section(field) == "contact":
+            # A typeahead that lists places only once something is typed
+            # (LinkedIn's "Location (city)"): the fill types it and takes the hit.
+            self._fill(field, value, source)
+            return True
         if field.kind in ("select", "radio"):
             option = pick_option(value, field.options)
             if option is None:
@@ -342,6 +539,12 @@ class _Planner:
                 return False
             self._fill(field, flag, source)
             return True
+        if field.kind == "number":
+            # "$150,000" in the answer bank is 150000 in a number box.
+            number = re.sub(r"[^\d.]", "", value.split("-")[0]).rstrip(".")
+            if not number:
+                return False
+            value = number
         self._fill(field, value, source)
         return True
 
@@ -368,6 +571,14 @@ class _Planner:
         if section == "eeo":
             self._plan_eeo(field)
             return
+        if section == "experience":
+            banked = self._bank(question_key(field.label))
+            if banked is not None:
+                if not self._apply_value(field, banked, "answer_bank"):
+                    self._need(field, NO_OPTION)
+                return
+            self._plan_open(field)
+            return
         key = canonical_key(field)
         if section == "contact":
             self._plan_contact(field, key)
@@ -378,18 +589,40 @@ class _Planner:
         if section == "cover_letter":
             self._value_or_need(field, self.packet.cover_letter, "cover_letter", NOT_ON_FILE)
             return
-        # Questions. The answer bank first, by canonical key and by label.
-        banked = self._bank(*(k for k in (key, question_key(field.label)) if k))
+        # Questions. The answer bank first, by canonical key and by label;
+        # a commute question only by this job's own key.
+        keys = (key, question_key(field.label))
+        if key == "commute_ok":
+            keys = (commute_key(self.packet.job), None)
+        banked = self._bank(*(k for k in keys if k))
         if banked is not None:
             if not self._apply_value(field, banked, "answer_bank"):
                 self._need(field, NO_OPTION)
             return
-        if key in SENSITIVE:
+        if key in ("salary_currency", "salary_period"):
+            self._plan_salary_part(field, key)
+            return
+        if key in ("contact_time", "contact_method"):
+            self._plan_reach(field, key)
+            return
+        if (
+            key in SENSITIVE
+            or _ATTESTATION.search(field.label)
+            or _ACCOMMODATION.search(field.label)
+        ):
             self._need(field, NEVER_GUESSED)
             return
-        if key == "heard_about":
-            self._plan_heard_about(field)
+        if key in ("heard_about", "heard_about_source"):
+            self._plan_heard_about(field, which=key == "heard_about_source")
             return
+        body = letter_body(self.packet.cover_letter or "")
+        if field.kind == "textarea" and body and _WHY_US.search(field.label):
+            self._fill(field, body, "cover_letter")
+            return
+        self._plan_open(field)
+
+    def _plan_open(self, field: FormField) -> None:
+        """For the model to answer from the facts, else asked (required) or skipped."""
         if self.allow_model and self.completer is not None and field.kind in _ASKABLE:
             self.open.append(field)
             return
@@ -423,7 +656,20 @@ class _Planner:
         if _MARKETING.search(field.label) and not field.required:
             self._fill(field, False, "default")
             return
-        self._fill(field, True, "default")
+        # Agreeing to terms is the person's to say, once for every form.
+        blanket = self._bank(CONSENT_KEY)
+        if blanket is not None and _as_bool(blanket) is not None:
+            self._fill(field, _as_bool(blanket), "answer_bank")
+        elif field.required and self.agree_to_terms:
+            self._fill(field, True, "auto_mode")
+            self.plan.notes.append(
+                f"agreed to {field.label!r} because applications go all the way (auto mode); "
+                f"answer {CONSENT_KEY} No to stop agreeing to terms"
+            )
+        elif field.required:
+            self._need(field, NEVER_GUESSED)
+        else:
+            self._skip(field, "left unticked: agreeing to terms is yours to say once")
 
     def _plan_eeo(self, field: FormField) -> None:
         banked = self._bank(answer_key_for(field), question_key(field.label))
@@ -457,14 +703,41 @@ class _Planner:
             value = self._bank("preferred_name") or contact.get("first_name")
             value = value or _split_name(contact.get("full_name"))[0]
             source = "default"
-        elif key == "phone" and field.kind in ("select", "radio"):
+        elif key == "phone_country" or (key == "phone" and field.kind in ("select", "radio")):
             self._value_or_need(field, self._bank("phone_country"), "answer_bank", NOT_ON_FILE)
             return
         elif key in ("email", "phone", "location"):
             value = contact.get(key)
-        elif key in ("address", "country"):
+        elif key == "other_phone":
+            # A second number is only ever the one on file for it; a required
+            # one with none on file gets the main number.
+            value = self._bank("other_phone", "home_phone")
+            source = "answer_bank"
+            if value is None and not field.required:
+                self._skip(field, "no second phone number on file")
+                return
+            if value is None:
+                value, source = contact.get("phone"), "contact"
+        elif key in ("address", "address_line_2", "postal_code"):
             value = self._bank(key)
             source = "answer_bank"
+        elif key == "country":
+            # The answer bank, else the last part of "City, State, Country".
+            value = self._bank(key)
+            source = "answer_bank"
+            parts = [p.strip() for p in (contact.get("location") or "").split(",")]
+            if value is None and len(parts) >= 3 and parts[-1]:
+                value, source = parts[-1], "contact"
+        elif key in ("city", "state"):
+            # From the answer bank, else from the location on file when it
+            # reads "City, State, ...".
+            value = self._bank(key)
+            source = "answer_bank"
+            if value is None:
+                parts = [p.strip() for p in (contact.get("location") or "").split(",")]
+                index = 0 if key == "city" else 1
+                if len(parts) >= 2 and parts[index]:
+                    value, source = parts[index], "contact"
         if value is None and key:
             value = self._bank(key)
             source = "answer_bank"
@@ -497,15 +770,76 @@ class _Planner:
             self.used_links.add(value)
         self._value_or_need(field, value, "links", NOT_ON_FILE)
 
-    def _plan_heard_about(self, field: FormField) -> None:
-        if field.options:
-            for wanted in ("job board", "linkedin", "online", "internet", "other"):
-                option = pick_option(wanted, field.options)
+    def _plan_salary_part(self, field: FormField, key: str) -> None:
+        """The currency or the period of the salary on file: USD, and yearly
+        for an amount in the thousands, hourly below that, unless the answer
+        bank says otherwise (salary_currency, salary_period)."""
+        salary = self._bank("salary_expectation")
+        if key == "salary_currency":
+            wanted = [self._bank("salary_currency") or "USD", "US dollar", "$"]
+        else:
+            banked = self._bank("salary_period")
+            if banked:
+                wanted = [banked]
+            elif salary is None:
+                wanted = []
+            else:
+                amount = re.sub(r"[^\d.]", "", salary.split("-")[0]) or "0"
+                yearly = float(amount.rstrip(".") or 0) >= 1000
+                wanted = (
+                    ["annually", "annual", "yearly", "year", "yr", "per year", "salary"]
+                    if yearly
+                    else ["hourly", "hour", "hr", "per hour"]
+                )
+        if salary is None and not self._bank(key):
+            self._need(field, NEVER_GUESSED)
+            return
+        if not field.options:
+            self._fill(field, wanted[0], "answer_bank")
+            return
+        for want in wanted:
+            option = pick_option(want, field.options)
+            if option:
+                self._fill(field, option, "answer_bank")
+                return
+        self._need(field, NO_OPTION)
+
+    def _plan_reach(self, field: FormField, key: str) -> None:
+        """When and how a recruiter should get in touch: the answer bank, else
+        any time, by email."""
+        banked = self._bank(key)
+        wanted = [banked] if banked else []
+        wanted += ["anytime", "any time", "no preference"] if key == "contact_time" else ["email"]
+        for want in wanted:
+            if self._apply_value(field, want, "answer_bank" if want == banked else "default"):
+                return
+        if field.required:
+            self._need(field, NO_OPTION if field.options else NOT_ON_FILE)
+        else:
+            self._skip(field, "no option fits")
+
+    def _plan_heard_about(self, field: FormField, *, which: bool = False) -> None:
+        """How the person heard of the job: the board it was found on first
+        ("Indeed" in a Source list), then the kind of place that is. `which`
+        is the list asking which board, where only the board or Other fits."""
+        options = [o for o in field.options if not _NOT_AN_OPTION.search(o)]
+        board = str(self.packet.job.get("source") or "").strip().lower()
+        board = board if board in _BOARDS else ""
+        if options:
+            boards = [board] if board else []
+            kinds = ["other"] if which else ["job board", "linkedin", "online", "internet", "other"]
+            for wanted in (*boards, *kinds):
+                option = pick_option(wanted, options)
                 if option:
                     self._fill(field, option, "default")
                     return
         if field.kind in ("text", "textarea"):
-            self._fill(field, "Job board", "default")
+            self._fill(field, board.title() if which and board else "Job board", "default")
+            return
+        if field.kind == "select" and which and board:
+            # Its choices had not come when the form was read: the board by
+            # name, which the page's own list is matched against when filled.
+            self._fill(field, _BOARD_NAMES.get(board, board.title()), "default")
             return
         if field.required:
             self._need(field, NOT_ON_FILE)
@@ -548,6 +882,7 @@ class _Planner:
                 field = by_key.get(draft.key)
                 if field is None or field.key in settled:
                     continue
+                _take_stated_answer(draft, field)
                 problems = _check_draft(draft, field, facts, self.packet.never_claim, allow)
                 if problems:
                     objections[field.key] = problems
@@ -614,6 +949,28 @@ class DraftAnswers(BaseModel):
     answers: list[DraftAnswer] = Field(default_factory=list)
 
 
+_STATED = re.compile(r"^\W*(?:the\s+)?answer\s*(?:is|would\s+be|:)\s*[\"'“]?([^\"'”:;,.(]+)", re.I)
+
+
+def _take_stated_answer(draft: DraftAnswer, field: FormField) -> None:
+    """A choice drafted for a person that answers anyway ("The answer is Yes:
+    as Sr. Manager ... at GoTo ...") is taken as the option it names, and then
+    checked like any other: an option not on the list goes back to the model.
+    Free text marked for a person stays for a person."""
+    if not draft.needs_human:
+        return
+    stated = _STATED.match(draft.reason or "")
+    said = stated.group(1).strip() if stated else ""
+    if field.kind in ("select", "radio"):
+        if draft.option or said:
+            draft.option = draft.option or said
+            draft.needs_human = False
+    elif field.kind == "multiselect":
+        if draft.options or said:
+            draft.options = list(draft.options) or [said]
+            draft.needs_human = False
+
+
 def _check_draft(
     draft: DraftAnswer,
     field: FormField,
@@ -662,6 +1019,9 @@ _ANSWER_RULES = "\n".join(
         "- If the facts do not settle a question (anything about preferences, plans,",
         "  availability, eligibility, or anything you would have to invent), set",
         "  `needs_human` true and say why in `reason`. A blank is better than a guess.",
+        "- A question whether the candidate has some experience or skill, or has it on the",
+        "  resume, is settled by the facts when they show it: answer it (Yes) with",
+        "  `needs_human` false. Never put an answer only in `reason`.",
         "Return one entry per question key, in the same order.",
     ]
 )
@@ -709,17 +1069,34 @@ def plan_fills(
     *,
     completer: Completer | None = None,
     allow_model: bool = True,
+    agree_to_terms: bool = False,
 ) -> FillPlan:
-    """The plan for `fields`: what goes where, from which source, and what is missing."""
-    return _Planner(packet, completer, allow_model).run(list(fields))
+    """The plan for `fields`: what goes where, from which source, and what is missing.
+
+    `agree_to_terms` (auto mode, which the person chose so applications go all
+    the way) ticks a required terms box when `consent_terms` has no answer,
+    as source auto_mode with a note, instead of stopping to ask."""
+    planner = _Planner(packet, completer, allow_model)
+    planner.agree_to_terms = agree_to_terms
+    return planner.run(list(fields))
 
 
 def make_answerer(
-    packet: Packet, *, completer: Completer | None = None, allow_model: bool = True
+    packet: Packet,
+    *,
+    completer: Completer | None = None,
+    allow_model: bool = True,
+    agree_to_terms: bool = False,
 ) -> Answerer:
     """Bind the packet and the model, so a handler only ever passes the fields."""
 
     def answer(fields: list[FormField]) -> FillPlan:
-        return plan_fills(fields, packet, completer=completer, allow_model=allow_model)
+        return plan_fills(
+            fields,
+            packet,
+            completer=completer,
+            allow_model=allow_model,
+            agree_to_terms=agree_to_terms,
+        )
 
     return answer

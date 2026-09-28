@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # one: both watch for accounts that apply faster than a person would.
     easy_apply_daily_cap: int = 10
     apply_delay_seconds: float = 45.0  # between submissions, with jitter
+    # Where applications go, e.g. "linkedin,indeed": only jobs that apply on
+    # those sites' own forms. A job that sends the applicant to a company's
+    # site is set aside (skipped, with the reason), not tried. Empty: every site.
+    apply_sites: str = ""
     apply_model_answers: bool = True  # let the model draft answers from the fact base
     headless: bool = True
     browser_executable: str | None = None  # a Chromium binary, when Playwright's is absent
@@ -51,6 +55,19 @@ class Settings(BaseSettings):
     inbox_poll_limit: int = 200  # messages per poll
     inbox_model_triage: bool = True  # ask the model about replies the rules cannot read
     inbox_min_confidence: float = 0.6  # below this a reply moves no status
+
+    @property
+    def apply_site_list(self) -> tuple[str, ...]:
+        """`apply_sites` as names, lower case; empty when every site is allowed."""
+        names = (part.strip().lower() for part in self.apply_sites.split(","))
+        return tuple(dict.fromkeys(name for name in names if name))
+
+    @property
+    def board_apply_only(self) -> bool:
+        """Only LinkedIn's and Indeed's own forms: discovery then asks those
+        boards for jobs that apply there (Easy Apply, Indeed Apply)."""
+        sites = self.apply_site_list
+        return bool(sites) and set(sites) <= {"linkedin", "indeed"}
 
     @property
     def db_path(self) -> Path:

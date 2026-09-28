@@ -222,3 +222,125 @@ def test_a_next_that_does_nothing_stops_instead_of_looping(page, packet):
     assert result.outcome == "blocked"
     assert "did not move on" in result.error
     assert js(page, "__steps") == ["contact", "resume", "questions"]
+
+
+# ------------------------------------------------------ the 2026 layout --
+
+NEW = Path(__file__).parent / "fixtures" / "forms" / "linkedin_2026.html"
+
+
+def run_new(page, packet, *, submit=False, variant=""):
+    packet.job["url"] = NEW.as_uri() + (f"?variant={variant}" if variant else "")
+    packet.contact["location"] = "Menifee, California, United States"
+    answerer = make_answerer(packet, completer=None, allow_model=False)
+    return LinkedInHandler().apply(page, packet, answerer, submit=submit)
+
+
+@pytest.mark.usefixtures("page")
+def test_the_2026_window_is_walked_by_its_button_text_and_stops_at_submit(page, packet):
+    result = run_new(page, packet)
+    assert result.outcome == "dry_run", (result.error, result.needed)
+    assert js(page, "__steps") == ["contact", "resume", "questions", "review"]
+    assert js(page, "__submitted") is None
+    assert js(page, "__discarded") is True, "Dismiss, then Discard in the second window"
+    assert not any(f.selector in ("#search", "#alert") for f in result.fields), (
+        "the search box and the job-alert switch are not the application"
+    )
+
+
+@pytest.mark.usefixtures("page")
+def test_the_2026_window_is_sent_with_the_profile_answers_and_resume(page, packet):
+    result = run_new(page, packet, submit=True)
+    assert result.outcome == "submitted", (result.error, result.needed)
+    assert "application was sent to Stand8" in result.confirmation
+    sent = js(page, "__submitted")
+    assert sent["contact"]["first"] == "Mark" and sent["contact"]["email"] == "mark@example.com"
+    assert sent["contact"]["city"] == "Menifee, California, United States", "picked from the list"
+    assert sent["questions"] == {"auth": "Yes", "sponsor": "No", "mist": None}
+    assert sent["resume"] == "mark-shield.pdf", "through the Upload resume button"
+    assert {f.key: f.source for f in result.filled}["linkedin-resume-upload"] == "resume"
+
+
+@pytest.mark.usefixtures("page")
+def test_a_2026_question_nobody_answers_stops_before_submit(page, packet):
+    result = run_new(page, packet, submit=True, variant="needs_input")
+    assert result.outcome == "needs_input"
+    asked = [n for n in result.needed if n.required]
+    assert len(asked) == 1 and "Juniper Mist" in asked[0].label
+    assert js(page, "__submitted") is None and js(page, "__discarded") is True
+
+
+@pytest.mark.usefixtures("page")
+def test_a_2026_company_website_posting_reports_where_it_goes(page, packet):
+    result = run_new(page, packet, submit=True, variant="external")
+    assert result.outcome == "blocked" and "company's own site" in result.error
+    assert result.external_url == "https://careers.stand8.com/jobs/42"
+
+
+@pytest.mark.usefixtures("page")
+def test_a_review_that_shows_a_linkedin_id_for_an_answer_is_never_sent(page, packet):
+    result = run_new(page, packet, submit=True, variant="urnreview")
+    assert result.outcome == "blocked" and "urn:li:geo:103033862" in result.error
+    assert js(page, "__submitted") is None and js(page, "__discarded") is True
+
+
+# The Yes/No questions of the 2026 window (Luxoft's and Insight Global's, 2026-09-28).
+TEAM_LEAD = "q:do you have team lead or technical lead experience listed in your resume"
+CISCO = "q:do you have cisco load balancing f5 listed in your resume"
+
+
+@pytest.mark.usefixtures("page")
+def test_a_2026_yes_no_question_is_one_required_question_with_its_options(page, packet):
+    result = run_new(page, packet, submit=True, variant="radios")
+    assert result.outcome == "needs_input", result.error
+    asked = {n.label: n for n in result.needed if n.required}
+    assert set(asked) == {
+        "Do you have CISCO & Load Balancing (F5) listed in your resume?",
+        "Do you have Team Lead or Technical Lead experience listed in your resume?",
+    }
+    for question in asked.values():
+        assert question.options == ["Yes", "No"] and question.kind == "radio"
+    assert {n.answer_key for n in asked.values()} == {CISCO, TEAM_LEAD}
+    assert js(page, "__submitted") is None
+
+
+@pytest.mark.usefixtures("page")
+def test_a_2026_yes_no_question_answered_on_file_is_chosen_and_sent(page, packet):
+    packet.answers.update({CISCO: "Yes", TEAM_LEAD: "Yes"})
+    result = run_new(page, packet, submit=True, variant="radios")
+    assert result.outcome == "submitted", (result.error, result.needed)
+    sent = js(page, "__submitted")["questions"]
+    assert sent["_r_j_"] == "Yes" and sent["_r_m_"] == "Yes"
+
+
+@pytest.mark.usefixtures("page")
+def test_the_commute_question_is_asked_for_this_jobs_place_not_filled_from_home(page, packet):
+    packet.job["location"] = "Long Beach, CA"
+    packet.answers["commute_ok:menifee_ca"] = "Yes"  # another place's answer
+    result = run_new(page, packet, submit=True, variant="commute")
+    assert result.outcome == "needs_input", result.error
+    (asked,) = [n for n in result.needed if n.required]
+    assert asked.answer_key == "commute_ok:long_beach_ca" and asked.options == ["Yes", "No"]
+
+    packet.answers["commute_ok:long_beach_ca"] = "No"
+    result = run_new(page, packet, submit=True, variant="commute")
+    assert result.outcome == "submitted", (result.error, result.needed)
+    assert js(page, "__submitted")["questions"]["_r_c1_"] == "No"
+
+
+@pytest.mark.usefixtures("page")
+def test_a_question_the_form_will_not_leave_blank_is_asked_even_without_a_star(page, packet):
+    result = run_new(page, packet, submit=True, variant="unstarred")
+    assert result.outcome == "needs_input", result.error
+    labels = [n.label for n in result.needed if n.required]
+    assert labels == ["Do you have a valid driver's license?"]
+    assert js(page, "__submitted") is None and js(page, "__discarded") is True
+
+
+@pytest.mark.usefixtures("page")
+def test_a_resume_kept_on_linkedin_is_not_a_question_and_the_tailored_one_goes(page, packet):
+    result = run_new(page, packet, submit=True, variant="savedresume")
+    assert result.outcome == "submitted", (result.error, result.needed)
+    assert not any("d8763d2995d3d0ac" in (n.label + " ".join(n.options)) for n in result.needed)
+    assert not any("d8763d2995d3d0ac" in f.label for f in result.fields)
+    assert js(page, "__submitted")["resume"] == "mark-shield.pdf"

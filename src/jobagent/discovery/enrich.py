@@ -54,6 +54,10 @@ Set found=false and leave description empty if the page is not a job posting \
 or the description is not present in the text."""
 
 
+class RateLimited(Exception):
+    """The site answered 429 Too Many Requests: ask it nothing more this run."""
+
+
 class ExtractedPosting(BaseModel):
     description: str = Field(description="The description verbatim, or empty when not found.")
     found: bool = Field(description="False when the page is not a posting or has no description.")
@@ -66,11 +70,17 @@ def enrich_description(
     completer: Completer | None = None,
     min_chars: int = 400,
 ) -> str | None:
-    """The posting's description as plain text, or None when the page yields none."""
+    """The posting's description as plain text, or None when the page yields none.
+    Raises RateLimited when the site says too many requests."""
     own_client = client is None
     client = client or make_client()
     try:
         html = get_text(client, url)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429:
+            raise RateLimited(url) from exc
+        log.warning("enrich: could not fetch %s: %s", url, exc)
+        return None
     except httpx.HTTPError as exc:
         log.warning("enrich: could not fetch %s: %s", url, exc)
         return None

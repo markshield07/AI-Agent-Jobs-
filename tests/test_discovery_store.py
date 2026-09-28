@@ -505,3 +505,50 @@ def test_list_runs_is_newest_first_and_limited(conn):
     ids = [store.start_run(conn) for _ in range(3)]
     assert [r["id"] for r in store.list_runs(conn)] == list(reversed(ids))
     assert [r["id"] for r in store.list_runs(conn, limit=2)] == ids[:0:-1]
+
+
+def test_a_board_search_place_is_kept_and_reopens_a_not_remote_skip(conn):
+    url = "https://www.indeed.com/viewjob?jk=irvine"
+    [jid] = _insert(conn, _job(url=url, source="indeed", location="Irvine, CA"))
+    store.set_rule_score(conn, jid, 0, "not remote (Irvine, CA) and not in orange county")
+    store.set_status(conn, jid, "skipped")
+    other = "https://www.indeed.com/viewjob?jk=keyword"
+    [kid] = _insert(conn, _job(url=other, source="indeed", title="Other"))
+    store.set_rule_score(conn, kid, 0, "excluded keyword: clearance")
+    store.set_status(conn, kid, "skipped")
+
+    again = upsert_jobs(
+        conn,
+        [
+            _job(url=url, source="indeed", location="Irvine, CA", found_near="Orange County"),
+            _job(url=other, source="indeed", title="Other", found_near="Orange County"),
+        ],
+    )
+
+    assert again.duplicates == 2 and again.new_ids == []
+    job = store.get_job(conn, jid)
+    assert job["found_near"] == "Orange County"
+    assert job["status"] == "pending" and job["scored_at"] is None, "scored again next run"
+    assert store.get_job(conn, kid)["status"] == "skipped", "other reasons stand"
+
+
+def test_a_posting_seen_again_from_the_boards_apply_filter_applies_on_the_board(conn):
+    posting = "https://www.indeed.com/viewjob?jk=abc"
+    first = RawJob(
+        url=posting,
+        title="Network Engineer",
+        company="Allbridge",
+        source="indeed",
+        apply_url="https://careers.allbridge.com/1",
+    )
+    jid = store.upsert_jobs(conn, [first]).new_ids[0]
+    again = RawJob(
+        url=posting,
+        title="Network Engineer",
+        company="Allbridge",
+        source="indeed",
+        apply_url=posting,
+        applies_on_board=True,
+    )
+    store.upsert_jobs(conn, [again])
+    assert store.get_job(conn, jid)["apply_url"] == posting

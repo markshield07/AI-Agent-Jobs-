@@ -97,8 +97,10 @@ def ready_job(conn, tmp_path):
         letter=True,
         pdf=True,
         pdf_exists=True,
+        apply_url=None,
+        source="greenhouse",
     ) -> str:
-        raw = RawJob(url=url, title=title, company=company, source="greenhouse")
+        raw = RawJob(url=url, title=title, company=company, source=source, apply_url=apply_url)
         jid = jobs.upsert_jobs(conn, [raw]).new_ids[0]
         jobs.set_status(conn, jid, status)
         pdf_path = tmp_path / f"{jid}.pdf"
@@ -338,6 +340,88 @@ def test_a_company_site_posting_goes_on_to_that_sites_handler(conn, settings, re
     assert lever.calls[0]["packet"].job["apply_url"] == outward
     assert store.get_application(conn, record["application_id"])["ats"] == "lever"
     assert any(outward in note for note in record["notes"])
+
+
+def test_only_the_named_sites_a_linkedin_job_goes_to_linkedin_not_the_company_link(
+    conn, settings, ready_job
+):
+    settings.apply_sites = "linkedin, Indeed"
+    jid = ready_job(
+        "https://www.linkedin.com/jobs/view/1/",
+        apply_url="https://jobs.lever.co/acme/1",
+        source="linkedin",
+    )
+    linkedin = FakeHandler(ats="linkedin", hosts=("linkedin.com",))
+    lever = FakeHandler(ats="lever", hosts=("lever.co",))
+    record = apply_to_job(
+        conn,
+        jid,
+        settings,
+        handlers=[linkedin, lever],
+        completer=NeverCalled(),
+        browser=FakeBrowser(),
+    )
+    assert record["outcome"] == "dry_run" and record["handler"] == "linkedin"
+    assert not lever.calls
+
+
+def test_only_the_named_sites_a_posting_that_leaves_for_the_company_is_set_aside(
+    conn, settings, ready_job
+):
+    from jobagent.apply.pipeline import SET_ASIDE
+
+    settings.apply_sites = "linkedin,indeed"
+    jid = ready_job("https://www.linkedin.com/jobs/view/1/", source="linkedin")
+    linkedin = FakeHandler(
+        _result("blocked", error="company's own site", external_url="https://jobs.lever.co/a/1"),
+        ats="linkedin",
+        hosts=("linkedin.com",),
+    )
+    lever = FakeHandler(ats="lever", hosts=("lever.co",))
+    record = apply_to_job(
+        conn,
+        jid,
+        settings,
+        handlers=[linkedin, lever],
+        completer=NeverCalled(),
+        browser=FakeBrowser(),
+    )
+    assert record["outcome"] == "skipped" and record["reason"].startswith(SET_ASIDE)
+    assert not lever.calls, "the company's site is never opened"
+    job = jobs.get_job(conn, jid)
+    assert job["status"] == "skipped" and job["score_reason"].startswith(SET_ASIDE)
+    assert store.application_for_job(conn, jid) is None, "no application is left behind"
+
+
+def test_only_the_named_sites_a_company_board_job_is_set_aside_unopened(conn, settings, ready_job):
+    settings.apply_sites = "linkedin,indeed"
+    jid = ready_job()
+    handler = FakeHandler()
+    record = _apply(conn, jid, settings, handler)
+    assert record["outcome"] == "skipped" and "linkedin, indeed" in record["reason"]
+    assert not handler.calls
+
+
+def test_only_the_named_sites_on_site_postings_come_first():
+    from jobagent.apply.pipeline import in_apply_order
+
+    queued = [
+        {"id": "company", "url": "https://boards.greenhouse.io/a/jobs/1", "apply_url": None},
+        {
+            "id": "indeed-out",
+            "url": "https://www.indeed.com/viewjob?jk=abc",
+            "apply_url": "https://careers.example.com/1",
+        },
+        {"id": "linkedin", "url": "https://www.linkedin.com/jobs/view/9/", "apply_url": None},
+        {
+            "id": "indeed",
+            "url": "https://www.indeed.com/viewjob?jk=def",
+            "apply_url": "https://www.indeed.com/viewjob?jk=def",
+        },
+    ]
+    order = [j["id"] for j in in_apply_order(queued, ("linkedin", "indeed"))]
+    assert order == ["linkedin", "indeed", "indeed-out"]
+    assert [j["id"] for j in in_apply_order(queued, ())] == [j["id"] for j in queued]
 
 
 def test_a_company_site_with_no_handler_stays_blocked(conn, settings, ready_job):
@@ -721,3 +805,320 @@ def test_linkedin_and_indeed_each_have_their_own_lower_cap(conn, settings, ready
     assert store.submitted_last_day(conn, ats="linkedin") == 1
     assert store.submitted_last_day(conn, ats="indeed") == 1
     assert store.submitted_last_day(conn) == 2
+
+
+def test_a_linkedin_posting_that_sends_you_to_workday_gets_the_workday_handler():
+    from jobagent.apply.handlers import default_handlers
+    from jobagent.apply.pipeline import _company_site_handler
+
+    handlers = default_handlers()
+    linkedin = next(h for h in handlers if h.ats == "linkedin")
+    outward = (
+        "https://crowdstrike.wd5.myworkdayjobs.com/crowdstrikecareers/job/USA-Remote/Manager_R1"
+    )
+    onward = _company_site_handler(_result("blocked", external_url=outward), linkedin, handlers)
+    assert onward is not None and onward.ats == "workday"
+
+
+# ------------------------------------------------------- workday sign-in --
+
+WD_HOST = "acme.wd5.myworkdayjobs.com"
+WD_POSTING = f"https://{WD_HOST}/careers/job/Remote/Engineer_R1"
+
+
+def _workday_signed_in(settings):
+    from jobagent.apply import sessions
+
+    cookie = {"name": "PLAY_SESSION", "value": "x", "domain": WD_HOST, "path": "/", "expires": -1}
+    sessions.save_workday_session(settings, WD_HOST, {"cookies": [cookie]}, url=WD_POSTING)
+
+
+def test_a_workday_sign_in_page_parks_the_job_until_the_next_sign_in(conn, settings, ready_job):
+    from jobagent.apply import sessions
+
+    _workday_signed_in(settings)
+    first, second = ready_job(WD_POSTING), ready_job(f"https://{WD_HOST}/careers/job/Remote/B_R2")
+    workday = FakeHandler(
+        _result("blocked", error="not signed in", sign_in=WD_HOST), ats="workday", hosts=(WD_HOST,)
+    )
+    report = run_apply(
+        conn,
+        settings,
+        job_ids=[first, second],
+        handlers=[workday],
+        completer=NeverCalled(),
+        browser=FakeBrowser(),
+    )
+    # The first run meets the sign-in page; the second job does not open the site at all.
+    assert len(workday.calls) == 1
+    assert [r["outcome"] for r in report.results] == ["blocked", "skipped"]
+    assert report.results[1]["sign_in"] == WD_HOST
+    assert f"jobagent login workday {WD_POSTING}" in report.results[1]["reason"]
+    assert report.sign_ins == {WD_HOST: 2}
+    assert "needs sign-in: acme.wd5.myworkdayjobs.com (2 waiting)" in report.summary()
+    assert any("sign in again" in n and "2 application(s) wait" in n for n in report.notes)
+    status = sessions.workday_status(settings, WD_HOST)
+    assert status["state"] == "needs_sign_in"
+    assert sessions.workday_waiting(settings, WD_HOST) == [first, second]
+
+
+def test_a_workday_run_that_gets_into_the_form_proves_the_sign_in(conn, settings, ready_job):
+    from jobagent.apply import sessions
+
+    _workday_signed_in(settings)
+    jid = ready_job(WD_POSTING)
+    sessions.mark_workday_signed_out(settings, WD_HOST, job_id=jid)
+    _workday_signed_in(settings)  # signed in again
+    workday = FakeHandler(ats="workday", hosts=(WD_HOST,))
+    record = _apply(conn, jid, settings, workday)
+    assert record["outcome"] == "dry_run"
+    assert sessions.workday_status(settings, WD_HOST)["state"] == "signed_in"
+    assert sessions.workday_waiting(settings, WD_HOST) == []
+
+
+def test_a_linkedin_job_sent_to_a_lapsed_workday_waits_for_it(conn, settings, ready_job):
+    from jobagent.apply import sessions
+
+    jid = ready_job("https://www.linkedin.com/jobs/view/1/")
+    linkedin = FakeHandler(
+        _result("blocked", error="company's own site", external_url=WD_POSTING),
+        ats="linkedin",
+        hosts=("linkedin.com",),
+    )
+    workday = FakeHandler(ats="workday", hosts=(WD_HOST,))
+    record = apply_to_job(
+        conn,
+        jid,
+        settings,
+        handlers=[linkedin, workday],
+        completer=NeverCalled(),
+        browser=FakeBrowser(),
+    )
+    assert workday.calls == [], "never signed in there: the form is not opened"
+    assert record["outcome"] == "blocked" and record["sign_in"] == WD_HOST
+    assert sessions.workday_waiting(settings, WD_HOST) == [jid]
+
+
+# ------------------------------------------------------ the posting's place --
+
+
+class PlacedHandler(FakeHandler):
+    """A handler whose posting names a place, as the real ones read it."""
+
+    def __init__(self, *results, elsewhere=None, **kw):
+        super().__init__(*results, **kw)
+        self.elsewhere = elsewhere
+        self.checked: list[list[str]] = []
+
+    def wrong_place(self, page, wanted):
+        self.checked.append(list(wanted))
+        return self.elsewhere if wanted else None
+
+
+class PostingPage:
+    def __init__(self) -> None:
+        self.visited: list[str] = []
+
+    def goto(self, url, **kw):
+        self.visited.append(url)
+
+    def wait_for_load_state(self, *a, **kw):
+        pass
+
+    def wait_for_timeout(self, ms):
+        pass
+
+
+class PostingBrowser:
+    def __init__(self) -> None:
+        self.page = PostingPage()
+
+    @contextmanager
+    def new_page(self):
+        yield self.page
+
+
+def _wanted(conn, *places):
+    from jobagent.discovery.criteria import SearchCriteria, save_criteria
+
+    save_criteria(conn, SearchCriteria(titles=["Engineer"], locations=list(places)))
+
+
+def test_the_packet_carries_the_places_searched_for(conn, settings, ready_job):
+    _wanted(conn, "Remote", "Menifee, CA")
+    jid = ready_job()
+    variant = variants.latest_ready_variant(conn, jid)
+    packet = build_packet(conn, jobs.get_job(conn, jid), variant, settings)
+    assert packet.wanted_places == ["remote", "menifee, ca"]
+
+
+def test_a_posting_in_the_wrong_place_is_skipped_for_good(conn, settings, ready_job):
+    _wanted(conn, "Remote", "Menifee, CA")
+    jid = ready_job()
+    reason = "the posting itself puts the job in Lonoke, AR, not remote and not in menifee, ca"
+    handler = FakeHandler(_result("blocked", error=reason, wrong_place=reason))
+    record = _apply(conn, jid, settings, handler, mode="auto")
+    assert record["outcome"] == "skipped" and record["reason"] == reason
+    assert record["wrong_place"] is True
+    job = jobs.get_job(conn, jid)
+    assert job["status"] == "skipped" and job["score_reason"] == reason
+    # Nothing was tried, so nothing is left under Applications asking for attention.
+    assert store.application_for_job(conn, jid) is None
+    assert store.list_applications(conn) == []
+
+
+def test_a_job_parked_for_a_workday_sign_in_is_checked_before_asking(conn, settings, ready_job):
+    from jobagent.apply import sessions
+
+    _wanted(conn, "Remote", "Temecula, CA")
+    _workday_signed_in(settings)
+    jid = ready_job(WD_POSTING)
+    # An earlier run met the sign-in page and parked the job.
+    app_id = store.get_or_create_application(conn, jid, mode="auto", ats="workday")
+    store.record_attempt(
+        conn,
+        app_id,
+        _result("blocked", error="not signed in", sign_in=WD_HOST),
+        mode="auto",
+        handler="workday",
+        started_at="2026-09-28T06:00:00+00:00",
+    )
+    sessions.mark_workday_signed_out(settings, WD_HOST, job_id=jid, url=WD_POSTING)
+
+    browser = PostingBrowser()
+    workday = PlacedHandler(
+        ats="workday", hosts=(WD_HOST,), elsewhere="the posting itself puts the job in Lonoke, AR"
+    )
+    record = _apply(conn, jid, settings, workday, browser=browser, mode="auto")
+    assert record["outcome"] == "skipped" and "Lonoke, AR" in record["reason"]
+    assert "sign_in" not in record, "no sign-in is asked for a job in the wrong place"
+    assert browser.page.visited == [WD_POSTING] and workday.calls == []
+    assert sessions.workday_waiting(settings, WD_HOST) == []
+    assert jobs.get_job(conn, jid)["status"] == "skipped"
+    # Tried once already, so it stays on record, marked withdrawn with the reason.
+    app = store.get_application(conn, app_id)
+    assert app["status"] == "withdrawn"
+    assert "Lonoke, AR" in store.list_events(conn, app_id)[-1]["note"]
+
+
+def test_a_parked_job_in_a_wanted_place_still_waits_for_the_sign_in(conn, settings, ready_job):
+    from jobagent.apply import sessions
+
+    _wanted(conn, "Remote")
+    _workday_signed_in(settings)
+    jid = ready_job(WD_POSTING)
+    sessions.mark_workday_signed_out(settings, WD_HOST, job_id=jid, url=WD_POSTING)
+    workday = PlacedHandler(ats="workday", hosts=(WD_HOST,), elsewhere=None)
+    record = _apply(conn, jid, settings, workday, browser=PostingBrowser())
+    assert record["outcome"] == "skipped" and record["sign_in"] == WD_HOST
+    assert workday.checked == [["remote"]]
+    assert sessions.workday_waiting(settings, WD_HOST) == [jid]
+
+
+def test_a_queued_job_whose_description_says_onsite_is_skipped_before_any_browser(
+    conn, settings, ready_job
+):
+    _wanted(conn, "Remote")
+    jid = ready_job()
+    # Indeed called it remote; the description says otherwise.
+    conn.execute(
+        "UPDATE jobs SET remote = 1, location = 'Norfolk, VA', description = ? WHERE id = ?",
+        ("The Lead Network Engineer will work onsite at Naval Station Norfolk.", jid),
+    )
+    conn.commit()
+    handler = FakeHandler(_result("dry_run"))
+    record = _apply(conn, jid, settings, handler, mode="auto")
+    assert record["outcome"] == "skipped" and record["wrong_place"] is True
+    assert 'the description says "onsite at Naval Station Norfolk"' in record["reason"]
+    assert handler.calls == [], "no browser, no form"
+    assert jobs.get_job(conn, jid)["status"] == "skipped"
+
+
+def test_a_queued_job_in_a_wanted_place_still_goes_ahead(conn, settings, ready_job):
+    _wanted(conn, "Remote", "Norfolk, VA")
+    jid = ready_job()
+    conn.execute(
+        "UPDATE jobs SET location = 'Norfolk, VA', description = ? WHERE id = ?",
+        ("The Lead Network Engineer will work onsite at Naval Station Norfolk.", jid),
+    )
+    conn.commit()
+    handler = FakeHandler(_result("dry_run"))
+    record = _apply(conn, jid, settings, handler)
+    assert record["outcome"] == "dry_run" and len(handler.calls) == 1
+
+
+def test_the_listing_place_a_board_found_near_a_wanted_place_is_wanted_too(conn, ready_job):
+    from jobagent.apply.pipeline import wanted_places
+
+    _wanted(conn, "Remote", "Orange County")
+    jid = ready_job()
+    conn.execute(
+        "UPDATE jobs SET location = 'Irvine, CA', found_near = 'Orange County' WHERE id = ?",
+        (jid,),
+    )
+    conn.commit()
+    job = jobs.get_job(conn, jid)
+    assert wanted_places(conn, job) == ["remote", "orange county", "irvine, ca"]
+    assert wanted_places(conn) == ["remote", "orange county"]
+    _wanted(conn, "Remote")
+    assert wanted_places(conn, job) == ["remote"], "only while that place is still wanted"
+
+
+def test_a_careers_page_that_leads_to_workday_goes_to_the_workday_handler():
+    from jobagent.apply.handlers import default_handlers
+    from jobagent.apply.models import HandlerResult
+    from jobagent.apply.pipeline import _company_site_handler
+
+    handlers = default_handlers()
+    generic = next(h for h in handlers if h.ats == "generic")
+    to_workday = HandlerResult(
+        outcome="blocked",
+        error="the company's Apply leads to its workday site",
+        external_url="https://acme.wd5.myworkdayjobs.com/en-US/careers/job/Remote/Engineer_R1",
+    )
+    assert _company_site_handler(to_workday, generic, handlers).ats == "workday"
+    elsewhere = HandlerResult(
+        outcome="blocked", error="x", external_url="https://careers.example.com/1"
+    )
+    assert _company_site_handler(elsewhere, generic, handlers) is None, "never back to itself"
+    linkedin = next(h for h in handlers if h.ats == "linkedin")
+    assert _company_site_handler(elsewhere, linkedin, handlers).ats == "generic"
+    via_indeed = HandlerResult(
+        outcome="blocked", error="x", external_url="https://www.indeed.com/viewjob?jk=1"
+    )
+    assert _company_site_handler(via_indeed, generic, handlers).ats == "indeed"
+    assert _company_site_handler(via_indeed, linkedin, handlers).ats == "generic"
+
+
+def test_a_queued_job_todays_rules_turn_away_is_skipped_before_any_browser(
+    conn, settings, ready_job
+):
+    from jobagent.discovery.criteria import SearchCriteria, save_criteria
+
+    save_criteria(
+        conn, SearchCriteria(titles=["Engineer"], locations=[], exclude_keywords=["TS/SCI"])
+    )
+    jid = ready_job()
+    conn.execute(
+        "UPDATE jobs SET description = 'Active TS/SCI clearance required.' WHERE id = ?", (jid,)
+    )
+    conn.commit()
+    handler = FakeHandler(_result("dry_run"))
+    record = _apply(conn, jid, settings, handler, mode="auto")
+    assert record["outcome"] == "skipped" and "excluded keyword: TS/SCI" in record["reason"]
+    assert handler.calls == []
+
+
+def test_a_queued_job_whose_application_deadline_has_passed_is_skipped(conn, settings, ready_job):
+    jid = ready_job()
+    conn.execute(
+        "UPDATE jobs SET description = 'U.S. Citizenship is required. Application Deadline: "
+        "9/27/2020' WHERE id = ?",
+        (jid,),
+    )
+    conn.commit()
+    handler = FakeHandler(_result("dry_run"))
+    record = _apply(conn, jid, settings, handler, mode="auto")
+    assert record["outcome"] == "skipped" and record["wrong_place"] is True
+    assert "application deadline (2020-09-27) has passed" in record["reason"]
+    assert handler.calls == []

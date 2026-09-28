@@ -2,7 +2,8 @@
 
 Adapted from AutoApply's filter module. Four hard disqualifiers (an excluded
 keyword, a blacklisted company, a stated salary under the floor, an on-site or
-hybrid posting when Remote is the only location wanted) zero a posting
+hybrid posting, by its flag, title, location or own description, outside the
+places wanted) zero a posting
 outright. Everything else is the sum of four components, title, salary,
 location and keywords, each scoring in the middle when the criteria leave it
 unconstrained, so an empty setting never drags every posting under the
@@ -30,6 +31,48 @@ _WORD = re.compile(r"[a-z0-9+#.]+")
 # A posting that names one of these in its title or location wants people in
 # an office, whatever the board's remote flag says.
 _IN_OFFICE = ("hybrid", "on-site", "onsite", "in-office", "in office")
+
+# The same, said in a posting's description. A board's remote flag can be
+# wrong (Indeed's "Remote" on a job "onsite at Naval Station Norfolk"), so a
+# plain statement that the job itself is on-site or hybrid outweighs it.
+# Occasional visits, travel and "not onsite" do not count.
+_ONSITE = r"(?:on-?site|on\s+site|in-office|in\s+office|in-person|in\s+person)"
+_OFFICE_SAYS = [
+    re.compile(p, re.I)
+    for p in (
+        rf"\b(?:this|the)\s+(?:position|role|job|opportunity)\s+(?:is|will\s+be)\s+"
+        rf"(?:an?\s+)?(?:100%\s+|fully\s+|full[- ]time\s+)?(?:{_ONSITE}|hybrid)\b",
+        rf"\b(?:100%|fully|entirely|full[- ]time)\s+{_ONSITE}\b",
+        rf"\b(?:must|required\s+to|expected\s+to|will\s+need\s+to)\s+(?:work|be|report)\s+"
+        rf"(?:{_ONSITE}|in\s+(?:the|our)\s+office|to\s+(?:the|our)\s+office)\b",
+        rf"\b(?:work(?:place)?[- ]?(?:type|arrangement|model|setting|location)|location\s+type"
+        rf"|work\s+mode)\s*:\s*(?:{_ONSITE}|hybrid)\b",
+        r"\bhybrid\s+(?:role|position|schedule|work(?:ing)?|model|arrangement|opportunity)\b",
+        rf"\b\d\s+days?\s+(?:a|per|each)\s+week\s+(?:{_ONSITE}|in\s+(?:the|our)\s+office)\b",
+        rf"\b\d\s+days?\s+(?:{_ONSITE}|in\s+(?:the|our)\s+office)\b",
+    )
+]
+# "onsite at Naval Station Norfolk": on-site at a named place (capitalised).
+_ONSITE_AT = re.compile(
+    rf"(?i:\b{_ONSITE}\s+(?:at|in))\s+(?:(?:the|our|its)\s+)?[A-Z][\w.'&-]*"
+    r"(?:\s+[A-Z][\w.'&-]*)*"
+)
+# Words in the same sentence that make on-site an occasional thing.
+_NOW_AND_THEN = re.compile(
+    r"\b(?:occasional(?:ly)?|as\s+needed|when\s+(?:needed|required)|if\s+needed|periodic(?:ally)?"
+    r"|travel|visits?|up\s+to\s+\d+\s*%|quarterly|monthly|annual(?:ly)?|some)\b",
+    re.I,
+)
+_NEGATED = re.compile(r"\b(?:not|no|non|never)\b[\s-]*(?:an?\s+|be\s+|required\s+)?$", re.I)
+# The description's own plain word that the job is remote.
+SAYS_REMOTE = re.compile(
+    r"\b(?:fully|100%|completely|entirely) remote\b"
+    r"|\bremote[- ](?:position|role|opportunity|job|first)\b"
+    r"|\b(?:work|working) (?:from home|remotely)\b"
+    r"|\bthis (?:is a|position is|role is) remote\b",
+    re.I,
+)
+NOT_REMOTE = re.compile(r"\bnot (?:a )?remote\b|\bno remote\b|\bnon-remote\b", re.I)
 
 
 @dataclass(slots=True)
@@ -97,18 +140,57 @@ def _disqualify(job: Mapping[str, Any], criteria: SearchCriteria, haystack: str)
 
 
 def _not_remote(job: Mapping[str, Any], title: str, criteria: SearchCriteria) -> str | None:
-    """A reason to drop a posting that is not remote when Remote is the only
-    location wanted: the board marks it on-site, or its title or location says
-    hybrid or on-site. A posting that leaves the question open stays in."""
+    """A reason to drop a posting that plainly wants someone in an office the
+    person did not ask for: the board marks it on-site, or its title or
+    location says hybrid or on-site, and its location is none of the places
+    wanted. Remote postings, postings in a wanted place, and postings that
+    leave the question open stay in. With no locations set, nothing is
+    dropped here."""
     wanted = criteria.normalised(criteria.locations)
-    if not wanted or any(want != "remote" for want in wanted):
+    if not wanted:
         return None
     if _is_remote(job, title):
         return None
     flag = job.get("remote")
     have = _text(job, "location").strip()
-    if flag is False or flag == 0 or _in_office(title) or _in_office(have):
-        return f"not remote ({have or 'on-site'}); only Remote is wanted"
+    said = office_in_description(_text(job, "description"))
+    if not (flag is False or flag == 0 or _in_office(title) or _in_office(have) or said):
+        return None
+    lower = have.lower()
+    have_words = set(_words(lower))
+    places = [want for want in wanted if want != "remote"]
+    if any(_location_matches(want, lower, have_words) for want in places):
+        return None
+    if _found_near_wanted(job, places):
+        return None
+    if said and any(_location_matches(want, said.lower(), set(_words(said))) for want in places):
+        return None
+    where = f'the description says "{said}"' if said and not _in_office(have) else have
+    if not places:
+        return f"not remote ({where or 'on-site'}); only Remote is wanted"
+    return f"not remote ({where or 'on-site'}) and not in {', '.join(places)}"
+
+
+def not_remote(job: Mapping[str, Any], criteria: SearchCriteria) -> str | None:
+    """Why this posting wants someone in an office the person did not ask
+    for, or None; the same test scoring applies, for a job queued before."""
+    return _not_remote(job, _text(job, "title"), criteria)
+
+
+def office_in_description(text: str) -> str | None:
+    """The words in a description saying the job itself is on-site or hybrid,
+    or None. A description that also says plainly it is remote says nothing
+    definite, and occasional visits or travel are not an office job."""
+    if not text or (SAYS_REMOTE.search(text) and not NOT_REMOTE.search(text)):
+        return None
+    for sentence in re.split(r"(?<=[.!?;])\s+|\n+", text):
+        for pattern in (*_OFFICE_SAYS, _ONSITE_AT):
+            for match in pattern.finditer(sentence):
+                if _NEGATED.search(sentence[: match.start()]):
+                    continue
+                if _NOW_AND_THEN.search(sentence):
+                    continue
+                return re.sub(r"\s+", " ", match.group(0)).strip().rstrip(".,;:")
     return None
 
 
@@ -155,12 +237,26 @@ def _score_location(job: Mapping[str, Any], title: str, criteria: SearchCriteria
         # it must never match a posting by its text.
         if want != "remote" and _location_matches(want, have, have_words):
             return 20
+    if _found_near_wanted(job, [w for w in wanted if w != "remote"]):
+        return 20
     return 8 if not have else 0
+
+
+def _found_near_wanted(job: Mapping[str, Any], places: list[str]) -> bool:
+    """A board's search around a wanted place found it: "Irvine, CA" from a
+    search for Orange County is near enough, as the board's radius says."""
+    near = _text(job, "found_near").strip().lower()
+    if not near:
+        return False
+    near_words = set(_words(near))
+    return any(_location_matches(want, near, near_words) for want in places)
 
 
 def _is_remote(job: Mapping[str, Any], title: str) -> bool:
     have = _text(job, "location").lower()
     if _in_office(title) or _in_office(have):
+        return False
+    if office_in_description(_text(job, "description")):
         return False
     return _flag(job.get("remote")) or _contains(have, "remote") or _contains(title, "remote")
 
@@ -168,6 +264,12 @@ def _is_remote(job: Mapping[str, Any], title: str) -> bool:
 def _in_office(text: str) -> bool:
     lower = text.lower()
     return any(term in lower for term in _IN_OFFICE)
+
+
+def place_matches(want: str, have: str) -> bool:
+    """Whether the wanted place (lower case) names the location `have`."""
+    lower = have.lower()
+    return _location_matches(want, lower, set(_words(lower)))
 
 
 def _location_matches(want: str, have: str, have_words: set[str]) -> bool:

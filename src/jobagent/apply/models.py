@@ -30,8 +30,19 @@ FieldKind = Literal[
     "file",
     "unknown",
 ]
+# "experience": a field of one entry in the work history a form asks for
+# (Workday's My Experience), answered from that role, never from the contact
+# details.
 Section = Literal[
-    "contact", "resume", "cover_letter", "links", "questions", "eeo", "consent", "other"
+    "contact",
+    "resume",
+    "cover_letter",
+    "links",
+    "questions",
+    "eeo",
+    "consent",
+    "experience",
+    "other",
 ]
 Mode = Literal["dry_run", "review", "auto"]
 Outcome = Literal[
@@ -47,6 +58,7 @@ FillSource = Literal[
     "default",
     "skip",
     "prefilled",  # the site filled it from the signed-in account; left as it was
+    "auto_mode",  # agreed to a required terms box because the person chose auto mode
 ]
 
 MODES: tuple[str, ...] = ("dry_run", "review", "auto")
@@ -150,6 +162,9 @@ class Packet:
     facts: list[Any] = field(default_factory=list)  # active Facts: all a model answer may use
     never_claim: list[str] = field(default_factory=list)
     variant_id: int | None = None
+    # The locations searched for; a posting whose own page puts it elsewhere,
+    # and not remote, is skipped. Empty means no check.
+    wanted_places: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -169,6 +184,12 @@ class HandlerResult:
     # Set by a site handler (LinkedIn, Indeed) when the posting applies on the
     # company's own site: where that application is, for another handler.
     external_url: str | None = None
+    # Set when the run stopped at a sign-in page: the site to sign in to again
+    # (linkedin, indeed, or a company's Workday host).
+    sign_in: str | None = None
+    # Set when the posting's own location is outside the places wanted: the
+    # reason, and the job is skipped rather than tried again.
+    wrong_place: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
 

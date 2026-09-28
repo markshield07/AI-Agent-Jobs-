@@ -85,8 +85,8 @@ def upsert_jobs(
                 """INSERT OR IGNORE INTO jobs
                        (id, url, title, company, source, location, description, ats_type,
                         apply_url, salary_min, salary_max, posted_at, remote, external_id,
-                        status, run_id, scraped_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+                        found_near, status, run_id, scraped_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
                 (
                     jid,
                     url,
@@ -102,6 +102,7 @@ def upsert_jobs(
                     job.posted_at,
                     _remote_flag(job.remote),
                     job.external_id,
+                    job.found_near,
                     run_id,
                     now,
                 ),
@@ -110,7 +111,30 @@ def upsert_jobs(
                 result.new_ids.append(jid)
             else:
                 result.duplicates += 1
+                if job.found_near:
+                    _vouch(conn, jid, job.found_near)
+                if job.applies_on_board:
+                    # Stored before from a search that took the company link as
+                    # where it applies; not yet tried, it applies on the board.
+                    conn.execute(
+                        """UPDATE jobs SET apply_url = ?, ats_type = ?
+                           WHERE id = ? AND status IN ('pending', 'queued')""",
+                        (job.apply_url, job.ats_type or detect_ats(job.apply_url or url), jid),
+                    )
     return result
+
+
+def _vouch(conn: sqlite3.Connection, jid: str, near: str) -> None:
+    """A posting seen before, now found by a search around `near`: keep the
+    place, and give one the rules turned away as not remote another pass."""
+    conn.execute("UPDATE jobs SET found_near = ? WHERE id = ? AND found_near IS NULL", (near, jid))
+    conn.execute(
+        """UPDATE jobs SET status = 'pending', scored_at = NULL, score = NULL,
+                           score_reason = NULL
+           WHERE id = ? AND status = 'skipped' AND classified_at IS NULL
+             AND score_reason LIKE 'not remote (%'""",
+        (jid,),
+    )
 
 
 def _remote_flag(value: bool | None) -> int | None:

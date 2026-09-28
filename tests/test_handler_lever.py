@@ -58,6 +58,7 @@ def packet(tmp_path) -> Packet:
             "website": "https://markshield.dev",
         },
         answers={
+            "consent_terms": "Yes",
             "work_authorization": "Yes",
             "visa_sponsorship": "No",
             "current_company": "Northwind Robotics",
@@ -106,6 +107,16 @@ def test_the_handler_claims_lever_urls_and_no_others():
 
 
 # --------------------------------------------------------------- dry run --
+
+
+def test_the_privacy_box_waits_for_the_persons_own_yes(page, packet):
+    del packet.answers["consent_terms"]
+    result = run(page, packet)
+    assert result.outcome == "needs_input"
+    asked = [n for n in result.needed if n.required]
+    assert [n.answer_key for n in asked] == ["consent_terms"]
+    assert not page.is_checked("#consent-privacy")
+    assert submitted(page) is None
 
 
 def test_a_dry_run_fills_the_form_and_leaves_it_unsent(page, packet, tmp_path):

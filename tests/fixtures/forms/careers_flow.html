@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Northwind Careers</title>
+<!--
+  A company careers site where the form is some presses from the posting, the way the
+  live failures were (Phenom, Paycor, ADP): a talent-community email box and an
+  "Apply with LinkedIn" button beside the real Apply, and a sign-in that may offer to
+  apply as a guest. Pages, chosen with ?step=...: posting (default), choice, login, form,
+  phenom, signup.
+
+  Variants on the posting, with ?variant=...:
+    link    Apply Now is a link to the form page
+    newtab  "Apply for this job" opens the form in a new tab
+    choice  Apply leads to a choice: LinkedIn, Indeed, or Apply manually
+    guest   Apply leads to a sign-in that offers "Continue as guest"
+    wall    Apply leads to a sign-in with no way round it
+    reveal  "Apply" shows the form further down the same page
+    consent Apply opens a privacy notice in a dialog; "Consent & Continue" shows the form
+    filter  a search filter's own "Apply" button comes before the job's Apply Now
+    onetrust a OneTrust preference centre covers the page and takes every click
+    indeedapply  no Apply at all; the page only preloads Indeed Apply
+    phenom  Apply Now leads to a Phenom-style step 1: an Apply-with-LinkedIn widget's hidden
+            file box, the resume behind an "Upload Resume" button, the fields in a form of
+            their own, and Next. The upload shows a spinner while the page "reads" the
+            resume, which empties Last Name; then the file name. "How did you hear" = Job
+            Board brings up a required Source whose choices come 1.2s later, and never if
+            another answer is given in between; Division comes already chosen.
+            Next leads to My Experience (a link, a voluntary question), then Review and Submit.
+    phenomsilent  the same, but the page never shows the uploaded file's name
+    phenomstuck   the same, but Next never goes on and shows an error
+    phenomwork    the same, but My Experience is Serco's: two jobs the page read from the
+            resume, each with Title and Company filled, Location filled with the home town,
+            From and To empty behind a react-datepicker calendar (year and month lists and
+            a day grid), and "I currently work here"
+    signup  Apply Now leads to ADP's guest step: name, email and mobile, and a notice
+            about a verification process
+    community  Apply Now leads to a "Join our talent community" form and nothing else
+    closed  the posting says its application deadline has passed
+-->
+<style>
+  body { font-family: sans-serif; margin: 0; }
+  .wrap { max-width: 700px; margin: 0 auto; padding: 20px; }
+  .hidden { display: none; }
+  label { display: block; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav><a href="#">Home</a> <a href="#">Search jobs</a> <a href="#" id="nav-signin">Sign In</a></nav>
+  <main id="main"></main>
+</div>
+<script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  var step = params.get('step') || 'posting';
+  var variant = params.get('variant') || 'link';
+  var main = document.getElementById('main');
+  var here = location.pathname.split('/').pop();
+  var go = function (s) { return here + '?step=' + s + '&variant=' + variant; };
+  window.__opened = window.__opened || [];
+
+  var form = '' +
+    '<h2>Apply: Network Operations Manager</h2>' +
+    '<form id="application">' +
+    '<label for="fname">First name</label><input id="fname" name="first_name" required>' +
+    '<label for="lname">Last name</label><input id="lname" name="last_name" required>' +
+    '<label for="mail">Email</label><input id="mail" type="email" name="email" required>' +
+    '<label for="tel">Phone</label><input id="tel" type="tel" name="phone">' +
+    '<label for="resume">Resume</label><input id="resume" type="file" name="resume" required>' +
+    '<button type="submit">Submit application</button>' +
+    '</form><div id="thanks" class="hidden"><h2>Thank you for applying</h2></div>';
+
+  var community = '' +
+    '<aside><h3>Join our talent community</h3>' +
+    '<form id="community"><label for="alert-email">Email</label>' +
+    '<input id="alert-email" type="email" name="alert_email">' +
+    '<button type="submit">Subscribe</button></form></aside>';
+
+  if (step === 'posting') {
+    var apply;
+    if (variant === 'newtab') {
+      apply = '<button type="button" id="apply" onclick="window.open(\'' + go('form') + '\')">Apply for this job</button>';
+    } else if (variant === 'consent') {
+      apply = '<button type="button" id="apply">Apply</button>' +
+        '<div id="jdv_privacy_dailog" class="hidden"><p>Certain jurisdictions require notice of ' +
+        'how we use your personal information.</p><button type="button" id="decline">Decline &amp; Close</button>' +
+        '<button type="button" id="consent">Consent &amp; Continue</button>' +
+        '<div id="inline" class="hidden">' + form + '</div></div>';
+    } else if (variant === 'filter') {
+      apply = '<div id="filters"><label for="dept">Department</label><select id="dept"><option>All</option></select>' +
+        '<button type="button" id="filter-apply" onclick="window.__filtered = true">Apply</button></div>' +
+        '<a id="apply" href="' + go('form') + '">Apply Now</a>';
+    } else if (variant === 'indeedapply') {
+      apply = '<iframe id="SA_PRELOAD" src="about:blank?smartapply.indeed.com/beta/indeedapply" hidden></iframe>';
+    } else if (variant === 'onetrust') {
+      apply = '<button type="button" id="apply">Apply</button><div id="inline" class="hidden">' + form + '</div>' +
+        '<div id="onetrust-consent-sdk"><div class="onetrust-pc-dark-filter" ' +
+        'style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000"></div></div>';
+    } else if (variant === 'reveal') {
+      apply = '<button type="button" id="apply">Apply</button><div id="inline" class="hidden">' + form + '</div>';
+    } else {
+      var to = { link: 'form', choice: 'choice', guest: 'login', wall: 'login', phenom: 'phenom',
+        phenomsilent: 'phenom', phenomstuck: 'phenom', phenomwork: 'phenom', signup: 'signup', community: 'signup', closed: 'form' }[variant] || 'form';
+      apply = '<a id="apply" href="' + go(to) + '">Apply Now</a>';
+    }
+    var deadline = variant === 'closed' ? '<p>Application Deadline: 9/27/2020</p>' : '';
+    main.innerHTML = '<h1>Network Operations Manager</h1><p>Lead our NOC.</p>' + deadline +
+      '<button type="button" id="apply-linkedin" onclick="window.__opened.push(\'linkedin\')">Apply with LinkedIn</button> ' +
+      '<a href="#" id="share">Share this job</a> ' + apply + community;
+    if (variant === 'reveal' || variant === 'onetrust') {
+      document.getElementById('apply').addEventListener('click', function () {
+        document.getElementById('inline').classList.remove('hidden');
+      });
+    }
+    if (variant === 'consent') {
+      document.getElementById('apply').addEventListener('click', function () {
+        document.getElementById('jdv_privacy_dailog').classList.remove('hidden');
+      });
+      document.getElementById('consent').addEventListener('click', function () {
+        window.__consented = true;
+        document.getElementById('inline').classList.remove('hidden');
+      });
+    }
+  } else if (step === 'phenom') {
+    main.innerHTML = '<div class="awli"><input type="file" name="api_key: undefined extensions:AwliWidget@https://www.linkedin.com/apply-with-linkedin-widget-v3" style="opacity:0;position:absolute;width:1px;height:1px"></div>' +
+      '<div class="resume-upload-wrapper"><input type="file" id="hidden-resume" style="display:none">' +
+      '<button type="button" class="upload-resume-btn" id="upload-btn">Upload Resume</button><span id="resume-name"></span></div>' +
+      '<form class="rjsf" id="phenom-form"><fieldset><legend>Application Form</legend>' +
+      '<label for="firstName">First Name</label><input id="firstName">' +
+      '<label for="lastName">Last Name</label><input id="lastName">' +
+      '<label for="email">Email</label><input id="email" type="email">' +
+      '<label for="phoneNumber">Mobile Phone</label><input id="phoneNumber" type="tel">' +
+      '<label for="homePhone">Home Phone</label><input id="homePhone" type="tel">' +
+      '<label for="division">Division*</label><select id="division" required><option value="">Please Select</option>' +
+      '<option value="n" selected>Networks</option><option value="s">Security</option></select>' +
+      '<label for="sourceType">How did you hear about this opportunity?*</label>' +
+      '<select id="sourceType" required><option value="">Please Select</option><option>Company Website</option>' +
+      '<option>Job Board</option></select><div id="source-box"></div>' +
+      '<label for="cust_Preferred">Preferred Contact Method*</label><select id="cust_Preferred" required>' +
+      '<option value="">Please Select</option><option>Cell Phone</option><option>Email</option></select>' +
+      '</fieldset><button type="button" id="next">Next</button></form>' +
+      '<div id="spinner" class="spinner hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.3)"></div>';
+    var hidden = document.getElementById('hidden-resume');
+    document.getElementById('upload-btn').addEventListener('click', function () { hidden.click(); });
+    hidden.addEventListener('change', function () {
+      var spinner = document.getElementById('spinner');
+      spinner.classList.remove('hidden');
+      setTimeout(function () {
+        window.__resume = hidden.files[0] && hidden.files[0].name;
+        document.getElementById('lastName').value = '';
+        if (variant !== 'phenomsilent') document.getElementById('resume-name').textContent = window.__resume || '';
+        spinner.classList.add('hidden');
+      }, 700);
+    });
+    // As on Serco in the agent's own run: an answer given while Source is still
+    // loading leaves it with no choices, until "How did you hear" is chosen again.
+    document.getElementById('cust_Preferred').addEventListener('change', function () {
+      clearTimeout(window.__sourceLoad);
+    });
+    document.getElementById('sourceType').addEventListener('change', function (e) {
+      var box = document.getElementById('source-box');
+      // Like Serco's: the list shows at once and its choices arrive a moment later.
+      box.innerHTML = e.target.value === 'Job Board' ? '<label for="source">Source*</label>' +
+        '<select id="source" required><option value="-1">Loading...</option></select>' : '';
+      clearTimeout(window.__sourceLoad);
+      if (e.target.value === 'Job Board') window.__sourceLoad = setTimeout(function () {
+        document.getElementById('source').innerHTML = '<option value="">Please Select</option>' +
+          '<option value="45028">Indeed</option><option value="45030">LinkedIn</option>' +
+          '<option value="45033">Other Site</option>';
+      }, 1200);
+    });
+    // Next: page 2 (My Experience: a link and a voluntary question), then a
+    // Review page whose Submit sends it. Page 1's answers are kept for the test.
+    // phenomstuck: Next never goes on and says why.
+    document.getElementById('next').addEventListener('click', function () {
+      var val = function (id) { var el = document.getElementById(id); return el ? el.value : null; };
+      var text = function (id) { var el = document.getElementById(id); return el && el.selectedIndex >= 0 ? el.options[el.selectedIndex].text : null; };
+      if (variant === 'phenomstuck' || !val('firstName') || !val('source') || val('source') === '-1') {
+        document.getElementById('phenom-form').insertAdjacentHTML('beforeend',
+          '<div class="error" role="alert">Please enter a valid postal code.</div>');
+        return;
+      }
+      window.__page1 = { firstName: val('firstName'), lastName: val('lastName'), homePhone: val('homePhone'),
+        source: text('source'), division: text('division'), resume: window.__resume };
+      var work = '';
+      if (variant === 'phenomwork') {
+        var entry = function (n, title, company) {
+          var id = function (part) { return 'experienceData[' + n + '].' + part; };
+          var date = function (part, label, required) {
+            return '<div class="field"><label for="' + id(part) + '">' + label + '</label>' +
+              '<div class="react-datepicker-wrapper"><div class="react-datepicker__input-container">' +
+              '<input type="text" class="date-box" id="' + id(part) + '"' + (required ? ' required' : '') +
+              ' placeholder="MM/DD/YYYY"></div></div></div>';
+          };
+          return '<fieldset class="work"><legend>Work Experience ' + (n + 1) + '</legend>' +
+            '<label for="' + id('title') + '">Title*</label><input id="' + id('title') + '" required value="' + title + '">' +
+            '<label for="' + id('companyName') + '">Company*</label><input id="' + id('companyName') + '" required value="' + company + '">' +
+            date('fromTo.startDate', 'From Date*', true) + date('fromTo.endDate', 'To Date', false) +
+            '<label><input type="checkbox" id="' + id('fromTo.currentlyWorkHere') + '"> I currently work here</label>' +
+            '<label for="' + id('jobLocation') + '">Location*</label><input id="' + id('jobLocation') + '" required value="Austin, Texas, United States">' +
+            '</fieldset>';
+        };
+        work = '<fieldset><legend>Work Experience</legend>' + entry(0, 'Network Operations Manager', 'Globex') +
+          entry(1, 'Network Engineer', 'Initech') + '</fieldset>';
+      }
+      main.innerHTML = '<h2>My Experience</h2><form id="p2">' + work + '<fieldset><legend>Links</legend>' +
+        '<label for="li">LinkedIn Profile</label><input id="li"></fieldset>' +
+        '<fieldset><legend>Voluntary Information</legend><label for="gender">Gender</label>' +
+        '<select id="gender"><option value="">Please Select</option><option>Male</option><option>Female</option>' +
+        '<option>I decline to self-identify</option></select></fieldset>' +
+        '<button type="button" id="back">Previous</button> <button type="button" id="next2">Next</button></form>';
+      // A react-datepicker calendar: the box opens it; a year list, a month list and
+      // the month's days, with the days either side greyed; a day puts MM/DD/YYYY in
+      // the box and closes it. What the calendar set is kept for the test.
+      window.__picked = {};
+      var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
+        'September', 'October', 'November', 'December'];
+      var openPicker = function (input) {
+        document.querySelectorAll('.react-datepicker-popper').forEach(function (p) { p.remove(); });
+        var at = new Date(2026, 8, 1);
+        var popper = document.createElement('div');
+        popper.className = 'react-datepicker-popper';
+        var draw = function () {
+          var years = '', months = '', days = '';
+          for (var y = 1900; y <= 2026; y++) years += '<option' + (y === at.getFullYear() ? ' selected' : '') + '>' + y + '</option>';
+          MONTHS.forEach(function (m, i) { months += '<option value="' + i + '"' + (i === at.getMonth() ? ' selected' : '') + '>' + m + '</option>'; });
+          var first = new Date(at.getFullYear(), at.getMonth(), 1).getDay();
+          var last = new Date(at.getFullYear(), at.getMonth() + 1, 0).getDate();
+          var before = new Date(at.getFullYear(), at.getMonth(), 0).getDate();
+          for (var b = first - 1; b >= 0; b--) days += '<div role="option" class="react-datepicker__day react-datepicker__day--outside-month">' + (before - b) + '</div>';
+          for (var d = 1; d <= last; d++) days += '<div role="option" class="react-datepicker__day react-datepicker__day--0' + (d < 10 ? '0' : '') + d + '">' + d + '</div>';
+          for (var a = 1; a <= 3; a++) days += '<div role="option" class="react-datepicker__day react-datepicker__day--outside-month">' + a + '</div>';
+          popper.innerHTML = '<div class="react-datepicker"><div class="react-datepicker__header">' +
+            '<select class="range-select">' + months + '</select><select class="range-select">' + years + '</select></div>' +
+            '<div class="react-datepicker__month" style="display:grid;grid-template-columns:repeat(7,2em)">' + days + '</div></div>';
+          var lists = popper.querySelectorAll('select');
+          lists[0].addEventListener('change', function (e) { at = new Date(at.getFullYear(), +e.target.value, 1); draw(); });
+          lists[1].addEventListener('change', function (e) { at = new Date(+e.target.value, at.getMonth(), 1); draw(); });
+          popper.querySelectorAll('.react-datepicker__day').forEach(function (el) {
+            el.addEventListener('click', function () {
+              var month = at.getMonth() + (/outside/.test(el.className) ? (+el.textContent > 15 ? -1 : 1) : 0);
+              var when = new Date(at.getFullYear(), month, +el.textContent);
+              var text = ('0' + (when.getMonth() + 1)).slice(-2) + '/' + ('0' + when.getDate()).slice(-2) + '/' + when.getFullYear();
+              input.value = text;
+              window.__picked[input.id] = text;
+              popper.remove();
+            });
+          });
+        };
+        draw();
+        input.closest('.field').appendChild(popper);
+      };
+      document.querySelectorAll('.date-box').forEach(function (input) {
+        input.addEventListener('click', function () { openPicker(input); });
+      });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') document.querySelectorAll('.react-datepicker-popper').forEach(function (p) { p.remove(); });
+      });
+      document.getElementById('next2').addEventListener('click', function () {
+        var page2 = { linkedin: val('li'), gender: text('gender') };
+        main.innerHTML = '<h2>Review your application</h2><p>Check everything before you send it.</p>' +
+          '<button type="button" id="back2">Previous</button> <button type="button" id="submit-app">Submit</button>' +
+          '<div id="done" class="hidden"><h2>Thank you for applying</h2></div>';
+        document.getElementById('submit-app').addEventListener('click', function () {
+          window.__submitted = { page1: window.__page1, page2: page2 };
+          document.getElementById('done').classList.remove('hidden');
+        });
+      });
+    });
+  } else if (step === 'signup') {
+    main.innerHTML = variant === 'community'
+      ? '<h2>Join our talent community</h2><form id="tc"><label for="tcf">First Name</label><input id="tcf">' +
+        '<label for="tcl">Last Name</label><input id="tcl"><label for="tce">Email</label><input id="tce" type="email">' +
+        '<label for="tcp">Mobile Number</label><input id="tcp" type="tel"><button type="submit">Join</button></form>'
+      : '<div class="guest-login-container"><div class="banner">Tell us about yourself.</div>' +
+        '<div role="alert">Please be advised that the mobile number or email associated with this ' +
+        'verification process is intended to be unique to you.</div><div class="login-form-container">' +
+        '<label for="gf">First Name</label><input id="gf"><label for="gl">Last Name</label><input id="gl">' +
+        '<label for="ge">Email</label><input id="ge" type="email"><label for="gp">Mobile Number</label>' +
+        '<input id="gp" type="tel"><button type="button">Next</button></div></div>';
+  } else if (step === 'choice') {
+    main.innerHTML = '<h1>How would you like to apply?</h1>' +
+      '<button type="button" onclick="window.__opened.push(\'linkedin\')">Apply with LinkedIn</button>' +
+      '<button type="button" onclick="window.__opened.push(\'indeed\')">Apply with Indeed</button>' +
+      '<a id="manual" href="' + go('form') + '">Apply manually</a>';
+  } else if (step === 'login') {
+    main.innerHTML = '<h1>Sign in to apply</h1><form id="signin">' +
+      '<label for="user">Email</label><input id="user" type="email">' +
+      '<label for="pass">Password</label><input id="pass" type="password">' +
+      '<button type="submit">Sign In</button></form>' +
+      '<a href="#">Create an account</a> ' +
+      (variant === 'guest' ? '<a id="guest" href="' + go('form') + '">Continue as guest</a>' : '');
+  } else {
+    main.innerHTML = form;
+  }
+
+  var app = document.getElementById('application');
+  if (app) {
+    app.addEventListener('submit', function (e) {
+      e.preventDefault();
+      window.__submitted = { first_name: document.getElementById('fname').value };
+      app.classList.add('hidden');
+      document.getElementById('thanks').classList.remove('hidden');
+    });
+  }
+  var c = document.getElementById('community');
+  if (c) c.addEventListener('submit', function (e) { e.preventDefault(); window.__subscribed = true; });
+})();
+</script>
+</body>
+</html>

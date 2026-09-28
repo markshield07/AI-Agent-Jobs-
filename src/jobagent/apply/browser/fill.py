@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +93,10 @@ _SELECT_OPTIONS_JS = (
 )
 
 
+# A select's prompt or its stand-in while the choices load: not an answer.
+_PLACEHOLDER = re.compile(r"^\s*(?:-+|select\b.*|choose\b.*|please\s+select.*|loading.*)\s*$", re.I)
+
+
 def _native_select(page: Any, field: FormField, values: list[str]) -> None:
     """Pick by index, after matching the wanted text against the options the
     select actually has.
@@ -106,9 +110,18 @@ def _native_select(page: Any, field: FormField, values: list[str]) -> None:
     from jobagent.apply.answering import pick_option
 
     control = page.locator(field.selector).first
-    options = list(control.evaluate(_SELECT_OPTIONS_JS) or [])
-    # A prompt ("Please select") is not an answer: it is the empty value.
-    choosable = [o for o in options if o["value"] != "" and o["text"]]
+    # A list that appeared a moment ago may still be waiting for its choices.
+    for _ in range(20):
+        options = list(control.evaluate(_SELECT_OPTIONS_JS) or [])
+        # A prompt ("Please select") is not an answer: it is the empty value.
+        choosable = [
+            o
+            for o in options
+            if o["value"] != "" and o["text"] and not _PLACEHOLDER.match(o["text"])
+        ]
+        if choosable:
+            break
+        page.wait_for_timeout(250)
     texts = [o["text"] for o in choosable]
     indices: list[int] = []
     for wanted in values:
@@ -186,18 +199,46 @@ def _input_label(page: Any, control: Any) -> str:
     return control.evaluate(script("input_label.js"))
 
 
-def _click_input(page: Any, control: Any) -> None:
-    """Check a radio or box, going through its label when the input itself is styled away."""
+def _click_input(page: Any, control: Any, want: bool = True) -> None:
+    """Check a radio or box, going through its label when the input itself is
+    styled away, else through the box that draws it (LinkedIn's
+    <div role="radio"> around the input), else by force."""
     try:
-        control.check(timeout=2000)
+        control.set_checked(want, timeout=2000)
         return
     except Exception:
         pass
     label = control.evaluate(script("label_selector.js"))
+    tries = []
     if label:
-        page.locator(label).first.click(timeout=3000)
-    else:
-        control.click(timeout=3000, force=True)
+        tries.append(lambda: page.locator(label).first.click(timeout=3000))
+    wrapper = control.locator("xpath=ancestor::*[@role='radio' or @role='checkbox'][1]")
+    tries.append(lambda: wrapper.first.click(timeout=3000))
+    tries.append(lambda: control.click(timeout=3000, force=True))
+    error: Exception | None = None
+    for attempt in tries:
+        try:
+            attempt()
+        except Exception as exc:
+            error = error or exc
+            continue
+        if _is_on(control) == want:
+            return
+    if error is not None:
+        raise error
+    raise LookupError("the choice would not stay selected")
+
+
+def _is_on(control: Any) -> bool:
+    try:
+        return bool(
+            control.evaluate(
+                "el => el.checked || el.getAttribute('aria-checked') === 'true'"
+                " || !!(el.closest('[aria-checked=\"true\"]'))"
+            )
+        )
+    except Exception:
+        return False
 
 
 def _choose(page: Any, field: FormField, wanted: list[str], *, exclusive: bool) -> None:
@@ -235,7 +276,7 @@ def _set_checkbox(page: Any, field: FormField, flag: bool) -> None:
     except Exception:
         checked = False
     if checked != flag:
-        _click_input(page, control)
+        _click_input(page, control, flag)
 
 
 def fill_field(page: Any, field: FormField, fill: Fill) -> str | None:
@@ -267,10 +308,16 @@ def fill_field(page: Any, field: FormField, fill: Fill) -> str | None:
 
 
 def fill_plan(
-    page: Any, fields: Sequence[FormField], plan: FillPlan
+    page: Any,
+    fields: Sequence[FormField],
+    plan: FillPlan,
+    fill_one: Callable[[Any, FormField, Fill], str | None] | None = None,
 ) -> tuple[list[Fill], list[NeededInput], list[str]]:
     """Apply every fill. Returns what went on, what a required field still
-    needs (with the page's reason), and notes about optional fields skipped."""
+    needs (with the page's reason), and notes about optional fields skipped.
+    `fill_one` puts one value on the page, for a site with controls of its own;
+    it defaults to `fill_field`."""
+    fill_one = fill_one or fill_field
     by_key = {f.key: f for f in fields}
     done: list[Fill] = []
     needed: list[NeededInput] = []
@@ -280,7 +327,7 @@ def fill_plan(
         if field is None:
             notes.append(f"plan names {fill.key!r}, which the form does not have")
             continue
-        error = fill_field(page, field, fill)
+        error = fill_one(page, field, fill)
         if error is None:
             done.append(fill)
             continue
@@ -336,6 +383,34 @@ def detect_captcha(page: Any) -> str | None:
     except Exception:
         return None
     return str(found) if found else None
+
+
+_CHALLENGE_JS = r"""() => {
+  const title = (document.title || '').trim().toLowerCase();
+  const titles = /^(just a moment|attention required|verifying you are human|checking your)/;
+  if (titles.test(title)) return true;
+  return !!document.querySelector('#challenge-form, #challenge-running, #cf-challenge-running,'
+    + ' [id^="cf-chl"], script[src*="/cdn-cgi/challenge-platform/"]');
+}"""
+
+
+def bot_check(page: Any, wait_ms: int = 20_000) -> str | None:
+    """A site-wide bot check standing in front of the page (Cloudflare's
+    "Just a moment..."), after giving it `wait_ms` to pass on its own; None
+    when there is none or it passed."""
+    waited = 0
+    while True:
+        try:
+            if not page.evaluate(_CHALLENGE_JS):
+                return None
+            title = (page.title() or "").strip()
+        except Exception:
+            return None
+        if waited >= wait_ms:
+            shown = title or "Cloudflare"
+            return f"the site's bot check ({shown!r}) did not let the browser through"
+        page.wait_for_timeout(1000)
+        waited += 1000
 
 
 def detect_login_wall(page: Any) -> bool:

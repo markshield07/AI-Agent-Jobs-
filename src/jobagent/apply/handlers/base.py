@@ -32,6 +32,7 @@ from jobagent.apply.browser.fill import (
     wait_settled,
 )
 from jobagent.apply.models import Answerer, FormField, HandlerResult, Packet
+from jobagent.apply.place import read_place, wrong_place
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +44,9 @@ COOKIE_BUTTON_SELECTORS: tuple[str, ...] = (
     '[class*="consent" i] button:has-text("Accept")',
     'button:has-text("Accept all cookies")',
     'button:has-text("Accept Cookies")',
+    # OneTrust's preference centre, when it is what shows (EY): save as is.
+    "#onetrust-pc-sdk .save-preference-btn-handler",
+    "#onetrust-pc-sdk #accept-recommended-btn-handler",
 )
 
 
@@ -67,6 +71,10 @@ class BaseHandler:
     security_code_selectors: tuple[str, ...] = ()
     # How long to give the page after each navigation or click.
     settle_ms: int = 10_000
+    # Where the site's own posting states its location and remote type, beside
+    # the schema.org JobPosting most career pages embed (see apply/place.py).
+    place_selectors: tuple[str, ...] = ()
+    remote_type_selectors: tuple[str, ...] = ()
     submit_settle_ms: int = 20_000
 
     # -- what subclasses override -----------------------------------------
@@ -139,6 +147,9 @@ class BaseHandler:
             self.prepare(page)
         except Exception as exc:
             log.debug("prepare failed on %s: %s", url, exc)
+        elsewhere = self.wrong_place(page, packet.wanted_places)
+        if elsewhere:
+            return HandlerResult(outcome="blocked", error=elsewhere, wrong_place=elsewhere)
 
         if detect_login_wall(page):
             return self._result(
@@ -168,6 +179,16 @@ class BaseHandler:
 
         if any(n.required for n in needed):
             return self._result(page, "needs_input", screenshot_path, needed=needed, **common)
+        if not filled:
+            # Nothing went on the form: pressing its button would send it empty.
+            return self._result(
+                page,
+                "failed",
+                screenshot_path,
+                needed=needed,
+                error="found the form but could fill none of it; not sent",
+                **common,
+            )
         if not submit:
             return self._result(page, "dry_run", screenshot_path, needed=needed, **common)
 
@@ -230,6 +251,17 @@ class BaseHandler:
             except Exception:
                 continue
         return False
+
+    def wrong_place(self, page: Any, wanted: Sequence[str]) -> str | None:
+        """Why the posting's own location rules it out, or None to go ahead."""
+        if not wanted:
+            return None
+        try:
+            found = read_place(page, self.place_selectors, self.remote_type_selectors)
+        except Exception as exc:  # reading the place must never stop an application
+            log.debug("could not read the posting's place: %s", exc)
+            return None
+        return wrong_place(found, wanted)
 
     def _result(
         self, page: Any, outcome: str, screenshot_path: str | None, **kwargs: Any

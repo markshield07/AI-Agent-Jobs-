@@ -129,13 +129,16 @@ def interactive_login(
     *,
     timeout_s: float = 300.0,
     poll_s: float = 1.0,
+    confirmed: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Open a visible browser at `url` and wait for the person to sign in.
 
     `is_done` is asked about the browser's cookies once a `poll_s`; when it
-    says yes, the browser's state is returned. The person types their own
-    password into the site's own page; nothing here sees it. Raises
-    TimeoutError when `timeout_s` passes first, or the window is closed.
+    says yes, or `confirmed` does (the person said so in the terminal, for a
+    site whose sign-in cookie has no known name), the browser's state is
+    returned. The person types their own password into the site's own page;
+    nothing here sees it. Raises TimeoutError when `timeout_s` passes first,
+    or the window is closed.
     """
     try:
         from playwright.sync_api import Error as PlaywrightError
@@ -160,7 +163,7 @@ def interactive_login(
             while time.monotonic() < deadline:
                 if page.is_closed():
                     raise TimeoutError("the sign-in window was closed before signing in")
-                if is_done(context.cookies()):
+                if is_done(context.cookies()) or (confirmed is not None and confirmed()):
                     page.wait_for_timeout(1500)  # let the site finish setting its cookies
                     return context.storage_state()
                 page.wait_for_timeout(int(poll_s * 1000))

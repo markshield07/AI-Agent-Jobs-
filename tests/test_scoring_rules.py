@@ -5,7 +5,12 @@ from typing import Any
 import pytest
 
 from jobagent.discovery.criteria import SearchCriteria
-from jobagent.discovery.scoring.rules import RuleScore, passes, score_rules
+from jobagent.discovery.scoring.rules import (
+    RuleScore,
+    office_in_description,
+    passes,
+    score_rules,
+)
 
 
 def crit(**overrides: Any) -> SearchCriteria:
@@ -159,7 +164,8 @@ def test_location_remote_flag_with_remote_ok():
     criteria = crit(locations=["Austin, TX"])
     assert points("location", criteria, remote=True, location=None) == 20
     assert points("location", criteria, remote=1, location="Berlin") == 20
-    assert points("location", criteria, remote=False, location="Berlin") == 0
+    # On-site elsewhere is dropped outright rather than scored low.
+    assert rejected(criteria, remote=False, location="Berlin")
 
 
 def test_location_remote_mention_in_location_or_title():
@@ -240,7 +246,7 @@ def test_a_second_location_keeps_on_site_postings_in_play():
 def test_hybrid_is_not_counted_as_remote():
     criteria = crit(locations=["Herndon, VA"])
     assert points("location", criteria, remote=True, location="Hybrid - Herndon, VA") == 20
-    assert points("location", crit(locations=["Boston"]), remote=True, location="Hybrid") == 0
+    assert rejected(crit(locations=["Boston"]), remote=True, location="Hybrid")
 
 
 # ---------------------------------------------------------------- keywords --
@@ -381,3 +387,66 @@ def test_passes_applies_the_threshold_and_disqualification():
     assert passes(RuleScore(score=59, disqualified=False, reason=""), criteria) is False
     assert passes(RuleScore(score=0, disqualified=True, reason=""), crit(min_score=0)) is False
     assert passes(score_rules({}, SearchCriteria(), set()), SearchCriteria()) is True
+
+
+def test_cities_plus_remote_drop_on_site_postings_elsewhere():
+    local = crit(locations=["Remote", "menifee", "temecula", "winchester"])
+    assert rejected(local, remote=0, location="Little Rock, AR, US")
+    assert rejected(local, remote=False, location="CA, US")
+    reason = score(local, remote=0, location="Plano, TX").reason
+    assert "not in menifee, temecula, winchester" in reason
+    assert not rejected(local, remote=0, location="Temecula, CA, US")
+    assert not rejected(local, remote=True, location="Lonoke, AR, US")
+    assert not rejected(local, location="San Diego, CA, US")
+
+
+@pytest.mark.parametrize(
+    ("text", "said"),
+    [
+        (
+            "The Lead Network Engineer will work onsite at Naval Station Norfolk in Norfolk, VA.",
+            "onsite at Naval Station Norfolk",
+        ),
+        ("This position is onsite.", "This position is onsite"),
+        ("This is a hybrid role based in Austin.", "hybrid role"),
+        ("Work arrangement: On-site", "Work arrangement: On-site"),
+        ("You must work onsite 5 days a week.", "must work onsite"),
+        ("Expect 3 days a week in the office.", "3 days a week in the office"),
+        ("Occasional onsite visits to our data centers.", None),
+        ("This is not an onsite role.", None),
+        ("Travel onsite at customer sites up to 20%.", None),
+        ("Provide on-site support at remote locations.", None),
+        ("Provide onsite and remote support to users.", None),
+        ("This is a fully remote role. Onsite at HQ for the kickoff.", None),
+        ("Remote position; report to the office in Dallas quarterly.", None),
+        ("", None),
+    ],
+)
+def test_a_description_that_puts_the_job_in_an_office(text, said):
+    assert office_in_description(text) == said
+
+
+def test_the_description_outweighs_the_boards_remote_flag():
+    remote_only = crit(locations=["Remote"])
+    onsite = "The engineer will work onsite at Naval Station Norfolk."
+    result = score(remote_only, remote=True, location="Norfolk, VA", description=onsite)
+    assert result.disqualified
+    assert 'the description says "onsite at Naval Station Norfolk"' in result.reason
+    assert points("location", crit(), remote=True, description=onsite) == 15
+    # In a place that is wanted, it stays in.
+    near = crit(locations=["Remote", "Norfolk, VA"])
+    assert not rejected(near, remote=True, location="Norfolk, VA", description=onsite)
+    assert not rejected(near, remote=True, location=None, description=onsite)
+    # Occasional visits do not make a remote job an office job.
+    visits = "Fully remote role. Occasional onsite visits to data centers."
+    assert not rejected(remote_only, remote=True, location="Norfolk, VA", description=visits)
+
+
+def test_a_job_a_board_found_around_a_wanted_place_counts_as_there():
+    near = crit(locations=["Remote", "Orange County", "Menifee"])
+    irvine = {"remote": 0, "location": "Irvine, CA, US", "found_near": "Orange county"}
+    assert not rejected(near, **irvine)
+    assert points("location", near, **irvine) == 20
+    # Found near a place no longer wanted: back to the listing's own words.
+    assert rejected(crit(locations=["Remote", "Menifee"]), **irvine)
+    assert not rejected(near, remote=0, location="Menifee, CA", found_near=None)

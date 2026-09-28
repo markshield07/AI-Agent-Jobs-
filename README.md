@@ -63,6 +63,7 @@ behind it, picked by `JOBAGENT_LLM_BACKEND` in `.env`:
 | `JOBAGENT_APPLY_MODE` | `dry_run` | `dry_run` fills and stops, `review` parks it for approval, `auto` submits |
 | `JOBAGENT_DAILY_APPLY_CAP` | `20` | Submissions in any trailing 24 hours, in `auto` mode |
 | `JOBAGENT_EASY_APPLY_DAILY_CAP` | `10` | LinkedIn's and Indeed's own caps, each, inside the daily one |
+| `JOBAGENT_APPLY_SITES` | (every site) | e.g. `linkedin,indeed`: apply only through those sites' own forms. Discovery then asks LinkedIn for Easy Apply jobs and Indeed for Indeed Apply jobs, and a job that sends you to a company's site is skipped with a reason starting "set aside" |
 | `JOBAGENT_APPLY_DELAY_SECONDS` | `45` | The pause between submissions, jittered |
 | `JOBAGENT_APPLY_MODEL_ANSWERS` | `true` | Let the model draft answers to open questions, from the fact base |
 | `JOBAGENT_HEADLESS` | `true` | `false`, or `--headed`, shows the browser window |
@@ -100,7 +101,14 @@ jobagent discover             # or POST /api/runs/discover from the dashboard
 A run searches every company board in the criteria (Greenhouse, Lever and
 Ashby publish their postings as public JSON with full descriptions) and, for
 each title and location pair, the aggregator sites through JobSpy (Indeed,
-LinkedIn and the rest, by scraping). What comes back goes through:
+LinkedIn and the rest, by scraping). JobSpy searches are capped at six a run;
+with more title and location pairs than that, each hourly run takes the next
+six in turn, so every pair is searched every few hours. A Remote search asks
+Indeed on its own with its remote filter (Indeed drops that filter next to a
+maximum age, so the age is checked here instead). A search around a place
+(say Orange County) keeps that place with each posting it returns, so a job
+listed in Irvine counts as in Orange County, unless it is in a different state
+from the rest of that search's results. What comes back goes through:
 
 1. **Dedupe.** A posting's id is a hash of its cleaned URL, title and company,
    and the URL is unique on its own, so the same job seen on two boards lands
@@ -110,7 +118,9 @@ LinkedIn and the rest, by scraping). What comes back goes through:
    platform, then (only with `--enrich-with-model`) the model.
 3. **Rules.** A deterministic 0 to 100 score on title, salary, location and
    keyword overlap with your fact base, with hard rejects for excluded terms,
-   blacklisted companies and salary below your floor. Free, runs on
+   blacklisted companies, salary below your floor, and on-site or hybrid jobs
+   outside your places (by the board's flag, the title or location, or the
+   description's own words such as "onsite at ..."). Free, runs on
    everything, and the reason for each score is stored with the job.
 4. **Model tiering.** Rule survivors go to the model in batches against your
    profile, which is the cached prefix of every call. Each comes back with a
@@ -167,11 +177,36 @@ agent opens the form, fills every field it can, takes a screenshot to
 parks the application for your approval. Only `auto` presses the button, and
 only under a daily cap with a jittered pause between submissions.
 
-Greenhouse, Lever, Ashby, LinkedIn Easy Apply and Indeed's own application
-have a handler each, and anything else falls to a generic filler that works
+Greenhouse, Lever, Ashby, Workday, LinkedIn Easy Apply and Indeed's own
+application have a handler each, and anything else falls to a generic filler that works
 from what the page shows. The
 generic one refuses to fill a form that is not an application: a careers page's
-search box is a form too.
+search box is a form too. It presses through to the form, up to three pages
+deep: the posting's Apply (a link, a button, or one that opens a new tab), then
+"Apply manually" or "Continue as guest" where a site offers them. It never
+presses apply-with-LinkedIn (or Indeed, Google...), sign-ins, account creation
+or job alerts, and with a job-alert box beside the application it fills only
+the application. An Apply that lands on Workday, Greenhouse, Lever or Ashby is
+handed to that site's own handler. A sign-in with no guest way round is
+reported as such, and so is a form that turns out to be a talent-community
+sign-up or a check of your email or phone by a code (ADP's guest step): nothing
+is typed into it. Before any press it reads the posting itself, and a posting
+whose own application deadline has passed, or that puts the job in a place you
+do not want, is skipped with the reason. A resume that goes through the page's
+own Upload Resume button goes first, the page gets up to 30 seconds to finish
+reading it (its spinner), and the page must then show the file as attached;
+if it never does, the application stops rather than go without it. After
+filling, it looks at the form again: a question an answer brought up (Serco's
+"Source" after "How did you hear") is answered, and a box the page emptied is
+filled again. A list that comes up empty and stays empty is brought back by
+choosing the answer above it again. A required field with no answer on file
+that the page already filled (a Country set to United States) keeps what the
+page chose, except for the questions only you answer. An application that runs
+over several pages (Phenom's My Information, My Experience, Application
+Questions, Voluntary Information, Review) is filled a page at a time: Next is
+pressed only when every required question on the page has an answer, a page
+that will not go on stops the application with what the site said, and the
+last page's Submit is pressed only in `auto` mode.
 
 What goes on the form comes from three places, in order: your contact details
 and the tailored resume for that job, then the answer bank, then the model, and
@@ -192,6 +227,17 @@ def456: dry_run via lever, 12 fields filled, application 5
 
 An answer is stored under its own key, so the next form that asks the same
 thing, on any site, is filled without asking you again.
+
+Before filling anything, or asking you to sign in, each handler reads where
+the employer's own posting says the job is: the schema.org JobPosting most
+career sites embed, then the site's own fields (Workday's locations and remote
+type). A board can list a job as remote when the company's posting names an
+office. If the posting puts the job in a specific place that is none of your
+locations, and nothing on it says remote, the job is skipped for good with that
+reason. Nothing is tried and no sign-in is asked for. A broad place ("United
+States"), several places, or no place at all lets it go ahead. A job already
+waiting for a Workday sign-in is checked the same way before it waits any
+longer.
 
 An application is only ever recorded as **submitted** when the page itself
 confirmed it. A button that was pressed with neither a confirmation nor an error
@@ -226,8 +272,10 @@ stops, and closes the form unsent (LinkedIn: Dismiss, then Discard, so no draft
 is left in your account), when:
 
 - you are not signed in (`blocked`, with the `login` command to run);
-- the posting applies on the company's site instead (`blocked`; add that site as
-  a career-page job);
+- the posting applies on the company's site instead: the agent follows the
+  link to that site's form and fills it with that site's handler (Greenhouse,
+  Lever, Ashby, Workday, or the generic filler), and the application counts
+  against that site, not LinkedIn's cap;
 - a question has no answer on file (`needs_input`, as with any form);
 - a step will not accept an answer, or Next does nothing (`blocked`, with the
   site's message and a screenshot);
@@ -236,6 +284,101 @@ is left in your account), when:
 In `auto` mode each of the two sites has its own cap, 10 a day by default, on
 top of the overall one. See [the warning below](#before-you-turn-submission-on)
 before turning it on.
+
+### Workday
+
+Many large companies take applications on their own Workday site
+(`<company>.wd5.myworkdayjobs.com`), and every one of them keeps its own
+candidate accounts. So sign in once per company, with a link to one of its
+postings:
+
+```bash
+jobagent login workday https://crowdstrike.wd5.myworkdayjobs.com/crowdstrikecareers/job/...
+jobagent login workday --status             # every company: does its sign-in still work?
+jobagent login workday <posting URL> --forget
+```
+
+A browser window opens on that company's site. Sign in, or use Create Account
+if you have never applied there, and finish any email check it sends; then
+press Enter in the terminal. As with LinkedIn, **the password is never seen or
+kept**: the company's Workday cookies are, in
+`data/sessions/workday/<host>.json`, readable by your user only.
+
+**A Workday sign-in does not last.** The company's site ends it after a while
+(about an hour on CrowdStrike's) while its cookies still look valid, so the
+cookies cannot tell you whether it works. Right after you press Enter the
+agent opens the posting to check the sign-in took, and says **NOT SIGNED IN**
+if the page still asks you to sign in (press Enter only once the page shows
+you signed in; the window waits up to 15 minutes). `--status` opens each company's
+posting, presses Apply and Apply Manually, and reports what comes up: still
+signed in, or the sign-in page (add `--no-check` to skip that). Each site
+gets 90 seconds (`--check-timeout` to change it); one that shows neither in
+that time is reported with how long each stage took and left as it was. A run that
+meets the sign-in page marks that company as needing a new sign-in; its
+other jobs then wait without opening the site, the run output and the
+dashboard say which company and how many applications are waiting, and the
+next `jobagent login workday <posting URL>` runs them straight after you
+press Enter (`--no-retry` to leave them).
+
+To keep sign-ins from ending between runs, leave this running alongside
+`jobagent run`:
+
+```
+jobagent login workday --keep-alive            # every 15 minutes (--every N), until stopped
+```
+
+It opens each signed-in company's Candidate Home (their "My Applications"
+page) the way you would, presses nothing, and keeps the cookies the visit
+leaves. When that page shows neither your applications nor a sign-in, it
+saves what it showed to `data/sessions/workday/<company>-home.html` and
+checks the posting on file instead, as `--status` does. A company whose
+sign-in has ended anyway is marked for a new one. Each round prints a line
+per company straight away (so a `nohup ... > log` file fills as it goes),
+and each visit is stamped into the company's sign-in file, which
+`jobagent login workday --status --no-check` shows as "keep-alive last
+visited".
+
+After Submit, Workday may grey the button out and show nothing more; the
+agent then opens the posting again and counts "You applied for this job on
+..." as the confirmation.
+
+The agent presses Apply, picks **Autofill with Resume** (Workday reads the
+tailored resume into My Experience) or **Apply Manually** where that is all
+there is, and then goes step by step: My Information, My Experience,
+Application Questions, Voluntary Disclosures, Self Identify, Review. In My
+Experience each job autofill listed gets its dates from the role on file with
+that employer, and an empty entry (Apply Manually, a saved draft) is filled
+from your most recent role: title, company, dates and its description. It reads
+Workday's own controls (dropdown buttons, the "How did you hear about us?"
+search box, dates in three boxes) and fills them the way you would. "How did
+you hear about us?" gets the board the job was found on; phone device type is
+Mobile; the self-identify form is signed with your name and today's date; the
+demographic questions are declined unless your answer bank says otherwise.
+A box agreeing to a company's terms or privacy policy is never ticked by
+accident: in `review` the first form that has a required one stops
+and asks, and your answer (`consent_terms`) is used on every form after. In
+`auto` mode, which sends applications all the way, a required box is ticked
+unless `consent_terms` is No, and the application shows it as "agreed because
+you chose auto mode"; a dry run does the same, so it shows what auto mode
+would send. A required box is terms even when it also mentions future
+positions ("By continuing I understand..."); an optional one that asks to keep
+you informed is left unticked. "Why are you interested in working for us?" gets
+your cover letter without its greeting and sign-off.
+
+Salary currency and period follow `salary_expectation`: US dollars, and yearly
+for an amount in the thousands (hourly below), unless `salary_currency` or
+`salary_period` says otherwise. "Best time to contact" is any time and
+"Preferred contact method" is email unless `contact_time` or `contact_method`
+says otherwise. A second phone box (Home, Work) is left empty unless
+`other_phone` has a number, and "Town/City" gets the town alone.
+
+Workday saves a draft at every "Save and Continue". A dry run therefore leaves
+the application in that company's account, filled in and unsent, at the
+Review step; you can open it there, read it, and press Submit yourself. A
+later run finds that draft behind "Continue Application" and carries on from
+its first unsaved step. It stops as `blocked` at a sign-in page (with the
+`login` command to run), and
+as `needs_input` at a question nothing on file answers, like any other form.
 
 ### Playwright
 
@@ -426,9 +569,10 @@ src/jobagent/
 │   │   ├── session.py  Launching Chromium; the only place Playwright is imported
 │   │   ├── dom.py      Reading a form: what each control is and what it is called
 │   │   └── fill.py     Putting the plan on the page, and reading what it says back
-│   ├── handlers/       One per ATS (Greenhouse, Lever, Ashby) plus the generic filler;
-│   │                   wizard.py is the step loop LinkedIn and Indeed share
-│   ├── sessions.py     Saved LinkedIn and Indeed sign-ins: cookies only, owner-readable
+│   ├── handlers/       One per ATS (Greenhouse, Lever, Ashby, Workday) plus the generic
+│   │                   filler; wizard.py is the step loop LinkedIn, Indeed and Workday share
+│   ├── sessions.py     Saved LinkedIn, Indeed and per-company Workday sign-ins: cookies
+│   │                   only, owner-readable
 │   ├── store.py        Applications and attempts on disk; status derived from events
 │   └── pipeline.py     One apply pass: job, variant, packet, handler, attempt
 ├── inbox/

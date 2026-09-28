@@ -386,7 +386,14 @@ def test_model_result_of_the_wrong_type_is_ignored():
 # -------------------------------------------------------------------- HTTP --
 
 
-@pytest.mark.parametrize("status", [404, 410, 429, 500, 503])
+def test_too_many_requests_is_raised_so_the_run_stops_asking_that_site():
+    from jobagent.discovery.enrich import RateLimited
+
+    with pytest.raises(RateLimited):
+        enrich_description(URL, client=client_for(page("<p>x</p>"), 429))
+
+
+@pytest.mark.parametrize("status", [404, 410, 500, 503])
 def test_http_error_status_returns_none(caplog, status):
     completer = FakeCompleter(ExtractedPosting(description=" ".join([SENTENCE] * 4), found=True))
     html = page(f'<div id="content">{LONG_HTML}</div>')

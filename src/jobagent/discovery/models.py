@@ -29,3 +29,9 @@ class RawJob:
     remote: bool | None = None
     external_id: str | None = None
     ats_type: str | None = None
+    # The place a board searched around (within its radius) when it returned
+    # this posting; None for company boards and Remote searches.
+    found_near: str | None = None
+    # Returned by the board's own apply filter (Indeed Apply): the posting
+    # applies on the board, whatever link to the company came with it.
+    applies_on_board: bool = False

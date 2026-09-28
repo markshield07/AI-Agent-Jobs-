@@ -167,6 +167,50 @@ def test_contact_resume_links_and_letter_come_from_the_packet(packet):
     assert any("Website" in n for n in plan.notes), "an optional link not on file is skipped"
 
 
+def test_each_part_of_an_address_is_its_own_answer(packet):
+    """Workday asks for street, city, state and ZIP in separate boxes, beside
+    a phone number split into code, number and extension."""
+    packet.contact["location"] = "Menifee, California, United States"
+    packet.answers = {"address": "1 Main St", "postal_code": "92584"}
+    fields = [
+        F("street", "Address Line 1", required=True),
+        F("street2", "Address Line 2"),
+        F("city", "City", required=True),
+        F("state", "State", kind="select", options=["Arizona", "California"], required=True),
+        F("zip", "Postal Code", required=True),
+        F("code", "Country Phone Code", required=True),
+        F("phone", "Phone Number", required=True),
+        F("ext", "Phone Extension"),
+        F("preferred", "I have a preferred name", kind="checkbox"),
+    ]
+    plan = plan_fills(fields, packet)
+    assert fills(plan) == {
+        "street": "1 Main St",
+        "city": "Menifee",
+        "state": "California",
+        "zip": "92584",
+        "phone": "+1 555 0100",
+    }
+    assert [(n.key, n.answer_key) for n in plan.needed] == [("code", "phone_country")]
+    packet.answers = {}
+    plan = plan_fills(fields[:5], packet)
+    assert {n.key: n.answer_key for n in plan.needed} == {
+        "street": "address",
+        "zip": "postal_code",
+    }, "street and ZIP are asked for under keys of their own"
+
+
+def test_a_work_history_entry_never_gets_contact_details(packet):
+    """Location in a job held (Workday's My Experience) is where the job was."""
+    fields = [
+        F("loc", "Location", section="experience"),
+        F("title", "Job Title", section="experience", required=True),
+    ]
+    plan = plan_fills(fields, packet)
+    assert fills(plan) == {}
+    assert [(n.key, n.answer_key) for n in plan.needed] == [("title", "q:job title")]
+
+
 def test_full_name_field_and_single_word_names(packet):
     plan = plan_fills([F("name", "Name", required=True)], packet)
     assert fills(plan) == {"name": "Mark Shield"}
@@ -278,14 +322,21 @@ def test_eeo_declines_unless_the_answer_bank_says_otherwise(packet):
     assert fills(plan) == {"vet": "I am not a veteran"} and sources(plan)["vet"] == "answer_bank"
 
 
-def test_consent_boxes_are_ticked_and_marketing_boxes_are_not(packet):
+def test_terms_are_agreed_to_only_once_the_person_has_said_so(packet):
     fields = [
         F("privacy", "I have read and agree to the privacy policy", kind="checkbox", required=True),
         F("news", "Keep me updated about future opportunities", kind="checkbox"),
         F("certify", "I certify that the information above is accurate", kind="checkbox"),
     ]
     plan = plan_fills(fields, packet)
+    assert fills(plan) == {"news": False}, "no box agreed to on the person's behalf"
+    assert [(n.key, n.answer_key, n.reason) for n in plan.needed] == [
+        ("privacy", answering.CONSENT_KEY, answering.NEVER_GUESSED)
+    ]
+    packet.answers[answering.CONSENT_KEY] = "Yes"
+    plan = plan_fills(fields, packet)
     assert fills(plan) == {"privacy": True, "news": False, "certify": True}
+    assert sources(plan)["privacy"] == "answer_bank"
     packet.answers = {question_key("Keep me updated about future opportunities"): "yes"}
     assert fills(plan_fills(fields[1:2], packet)) == {"news": True}
 
@@ -392,6 +443,58 @@ def test_model_may_decline_and_optional_questions_are_then_skipped(packet):
     assert any("hobby" in note.lower() or "fun" in note.lower() for note in plan.notes)
 
 
+def test_a_choice_the_model_answers_while_asking_for_a_person_is_taken(packet):
+    # Luxoft's, 2026-09-28: the model marked it for a person and answered anyway.
+    field = F(
+        "lead",
+        "Do you have Team Lead or Technical Lead experience listed in your resume?",
+        kind="radio",
+        options=["Yes", "No"],
+        required=True,
+    )
+    reason = "The answer is Yes: as Sr. Manager Field Engineering at GoTo he leads the team."
+    completer = FakeCompleter(
+        DraftAnswers(answers=[DraftAnswer(key="lead", needs_human=True, reason=reason)])
+    )
+    plan = plan_fills([field], packet, completer=completer)
+    assert fills(plan) == {"lead": "Yes"} and plan.needed == []
+
+
+def test_free_text_the_model_marks_for_a_person_stays_with_the_person(packet):
+    field = F("why", "Why do you want this role?", kind="textarea", required=True)
+    completer = FakeCompleter(
+        DraftAnswers(
+            answers=[DraftAnswer(key="why", answer="Because.", needs_human=True, reason="a plan")]
+        )
+    )
+    plan = plan_fills([field], packet, completer=completer)
+    assert plan.fills == [] and plan.needed[0].key == "why"
+
+
+def test_a_question_about_the_resume_is_not_the_resume_upload():
+    field = F("q", "Do you have CISCO & Load Balancing (F5) listed in your resume?", kind="radio")
+    assert answering.canonical_key(field) is None
+    assert answering.canonical_key(F("cv", "Resume", kind="file")) == "resume"
+
+
+def test_the_commute_question_is_kept_per_place(packet):
+    field = F(
+        "c",
+        "Are you comfortable commuting to this job's location?",
+        kind="radio",
+        options=["Yes", "No"],
+        required=True,
+    )
+    assert answering.canonical_key(field) == "commute_ok"
+    packet.job["location"] = "Long Beach, CA"
+    assert answering.answer_key_for(field, packet.job) == "commute_ok:long_beach_ca"
+    packet.answers["commute_ok"] = "Yes"  # not this place's answer
+    plan = plan_fills([field], packet)
+    assert plan.fills == [] and plan.needed[0].answer_key == "commute_ok:long_beach_ca"
+    packet.answers["commute_ok:long_beach_ca"] = "No"
+    assert fills(plan_fills([field], packet)) == {"c": "No"}
+
+
 def test_model_option_outside_the_choices_is_refused(packet):
     field = F("level", "Seniority", kind="select", options=["Junior", "Senior"], required=True)
     completer = FakeCompleter(
@@ -426,3 +529,270 @@ def test_a_planning_bug_becomes_a_needed_input_not_a_crash(packet, monkeypatch):
     monkeypatch.setattr(answering, "_section", lambda field: 1 / 0)
     plan = plan_fills([F("x", "Anything", required=True)], packet)
     assert plan.needed[0].key == "x" and "planning failed" in plan.needed[0].reason
+
+
+@pytest.mark.parametrize(
+    ("label", "from_letter"),
+    [
+        ("Why are you interested in working for CrowdStrike?", True),
+        ("Why do you want to join Beta?", True),
+        ("Tell us why you are applying for this role", True),
+        ("What interests you in joining our team?", False),
+        ("Why are you leaving your current job?", False),
+    ],
+)
+def test_why_this_company_is_answered_from_the_cover_letter(packet, label, from_letter):
+    field = FormField(key="why", label=label, kind="textarea")
+    plan = plan_fills([field], packet)
+    if from_letter:
+        assert fills(plan) == {"why": "I led the billing rewrite at Acme."}
+        assert sources(plan) == {"why": "cover_letter"}
+    else:
+        assert "why" not in fills(plan)
+
+
+@pytest.mark.parametrize(
+    ("label", "key"),
+    [
+        (
+            "Are you eligible to work in the country in which this position is located?",
+            "work_authorization",
+        ),
+        (
+            "Will you now or in the future require work authorization sponsorship?",
+            "visa_sponsorship",
+        ),
+        (
+            "Conflict of Interest If hired, do you expect that you will engage in any outside "
+            "employment that could conflict with our business? You do not need to disclose an "
+            "activity that will end before your start date.",
+            None,
+        ),
+        ("Country", "country"),
+        ("Address Line 1", "address"),
+        (
+            "Are you legally authorized to work in the United States without the need for "
+            "sponsorship?",
+            "work_authorization",
+        ),
+        ("Will you now or in the future require visa sponsorship?", "visa_sponsorship"),
+    ],
+)
+def test_long_questions_are_read_by_their_first_sentence(label, key):
+    assert canonical_key(F("k", label)) == key
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Conflict of Interest If hired, do you expect that you will engage in any outside "
+        "employment that could conflict with our business?",
+        "Acknowledgment: CrowdStrike is an AI-native company. Do you agree to these terms?",
+        "Are you bound by a non-compete agreement?",
+    ],
+)
+def test_legal_attestations_are_never_drafted(packet, label):
+    field = FormField(key="k", label=label, kind="select", required=True, options=["Yes", "No"])
+    calls = []
+    plan = answering.make_answerer(
+        packet, completer=lambda *a, **k: calls.append(a), allow_model=True
+    )([field])
+    assert calls == [], "never sent to the model"
+    assert [n.reason for n in plan.needed] == [answering.NEVER_GUESSED]
+    assert plan.needed[0].answer_key.startswith("q:")
+
+
+def test_an_attestation_answered_once_is_kept(packet):
+    label = "Conflict of Interest If hired, do you expect outside employment?"
+    packet.answers[answering.question_key(label)] = "No"
+    field = FormField(key="k", label=label, kind="select", required=True, options=["Yes", "No"])
+    assert fills(plan_fills([field], packet)) == {"k": "No"}
+
+
+def test_an_accommodation_request_is_not_the_disability_self_id(packet):
+    from jobagent.apply.answering import answer_key_for
+
+    label = (
+        "Do you need a reasonable accommodation due to a disability or medical need for "
+        "applying, interviewing, or otherwise participating in the application process?"
+    )
+    field = F("k", label, kind="select")
+    field.options = ["Yes", "No"]
+    assert answer_key_for(field).startswith("q:")
+    assert answer_key_for(F("k", "Disability status", kind="select")) == "disability"
+    packet.answers["disability"] = "No"
+    plan = plan_fills([field], packet)
+    assert fills(plan) == {}, "the self-ID answer is not an accommodation request"
+    assert [n.reason for n in plan.needed] == [answering.NEVER_GUESSED]
+
+
+@pytest.mark.parametrize(
+    ("letter", "body"),
+    [
+        (
+            "Dear CrowdStrike Hiring Team,\n\nI run networks.\n\nI led teams.\n\n"
+            "Sincerely,\nMark Shield",
+            "I run networks.\n\nI led teams.",
+        ),
+        ("I run networks.\n\nBest regards,\n\nMark Shield", "I run networks."),
+        ("Dear Hiring Manager:\n\nI run networks.\n\nThank you,\nMark", "I run networks."),
+        ("I run networks. Thank you for your time.", "I run networks. Thank you for your time."),
+    ],
+)
+def test_a_form_answer_takes_the_letter_without_greeting_or_sign_off(letter, body):
+    assert answering.letter_body(letter) == body
+
+
+def test_auto_mode_agrees_to_required_terms_and_says_so(packet):
+    fields = [
+        F("privacy", "I have read and agree to the privacy policy", kind="checkbox", required=True),
+        F("certify", "I certify that the information above is accurate", kind="checkbox"),
+    ]
+    plan = plan_fills(fields, packet, agree_to_terms=True)
+    assert fills(plan) == {"privacy": True}, "an optional box stays unticked"
+    assert sources(plan) == {"privacy": "auto_mode"}
+    assert any("auto mode" in n for n in plan.notes)
+    assert plan.needed == []
+
+    packet.answers[answering.CONSENT_KEY] = "No"
+    plan = plan_fills(fields, packet, agree_to_terms=True)
+    assert fills(plan) == {"privacy": False, "certify": False}, "the person's No wins"
+
+
+# ------------------------------------------------ what Serco's form showed --
+
+
+@pytest.mark.parametrize(
+    "label, key",
+    [
+        ("Town/City", "city"),
+        ("City / Town", "city"),
+        ("Home Phone", "other_phone"),
+        ("Work Phone Number", "other_phone"),
+        ("Mobile Phone", "phone"),
+        ("Desired Salary Currency", "salary_currency"),
+        ("Desired Salary Timeframe", "salary_period"),
+        ("Pay frequency", "salary_period"),
+        ("Desired Salary Amount", "salary_expectation"),
+        ("Security Clearance Level", "security_clearance"),
+        ("Security Clearance Status", "clearance_status"),
+        ("Source", "heard_about_source"),
+        ("Which job board?", "heard_about_source"),
+        ("Best Time to Contact", "contact_time"),
+        ("Preferred Contact Method", "contact_method"),
+    ],
+)
+def test_serco_labels_have_keys_of_their_own(label, key):
+    assert canonical_key(F("x", label)) == key
+
+
+def test_city_country_and_a_second_phone_on_a_serco_form(packet):
+    packet.contact["location"] = "Menifee, California, United States"
+    fields = [
+        F("city", "Town/City", required=True),
+        F(
+            "country",
+            "Country of Residence",
+            kind="select",
+            required=True,
+            options=["Canada", "United States", "Uruguay"],
+        ),
+        F("mobile", "Mobile Phone", required=True),
+        F("home", "Home Phone"),
+    ]
+    plan = plan_fills(fields, packet)
+    assert fills(plan) == {"city": "Menifee", "country": "United States", "mobile": "+1 555 0100"}
+    assert plan.needed == []
+
+    packet.answers["home_phone"] = "+1 555 0199"
+    assert fills(plan_fills(fields, packet))["home"] == "+1 555 0199"
+    del packet.answers["home_phone"]
+    fields[3].required = True
+    assert fills(plan_fills(fields, packet))["home"] == "+1 555 0100", "required: the main number"
+
+
+def test_salary_currency_and_period_follow_the_salary_on_file(packet):
+    fields = [
+        F(
+            "cur",
+            "Desired Salary Currency",
+            kind="select",
+            required=True,
+            options=["USD $", "CAN $"],
+        ),
+        F("amt", "Desired Salary Amount", kind="number", required=True),
+        F("per", "Desired Salary Timeframe", kind="select", required=True, options=["Yr.", "Hr."]),
+    ]
+    plan = plan_fills(fields, packet)
+    assert {n.key for n in plan.needed} == {"cur", "amt", "per"}, "no salary on file: asked"
+    assert all(n.reason == NEVER_GUESSED for n in plan.needed)
+
+    packet.answers["salary_expectation"] = "$150,000"
+    plan = plan_fills(fields, packet)
+    assert fills(plan) == {"cur": "USD $", "amt": "150000", "per": "Yr."}
+    assert plan.needed == []
+
+    packet.answers["salary_expectation"] = "65"
+    assert fills(plan_fills(fields, packet))["per"] == "Hr."
+    packet.answers["salary_period"] = "Yearly"
+    fields[2].options = ["Hourly", "Yearly"]
+    assert fills(plan_fills(fields, packet))["per"] == "Yearly", "the answer bank wins"
+
+
+def test_a_required_privacy_notice_that_mentions_future_positions_is_terms(packet):
+    label = (
+        "* By continuing I understand that the information I disclose will be visible to and "
+        "shared between HR and Hiring Managers. Such information disclosed by me will be used "
+        "to support the recruitment selection processes for this or future positions."
+    )
+    field = F("privacy", label, kind="checkbox", required=True)
+    assert answering.answer_key_for(field) == answering.CONSENT_KEY
+    plan = plan_fills([field], packet, agree_to_terms=True)
+    assert fills(plan) == {"privacy": True} and sources(plan) == {"privacy": "auto_mode"}
+    optional = F("news", "Keep me informed about future positions and updates", kind="checkbox")
+    assert fills(plan_fills([optional], packet, agree_to_terms=True)) == {"news": False}
+
+
+def test_how_to_reach_the_person_defaults_to_any_time_by_email(packet):
+    fields = [
+        F(
+            "time",
+            "Best Time to Contact",
+            kind="select",
+            required=True,
+            options=["Anytime", "Morning", "Afternoon", "Evening"],
+        ),
+        F(
+            "how",
+            "Preferred Contact Method",
+            kind="select",
+            required=True,
+            options=["Home Phone", "Cell Phone", "Email"],
+        ),
+    ]
+    plan = plan_fills(fields, packet)
+    assert fills(plan) == {"time": "Anytime", "how": "Email"}
+    packet.answers["contact_method"] = "Cell Phone"
+    assert fills(plan_fills(fields, packet))["how"] == "Cell Phone"
+
+
+def test_a_source_list_gets_the_board_the_job_was_found_on(packet):
+    widget = "api_key: undefined extensions:AwliWidget@https://www.linkedin.com/apply-with-linkedin"
+    packet.job["source"] = "indeed"
+    field = F("src", "Source", kind="select", required=True, options=[widget, "Indeed", "Other"])
+    assert fills(plan_fills([field], packet)) == {"src": "Indeed"}
+    field.options = [widget, "Dice", "Other"]
+    assert fills(plan_fills([field], packet)) == {"src": "Other"}, "never the widget's text"
+    packet.job["source"] = "linkedin"
+    field = F(
+        "src", "Source", kind="select", required=True, options=["Indeed", "LinkedIn", "Other"]
+    )
+    assert fills(plan_fills([field], packet)) == {"src": "LinkedIn"}
+
+
+def test_a_source_list_read_before_its_choices_came_gets_the_board_by_name(packet):
+    packet.job["source"] = "indeed"
+    field = F("src", "Source", kind="select", required=True, options=[])
+    assert fills(plan_fills([field], packet)) == {"src": "Indeed"}
+    packet.job["source"] = "company site"
+    assert plan_fills([field], packet).needed[0].key == "src"

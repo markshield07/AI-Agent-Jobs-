@@ -23,10 +23,48 @@ they occur.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
-from jobagent.apply.browser.fill import click_first_visible, wait_settled
-from jobagent.apply.handlers.wizard import WizardHandler
+from jobagent.apply.browser.fill import click_first_visible, fill_field, fill_plan, wait_settled
+from jobagent.apply.handlers.wizard import ROOT, WizardHandler
+from jobagent.apply.models import Fill, FormField
+
+# The resume step with no file box: LinkedIn's "Upload resume" button, which
+# opens the file chooser itself, stands in for one.
+UPLOAD_KEY = "linkedin-resume-upload"
+UPLOAD_ATTR = "data-jobagent-upload"
+_MARK_UPLOAD_JS = r"""([root, attr]) => {
+  document.querySelectorAll('[' + attr + ']').forEach((el) => el.removeAttribute(attr));
+  const scope = document.querySelector(root) || document;
+  if (scope.querySelector('input[type="file"]')) return false;
+  const button = Array.from(scope.querySelectorAll('button')).find((b) => {
+    const r = b.getBoundingClientRect();
+    return r.width > 0 && /^\s*upload\s+(a\s+)?(resume|cv)\s*$/i.test(b.innerText || '');
+  });
+  if (!button) return false;
+  button.setAttribute(attr, 'resume');
+  return true;
+}"""
+_ROOT_TEXT = "(sel) => (document.querySelector(sel) || document.body).innerText || ''"
+# What the resume step shows: how often the file's name appears, how many
+# resume choices there are, and the words of the chosen one. A resume kept
+# from before is already chosen, and may carry the same name as the upload
+# (the same tailored file, sent again), so the upload shows as a change.
+_RESUME_STATE_JS = r"""([root, name]) => {
+  const scope = document.querySelector(root) || document;
+  const text = (scope.innerText || '').toLowerCase();
+  const want = (name || '').toLowerCase();
+  const count = want ? text.split(want).length - 1 : 0;
+  const choices = scope.querySelectorAll('input[type="radio"], [role="radio"]:not(:has(input))');
+  const on = Array.from(choices)
+    .find((c) => c.checked || c.getAttribute('aria-checked') === 'true');
+  const box = on && (on.closest('[role="radio"]') || on.closest('label') || on.parentElement);
+  const words = box
+    ? ((box.innerText || '') + ' ' + (box.getAttribute('aria-label') || '')).toLowerCase()
+    : '';
+  return {count, choices: choices.length, chosen: !!on, named: !!want && words.includes(want)};
+}"""
 
 
 class LinkedInHandler(WizardHandler):
@@ -59,7 +97,13 @@ class LinkedInHandler(WizardHandler):
         "a:has-text('Sign in to apply')",
         "form.join-form",
     )
+    # The 2026 layout (the Mac's capture of Stand8's, 2026-09-28): a native
+    # <dialog data-testid="dialog" aria-labelledby="dialog-header">, obfuscated
+    # class names, and buttons that carry only their text ("Next", "Review",
+    # "Submit application"), so those are matched by text inside the dialog.
     root_selectors = (
+        "dialog[open][aria-labelledby='dialog-header']",
+        "dialog[open][data-testid='dialog']",
         ".jobs-easy-apply-modal",
         "[data-test-modal][role='dialog']",
         "div[role='dialog']",
@@ -70,15 +114,25 @@ class LinkedInHandler(WizardHandler):
         "button[aria-label*='Continue']",
         "button[aria-label*='Next']",
         "button[aria-label*='Review']",
+        "footer button:has-text('Next')",
+        "footer button:has-text('Review')",
+        "footer button:has-text('Continue')",
+        "button:has-text('Next')",
+        "button:has-text('Review')",
     )
     submit_selectors = (
         "button[aria-label='Submit application']",
         "button[aria-label*='Submit application']",
+        "button:has-text('Submit application')",
     )
     step_error_selectors = (
         ".artdeco-inline-feedback--error",
         ".fb-dash-form-element-error",
         "[data-test-form-element-error-messages]",
+        "[componentkey^='easyApplyFieldFocus'] [role='alert']",
+        "[componentkey^='easyApplyFieldFocus'] [data-testid*='error' i]",
+        # The 2026 window's "This field is required" under a question.
+        "[id^='error-message-']",
     )
     success_signals = (
         "application was sent",
@@ -106,6 +160,91 @@ class LinkedInHandler(WizardHandler):
             return f"https://www.linkedin.com/jobs/view/{found.group(1)}/"
         return url
 
+    def review_problem(self, page: Any, root: str | None) -> str | None:
+        """An answer shown as LinkedIn's own id ("urn:li:geo:103033862") where
+        its name should be: sent, the employer would read the id."""
+        try:
+            text = str(page.evaluate(_ROOT_TEXT, root or "body") or "")
+        except Exception:
+            return None
+        found = re.search(r"urn:li:[a-z_]+:\S+", text, re.IGNORECASE)
+        if not found:
+            return None
+        return (
+            f"the review shows {found.group(0)!r} where an answer should be; "
+            "not sent. Check the screenshot"
+        )
+
+    def discover_step(self, page: Any, root: str | None) -> list[FormField]:
+        """The step's fields; on the resume step with no file box, the
+        "Upload resume" button as the resume's upload. The resumes LinkedIn
+        kept from before, a choice labelled by each file's name, are not a
+        question: the tailored one is uploaded, and LinkedIn picks it."""
+        fields = [f for f in super().discover_step(page, root) if not _resume_choice(f)]
+        if any(f.kind == "file" for f in fields):
+            return fields
+        try:
+            found = page.evaluate(_MARK_UPLOAD_JS, [root or "body", UPLOAD_ATTR])
+        except Exception:
+            found = False
+        if found:
+            fields.append(
+                FormField(
+                    key=UPLOAD_KEY,
+                    label="Resume",
+                    kind="file",
+                    required=True,
+                    section="resume",
+                    selector=f'[{UPLOAD_ATTR}="resume"]',
+                    accept=".pdf,.doc,.docx",
+                )
+            )
+        return fields
+
+    def prefilled(self, page: Any, fields: list[FormField]) -> dict[str, str]:
+        return super().prefilled(page, [f for f in fields if f.key != UPLOAD_KEY])
+
+    def fill(self, page: Any, fields: list[FormField], plan: Any) -> tuple[list, list, list]:
+        return fill_plan(page, fields, plan, fill_one=self._fill_one)
+
+    def _fill_one(self, page: Any, field: FormField, fill: Fill) -> str | None:
+        if field.kind == "select" and not field.options and isinstance(fill.value, str):
+            return _typeahead(page, field, fill.value)
+        if field.key != UPLOAD_KEY:
+            return fill_field(page, field, fill)
+        if not fill.file_path:
+            return "no resume file to upload"
+        name = Path(fill.file_path).name
+        before = self._resume_state(page, name)
+        try:
+            with page.expect_file_chooser(timeout=8000) as chooser:
+                page.locator(field.selector).first.click(timeout=5000)
+            chooser.value.set_files(fill.file_path)
+        except Exception as exc:
+            return f"the Upload resume button gave no file chooser: {type(exc).__name__}"
+        for tick in range(30):  # the upload shows within seconds
+            page.wait_for_timeout(500)
+            now = self._resume_state(page, name)
+            if not now:
+                continue
+            grew = before is not None and (
+                now["count"] > before["count"] or now["choices"] > before["choices"]
+            )
+            if now["chosen"] and (grew or before is None):
+                return None
+            # The same file sent again may take the old one's place.
+            if tick >= 7 and now["named"]:
+                return None
+        return "LinkedIn never showed the uploaded resume"
+
+    @staticmethod
+    def _resume_state(page: Any, name: str) -> dict[str, Any] | None:
+        try:
+            state = page.evaluate(_RESUME_STATE_JS, [ROOT, name])
+        except Exception:
+            return None
+        return state if isinstance(state, dict) else None
+
     def discard(self, page: Any) -> None:
         """Close the modal and discard the draft, so nothing half-filled stays saved."""
         if not click_first_visible(
@@ -117,7 +256,68 @@ class LinkedInHandler(WizardHandler):
             page,
             (
                 "button[data-control-name='discard_application_confirm_btn']",
+                "dialog[open] button:has-text('Discard')",
                 "button[data-test-dialog-secondary-btn]:has-text('Discard')",
                 "button:has-text('Discard')",
             ),
         )
+
+
+_FILE_NAME = re.compile(r"\S\.(?:pdf|docx?|rtf|txt|odt)\b", re.IGNORECASE)
+
+
+def _resume_choice(field: FormField) -> bool:
+    """LinkedIn's list of resumes uploaded before ("d8763d2995d3d0ac-87.pdf")."""
+    if field.kind != "radio":
+        return False
+    named = [o for o in field.options if o]
+    if named and all(_FILE_NAME.search(o) for o in named):
+        return True
+    return bool(_FILE_NAME.search(field.label or "")) and not field.options
+
+
+def _typeahead(page: Any, field: FormField, value: str) -> str | None:
+    """A LinkedIn typeahead ("Location (city)"): type the first part of the
+    value, then press the suggestion that matches it the way a person would.
+    A click the page does not take as a real one leaves the place's id in the
+    box ("urn:li:geo:..."), which then goes out as the answer; a box that ends
+    up holding one, or nothing, is emptied and reported."""
+    box = page.locator(field.selector).first
+    typed = value.split(",")[0].strip() or value
+    try:
+        box.click(timeout=3000)
+        box.fill("", timeout=3000)
+        box.press_sequentially(typed, delay=60, timeout=10_000)
+        options = page.locator("[role='option']")
+        for _ in range(12):
+            page.wait_for_timeout(250)
+            if options.count() and options.first.is_visible():
+                break
+        texts = [t.strip() for t in options.all_inner_texts()]
+        want, start = _plain(value), _plain(typed)
+        pick = next((i for i, t in enumerate(texts) if _plain(t) == want), None)
+        if pick is None:
+            pick = next((i for i, t in enumerate(texts) if _plain(t).startswith(start)), None)
+        if pick is not None:
+            options.nth(pick).click(timeout=3000)
+        else:
+            box.press("ArrowDown")
+            box.press("Enter")
+        page.wait_for_timeout(300)
+        got = (box.input_value(timeout=2000) or "").strip()
+    except Exception as exc:
+        first = str(exc).splitlines()[0][:150] if str(exc) else ""
+        got, error = "", f"{type(exc).__name__}: {first}"
+    else:
+        error = None
+    if got and not got.lower().startswith("urn:") and _plain(typed) in _plain(got):
+        return None
+    try:
+        box.fill("", timeout=2000)
+    except Exception:
+        pass
+    return error or f"LinkedIn did not take {value!r} from its list (the box showed {got!r})"
+
+
+def _plain(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()

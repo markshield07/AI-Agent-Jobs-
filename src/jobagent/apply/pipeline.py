@@ -21,13 +21,16 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, replace
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 from jobagent.answers import list_answers, set_answer
-from jobagent.apply import store
+from jobagent.apply import sessions, store
 from jobagent.apply.answering import make_answerer
+from jobagent.apply.browser.fill import wait_settled
 from jobagent.apply.browser.session import BrowserSession, BrowserUnavailable, open_browser
+from jobagent.apply.closing import deadline_passed
 from jobagent.apply.handlers import default_handlers, handler_for
 from jobagent.apply.models import MODES, Handler, HandlerResult, NeededInput, Packet
 from jobagent.apply.sessions import SITES
@@ -35,6 +38,8 @@ from jobagent.config import Settings
 from jobagent.db.database import utcnow
 from jobagent.discovery import store as jobs
 from jobagent.discovery.ats import detect_ats
+from jobagent.discovery.criteria import load_criteria
+from jobagent.discovery.scoring.rules import place_matches, score_rules
 from jobagent.llm.backend import Completer, LLMUnavailable, resolve_backend
 from jobagent.resume.facts import list_facts, list_never_claim
 from jobagent.tailor import store as variants
@@ -59,6 +64,10 @@ _JOB_STATUS_FOR = {
 }
 
 
+# The start of the reason a job is skipped for applying outside JOBAGENT_APPLY_SITES.
+SET_ASIDE = "set aside"
+
+
 class ApplyError(RuntimeError):
     """The job cannot be applied to as things stand."""
 
@@ -80,6 +89,8 @@ class ApplyReport:
     failed: int = 0
     skipped: int = 0
     cap_hit: bool = False
+    # Sites and Workday companies whose sign-in a run met, with how many jobs wait on each.
+    sign_ins: dict[str, int] = field(default_factory=dict)
     input_tokens: int = 0
     output_tokens: int = 0
     results: list[dict[str, Any]] = field(default_factory=list)
@@ -106,6 +117,8 @@ class ApplyReport:
             parts.append(f"skipped {self.skipped}")
         if self.cap_hit:
             parts.append("daily cap reached")
+        for where, count in self.sign_ins.items():
+            parts.append(f"needs sign-in: {where} ({count} waiting)")
         if self.input_tokens or self.output_tokens:
             parts.append(f"tokens {self.input_tokens} in / {self.output_tokens} out")
         return ", ".join(parts)
@@ -169,7 +182,22 @@ def build_packet(
         facts=list_facts(conn),
         never_claim=[row["term"] for row in list_never_claim(conn)],
         variant_id=variant.id,
+        wanted_places=wanted_places(conn, job),
     )
+
+
+def wanted_places(conn: sqlite3.Connection, job: Mapping[str, Any] | None = None) -> list[str]:
+    """The locations searched for, lower case; empty when none are set. With
+    the job, also the place its listing gave when a board found it searching
+    around a wanted place ("irvine, ca" for Orange County), so the posting
+    may put it there."""
+    criteria = load_criteria(conn)
+    wanted = criteria.normalised(criteria.locations)
+    near = str((job or {}).get("found_near") or "").strip().lower()
+    listed = str((job or {}).get("location") or "").strip().lower()
+    if near and listed and listed not in wanted and any(place_matches(w, near) for w in wanted):
+        wanted.append(listed)
+    return wanted
 
 
 # ------------------------------------------------------------------- run --
@@ -196,6 +224,26 @@ def _skipped(job_id: str, reason: str, application_id: int | None = None) -> dic
     }
 
 
+def _workday_signed_out(settings: Settings, url: str) -> str | None:
+    """The company's Workday host when its sign-in is known not to work (never
+    made, or met a sign-in page since): its jobs wait instead of opening a
+    browser only to stop at the same page."""
+    try:
+        host = sessions.workday_host(url)
+    except sessions.UnknownSite:
+        return None
+    state = sessions.workday_status(settings, host)["state"]
+    return host if state in ("not_signed_in", "needs_sign_in") else None
+
+
+def _workday_wait_note(settings: Settings, host: str) -> str:
+    command = sessions.workday_status(settings, host)["login_command"]
+    return (
+        f"waiting for a Workday sign-in at {host}; run `{command}` on your own machine "
+        "and it is tried again right after"
+    )
+
+
 def apply_to_job(
     conn: sqlite3.Connection,
     job_id: str,
@@ -220,30 +268,59 @@ def apply_to_job(
         app = store.application_for_job(conn, job_id)
         return _skipped(job_id, "already applied", app["id"] if app else None)
 
+    url = job.get("apply_url") or job.get("url") or ""
+    sites = settings.apply_site_list
+    if sites and not _allowed(url, sites) and _allowed(job.get("url") or "", sites):
+        # Found on LinkedIn or Indeed with a link to the company's site: the
+        # board's own posting decides whether it applies there after all.
+        url = job.get("url") or ""
+    # Queued before the rules knew better, or the criteria changed since:
+    # today's hard rules (place, excluded words, companies, pay floor) again.
+    ruled_out = _ruled_out(job, load_criteria(conn))
+    if ruled_out:
+        return _wrong_place(conn, settings, job_id, url, ruled_out)
+
     variant = variants.latest_ready_variant(conn, job_id)
     if variant is None or not variant.pdf_path or not Path(variant.pdf_path).is_file():
         return _skipped(job_id, "no ready resume for this job; run tailor first")
 
-    url = job.get("apply_url") or job.get("url") or ""
-    ats = job.get("ats_type") or detect_ats(url)
+    ats = (job.get("ats_type") if url == job.get("apply_url") else None) or detect_ats(url)
     handlers = list(handlers) if handlers is not None else default_handlers(generic=allow_generic)
     handler = handler_for(url, ats, handlers)
     if handler is None:
         return _skipped(job_id, f"no handler for {ats or 'this site'}")
+    if sites and handler.ats not in sites:
+        return _set_aside(conn, job_id, sites)
+    waiting_on = _workday_signed_out(settings, url) if handler.ats == "workday" else None
+    if waiting_on:
+        # The posting is public: no sign-in is asked for a job in the wrong place.
+        elsewhere = _posting_elsewhere(conn, settings, browser, handler, url, job)
+        if elsewhere:
+            return _wrong_place(conn, settings, job_id, url, elsewhere)
+        sessions.mark_workday_signed_out(settings, waiting_on, job_id=job_id, url=url)
+        app = store.application_for_job(conn, job_id)
+        return {
+            **_skipped(
+                job_id, _workday_wait_note(settings, waiting_on), app["id"] if app else None
+            ),
+            "sign_in": waiting_on,
+        }
     submit = mode == "auto"
-    if submit and handler.ats in SITES:
-        sent = store.submitted_last_day(conn, ats=handler.ats)
-        if sent >= settings.easy_apply_daily_cap:
-            return _skipped(
-                job_id,
-                f"{SITES[handler.ats].label} cap of {settings.easy_apply_daily_cap} "
-                "applications a day reached; it goes out tomorrow",
-            )
+    capped = _site_cap_reached(conn, settings, handler) if submit else None
+    if capped:
+        return _skipped(job_id, capped)
 
     notes: list[str] = []
     completer = _resolve_completer(settings, completer, notes)
     packet = build_packet(conn, job, variant, settings)
-    answerer = make_answerer(packet, completer=completer, allow_model=settings.apply_model_answers)
+    answerer = make_answerer(
+        packet,
+        completer=completer,
+        allow_model=settings.apply_model_answers,
+        # Auto mode is the person's own choice to send applications all the way;
+        # a dry run shows what auto mode would put on the form, without sending.
+        agree_to_terms=mode in ("auto", "dry_run"),
+    )
     application_id = store.get_or_create_application(
         conn,
         job_id,
@@ -265,13 +342,30 @@ def apply_to_job(
                 page, packet, answerer, submit=submit, screenshot_path=str(screenshot)
             )
             onward = _company_site_handler(result, handler, handlers)
+            if sites and result.outcome == "blocked" and result.external_url:
+                if onward is None or onward.ats not in sites:
+                    return {**_set_aside(conn, job_id, sites), "notes": notes}
             if onward is not None:
-                notes.append(f"{handler.ats} sends this job to {result.external_url}")
+                onward_url = result.external_url or ""
+                notes.append(f"{handler.ats} sends this job to {onward_url}")
                 handler = onward
-                packet = replace(packet, job={**packet.job, "apply_url": result.external_url})
-                result = handler.apply(
-                    page, packet, answerer, submit=submit, screenshot_path=str(screenshot)
+                packet = replace(packet, job={**packet.job, "apply_url": onward_url})
+                waiting_on = (
+                    _workday_signed_out(settings, onward_url) if handler.ats == "workday" else None
                 )
+                capped = _site_cap_reached(conn, settings, handler) if submit else None
+                if waiting_on:
+                    result = HandlerResult(
+                        outcome="blocked",
+                        error=_workday_wait_note(settings, waiting_on),
+                        sign_in=waiting_on,
+                    )
+                elif capped:
+                    result = HandlerResult(outcome="blocked", error=capped)
+                else:
+                    result = handler.apply(
+                        page, packet, answerer, submit=submit, screenshot_path=str(screenshot)
+                    )
     except BrowserUnavailable as exc:  # not the job's fault: nothing is recorded
         raise ApplyError(str(exc)) from exc
     except Exception as exc:  # a handler bug is a failed attempt, not a dead run
@@ -288,10 +382,20 @@ def apply_to_job(
             ats=handler.ats if handler.ats != "generic" else detect_ats(onward_url),
         )
 
+    if result.wrong_place:
+        return {
+            **_wrong_place(
+                conn, settings, job_id, packet.job.get("apply_url") or url, result.wrong_place
+            ),
+            "notes": notes,
+        }
+
     if result.outcome == "dry_run" and mode == "review":
         result.outcome = "review"
     if result.outcome == "submitted" and not submit:
         notes.append("the handler reported a submission in a mode that does not submit")
+    if handler.ats == "workday":
+        _note_workday_sign_in(settings, job_id, packet.job.get("apply_url") or url, result)
     attempt_id = store.record_attempt(
         conn, application_id, result, mode=mode, handler=handler.ats, started_at=started
     )
@@ -310,36 +414,165 @@ def apply_to_job(
         "needed": [n.as_dict() for n in result.needed],
         "filled": len(result.filled),
         "screenshot_path": result.screenshot_path,
+        "sign_in": result.sign_in,
         "notes": notes,
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
     }
 
 
+def _posting_elsewhere(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    browser: BrowserSession | None,
+    handler: Handler,
+    url: str,
+    job: Mapping[str, Any] | None = None,
+) -> str | None:
+    """Open the posting only to read where it is; None when that is fine or unknown."""
+    wanted = wanted_places(conn, job)
+    check = getattr(handler, "wrong_place", None)
+    if not wanted or check is None:
+        return None
+    goto = getattr(handler, "application_url", lambda u: u)(url)
+    try:
+        session_cm = nullcontext(browser) if browser is not None else open_browser(settings)
+        with session_cm as session, session.new_page() as page:
+            page.goto(goto, wait_until="domcontentloaded", timeout=30_000)
+            wait_settled(page, getattr(handler, "settle_ms", 8_000))
+            return check(page, wanted)
+    except Exception as exc:  # unknown: the job waits for the sign-in as before
+        log.info("could not read where %s is: %s", url, exc)
+        return None
+
+
+def _allowed(url: str, sites: Sequence[str]) -> bool:
+    """Whether `url` is filled by the handler of one of `sites` (the generic
+    handler, a company's own site, only when "generic" is named)."""
+    if not url:
+        return False
+    named = [h for h in default_handlers(generic="generic" in sites) if h.ats in sites]
+    return handler_for(url, detect_ats(url), named) is not None
+
+
+def _set_aside(conn: sqlite3.Connection, job_id: str, sites: Sequence[str]) -> dict[str, Any]:
+    """Skip a job that applies somewhere other than `sites`, with a reason that
+    says so: a later change of JOBAGENT_APPLY_SITES can queue it again."""
+    reason = f"{SET_ASIDE}: applies on a site other than {', '.join(sites)}"
+    jobs.set_status(conn, job_id, "skipped", reason)
+    store.withdraw_unsent(conn, job_id, reason)
+    return _skipped(job_id, reason)
+
+
+def _wrong_place(
+    conn: sqlite3.Connection, settings: Settings, job_id: str, url: str, reason: str
+) -> dict[str, Any]:
+    """Skip the job for good, with the reason, and take it off any sign-in wait."""
+    jobs.set_status(conn, job_id, "skipped", reason)
+    store.withdraw_unsent(conn, job_id, reason)
+    try:
+        sessions.clear_workday_waiting(settings, sessions.workday_host(url), [job_id])
+    except sessions.UnknownSite:
+        pass
+    return {**_skipped(job_id, reason), "wrong_place": True}
+
+
+def _note_workday_sign_in(settings: Settings, job_id: str, url: str, result: HandlerResult) -> None:
+    """What a Workday run showed about the company's sign-in: a sign-in page
+    marks it expired and parks the job until the next sign-in; getting into
+    the form proves it still works."""
+    if result.sign_in:
+        if _is_workday_host(result.sign_in):
+            sessions.mark_workday_signed_out(settings, result.sign_in, job_id=job_id, url=url)
+        return
+    if result.outcome in ("dry_run", "review", "needs_input", "submitted", "unconfirmed"):
+        try:
+            host = sessions.workday_host(url)
+        except sessions.UnknownSite:
+            return
+        sessions.record_workday_check(settings, host, "signed_in")
+        sessions.clear_workday_waiting(settings, host, [job_id])
+
+
+def _ruled_out(job: Mapping[str, Any], criteria: Any) -> str | None:
+    """Why today's rules turn the job away outright, or None: the hard rules,
+    or an application deadline in the posting that has passed."""
+    verdict = score_rules(job, criteria, set())
+    if verdict.disqualified:
+        return verdict.reason
+    return deadline_passed(str(job.get("description") or ""), date.today())
+
+
+def _site_cap_reached(conn: sqlite3.Connection, settings: Settings, handler: Handler) -> str | None:
+    """Why LinkedIn's or Indeed's own daily cap stops this application, if it does."""
+    if handler.ats not in SITES:
+        return None
+    if store.submitted_last_day(conn, ats=handler.ats) < settings.easy_apply_daily_cap:
+        return None
+    return (
+        f"{SITES[handler.ats].label} cap of {settings.easy_apply_daily_cap} "
+        "applications a day reached; it goes out tomorrow"
+    )
+
+
 def _company_site_handler(
     result: HandlerResult, handler: Handler, handlers: Sequence[Handler]
 ) -> Handler | None:
     """The handler for the company's own form, when a LinkedIn or Indeed posting
-    sends the applicant there; None when there is nowhere to go or nothing
-    that fills that site's form."""
+    sends the applicant there, or a company's careers page sends the generic
+    handler on to Workday, Greenhouse, Lever or Ashby; None when there is
+    nowhere to go or nothing that fills that site's form."""
     url = result.external_url
-    if result.outcome != "blocked" or not url or handler.ats not in SITES:
+    if result.outcome != "blocked" or not url:
         return None
-    others = [h for h in handlers if h.ats not in SITES]
+    if handler.ats not in SITES and handler.ats != "generic":
+        return None
+    # Never back to the handler that sent it: the generic handler hands over
+    # only to a site with a handler of its own, Indeed's included (a company
+    # page that applies through Indeed Apply).
+    others = [
+        h
+        for h in handlers
+        if h.ats != handler.ats and (handler.ats == "generic" or h.ats not in SITES)
+    ]
     return handler_for(url, detect_ats(url), others)
 
 
-def _candidates(conn: sqlite3.Connection, job_ids: Iterable[str] | None, limit: int) -> list[str]:
+def _candidates(
+    conn: sqlite3.Connection,
+    job_ids: Iterable[str] | None,
+    limit: int,
+    sites: Sequence[str] = (),
+) -> list[str]:
     if job_ids:
         return list(dict.fromkeys(job_ids))
     picked: list[str] = []
-    for job in jobs.list_jobs(conn, status="queued", limit=max(limit * 5, 50)):
+    queued = jobs.list_jobs(conn, status="queued", limit=max(limit * 5, 50))
+    for job in in_apply_order(queued, sites):
         if variants.latest_ready_variant(conn, job["id"]) is None:
             continue
         picked.append(job["id"])
         if len(picked) >= limit:
             break
     return picked
+
+
+def in_apply_order(queued: Iterable[Mapping[str, Any]], sites: Sequence[str]) -> list[Any]:
+    """The queued jobs worth a resume and a try, given JOBAGENT_APPLY_SITES:
+    with no sites named, all of them as they are. Otherwise only jobs found on
+    one of the sites, and first those whose posting applies there too (no link
+    to a company's site), since those are the ones most likely to be sent."""
+    queued = list(queued)
+    if not sites:
+        return queued
+    on_site, maybe = [], []
+    for job in queued:
+        posting, apply = job.get("url") or "", job.get("apply_url") or ""
+        if apply and apply != posting and _allowed(apply, sites):
+            on_site.append(job)
+        elif _allowed(posting, sites):
+            (on_site if not apply or apply == posting else maybe).append(job)
+    return on_site + maybe
 
 
 def run_apply(
@@ -363,7 +596,7 @@ def run_apply(
     submit = mode == "auto"
     delay = settings.apply_delay_seconds if delay is None else delay
     report = ApplyReport(run_id=None, mode=mode)
-    candidates = _candidates(conn, job_ids, limit)
+    candidates = _candidates(conn, job_ids, limit, settings.apply_site_list)
     report.considered = len(candidates)
     if not candidates:
         report.notes.append("nothing to apply to: no queued job has a ready resume")
@@ -398,6 +631,8 @@ def run_apply(
     except BrowserUnavailable as exc:
         report.notes.append(str(exc))
     finally:
+        for where in report.sign_ins:
+            report.notes.append(_sign_in_note(settings, where))
         jobs.finish_run(
             conn,
             report.run_id,
@@ -409,8 +644,30 @@ def run_apply(
     return report
 
 
+def _is_workday_host(host: str) -> bool:
+    try:
+        return sessions.workday_host(f"https://{host}/") == host
+    except sessions.UnknownSite:
+        return False
+
+
+def _sign_in_note(settings: Settings, where: str) -> str:
+    if where in SITES:
+        return f"{SITES[where].label} needs you to sign in again: run `jobagent login {where}`"
+    if not _is_workday_host(where):
+        return f"{where} needs you to sign in again"
+    status = sessions.workday_status(settings, where)
+    return (
+        f"Workday at {where} needs you to sign in again: run `{status['login_command']}`; "
+        f"{status['waiting']} application(s) wait for it and run right after"
+    )
+
+
 def _tally(report: ApplyReport, record: Mapping[str, Any]) -> None:
     report.results.append(dict(record))
+    if record.get("sign_in"):
+        where = str(record["sign_in"])
+        report.sign_ins[where] = report.sign_ins.get(where, 0) + 1
     outcome = record["outcome"]
     if outcome == "skipped":
         report.skipped += 1

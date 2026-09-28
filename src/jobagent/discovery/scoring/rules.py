@@ -97,19 +97,29 @@ def _disqualify(job: Mapping[str, Any], criteria: SearchCriteria, haystack: str)
 
 
 def _not_remote(job: Mapping[str, Any], title: str, criteria: SearchCriteria) -> str | None:
-    """A reason to drop a posting that is not remote when Remote is the only
-    location wanted: the board marks it on-site, or its title or location says
-    hybrid or on-site. A posting that leaves the question open stays in."""
+    """A reason to drop a posting that plainly wants someone in an office the
+    person did not ask for: the board marks it on-site, or its title or
+    location says hybrid or on-site, and its location is none of the places
+    wanted. Remote postings, postings in a wanted place, and postings that
+    leave the question open stay in. With no locations set, nothing is
+    dropped here."""
     wanted = criteria.normalised(criteria.locations)
-    if not wanted or any(want != "remote" for want in wanted):
+    if not wanted:
         return None
     if _is_remote(job, title):
         return None
     flag = job.get("remote")
     have = _text(job, "location").strip()
-    if flag is False or flag == 0 or _in_office(title) or _in_office(have):
+    if not (flag is False or flag == 0 or _in_office(title) or _in_office(have)):
+        return None
+    lower = have.lower()
+    have_words = set(_words(lower))
+    places = [want for want in wanted if want != "remote"]
+    if any(_location_matches(want, lower, have_words) for want in places):
+        return None
+    if not places:
         return f"not remote ({have or 'on-site'}); only Remote is wanted"
-    return None
+    return f"not remote ({have or 'on-site'}) and not in {', '.join(places)}"
 
 
 # -------------------------------------------------------------- components --

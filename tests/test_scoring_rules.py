@@ -159,7 +159,8 @@ def test_location_remote_flag_with_remote_ok():
     criteria = crit(locations=["Austin, TX"])
     assert points("location", criteria, remote=True, location=None) == 20
     assert points("location", criteria, remote=1, location="Berlin") == 20
-    assert points("location", criteria, remote=False, location="Berlin") == 0
+    # On-site elsewhere is dropped outright rather than scored low.
+    assert rejected(criteria, remote=False, location="Berlin")
 
 
 def test_location_remote_mention_in_location_or_title():
@@ -240,7 +241,7 @@ def test_a_second_location_keeps_on_site_postings_in_play():
 def test_hybrid_is_not_counted_as_remote():
     criteria = crit(locations=["Herndon, VA"])
     assert points("location", criteria, remote=True, location="Hybrid - Herndon, VA") == 20
-    assert points("location", crit(locations=["Boston"]), remote=True, location="Hybrid") == 0
+    assert rejected(crit(locations=["Boston"]), remote=True, location="Hybrid")
 
 
 # ---------------------------------------------------------------- keywords --
@@ -381,3 +382,14 @@ def test_passes_applies_the_threshold_and_disqualification():
     assert passes(RuleScore(score=59, disqualified=False, reason=""), criteria) is False
     assert passes(RuleScore(score=0, disqualified=True, reason=""), crit(min_score=0)) is False
     assert passes(score_rules({}, SearchCriteria(), set()), SearchCriteria()) is True
+
+
+def test_cities_plus_remote_drop_on_site_postings_elsewhere():
+    local = crit(locations=["Remote", "menifee", "temecula", "winchester"])
+    assert rejected(local, remote=0, location="Little Rock, AR, US")
+    assert rejected(local, remote=False, location="CA, US")
+    reason = score(local, remote=0, location="Plano, TX").reason
+    assert "not in menifee, temecula, winchester" in reason
+    assert not rejected(local, remote=0, location="Temecula, CA, US")
+    assert not rejected(local, remote=True, location="Lonoke, AR, US")
+    assert not rejected(local, location="San Diego, CA, US")

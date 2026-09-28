@@ -645,3 +645,37 @@ def test_a_moved_progress_bar_over_the_old_page_is_not_the_next_step():
     blank = "|current step 3 of 6 Application Questions 1 of 2"
     assert not _arrived(blank, before)
     assert not _arrived(blank, before, seen_loading=True)
+
+
+# ----------------------------------------------------------------- place --
+
+
+@pytest.mark.parametrize(
+    ("query", "skipped"),
+    [
+        ("place=Lonoke%2C%20AR", True),
+        ("place=Lonoke%2C%20AR&remote_type=Fully%20Remote", False),
+        ("place=Temecula%2C%20CA&remote_type=Hybrid", False),
+        ("ld=Lonoke%2C%20AR&place=2%20Locations", True),
+        ("ld=Lonoke%2C%20AR&ld_remote=1&place=Lonoke%2C%20AR", False),
+        ("", False),
+    ],
+)
+def test_a_posting_placed_outside_the_wanted_places_stops_before_sign_in(
+    page, packet, query, skipped
+):
+    packet.wanted_places = ["remote", "menifee, ca", "temecula, ca"]
+    packet.job["url"] = fixture_url("signed_out") + ("&" + query if query else "")
+    handler = WorkdayHandler()
+    handler.settle_ms = 500
+    handler.pause_ms = 100
+    handler.step_timeout_ms = 5_000
+    handler.poll_ms = 50
+    answerer = make_answerer(packet, completer=None, allow_model=False)
+    result = handler.apply(page, packet, answerer, submit=False)
+    if skipped:
+        assert result.wrong_place and "Lonoke, AR" in result.wrong_place
+        assert result.sign_in is None and js(page, "__steps") == []
+    else:
+        assert result.wrong_place is None
+        assert result.sign_in, "it went on to the sign-in page, as before"

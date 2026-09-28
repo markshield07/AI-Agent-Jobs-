@@ -813,3 +813,119 @@ def test_a_linkedin_job_sent_to_a_lapsed_workday_waits_for_it(conn, settings, re
     assert workday.calls == [], "never signed in there: the form is not opened"
     assert record["outcome"] == "blocked" and record["sign_in"] == WD_HOST
     assert sessions.workday_waiting(settings, WD_HOST) == [jid]
+
+
+# ------------------------------------------------------ the posting's place --
+
+
+class PlacedHandler(FakeHandler):
+    """A handler whose posting names a place, as the real ones read it."""
+
+    def __init__(self, *results, elsewhere=None, **kw):
+        super().__init__(*results, **kw)
+        self.elsewhere = elsewhere
+        self.checked: list[list[str]] = []
+
+    def wrong_place(self, page, wanted):
+        self.checked.append(list(wanted))
+        return self.elsewhere if wanted else None
+
+
+class PostingPage:
+    def __init__(self) -> None:
+        self.visited: list[str] = []
+
+    def goto(self, url, **kw):
+        self.visited.append(url)
+
+    def wait_for_load_state(self, *a, **kw):
+        pass
+
+    def wait_for_timeout(self, ms):
+        pass
+
+
+class PostingBrowser:
+    def __init__(self) -> None:
+        self.page = PostingPage()
+
+    @contextmanager
+    def new_page(self):
+        yield self.page
+
+
+def _wanted(conn, *places):
+    from jobagent.discovery.criteria import SearchCriteria, save_criteria
+
+    save_criteria(conn, SearchCriteria(titles=["Engineer"], locations=list(places)))
+
+
+def test_the_packet_carries_the_places_searched_for(conn, settings, ready_job):
+    _wanted(conn, "Remote", "Menifee, CA")
+    jid = ready_job()
+    variant = variants.latest_ready_variant(conn, jid)
+    packet = build_packet(conn, jobs.get_job(conn, jid), variant, settings)
+    assert packet.wanted_places == ["remote", "menifee, ca"]
+
+
+def test_a_posting_in_the_wrong_place_is_skipped_for_good(conn, settings, ready_job):
+    _wanted(conn, "Remote", "Menifee, CA")
+    jid = ready_job()
+    reason = "the posting itself puts the job in Lonoke, AR, not remote and not in menifee, ca"
+    handler = FakeHandler(_result("blocked", error=reason, wrong_place=reason))
+    record = _apply(conn, jid, settings, handler, mode="auto")
+    assert record["outcome"] == "skipped" and record["reason"] == reason
+    assert record["wrong_place"] is True
+    job = jobs.get_job(conn, jid)
+    assert job["status"] == "skipped" and job["score_reason"] == reason
+    # Nothing was tried, so nothing is left under Applications asking for attention.
+    assert store.application_for_job(conn, jid) is None
+    assert store.list_applications(conn) == []
+
+
+def test_a_job_parked_for_a_workday_sign_in_is_checked_before_asking(conn, settings, ready_job):
+    from jobagent.apply import sessions
+
+    _wanted(conn, "Remote", "Temecula, CA")
+    _workday_signed_in(settings)
+    jid = ready_job(WD_POSTING)
+    # An earlier run met the sign-in page and parked the job.
+    app_id = store.get_or_create_application(conn, jid, mode="auto", ats="workday")
+    store.record_attempt(
+        conn,
+        app_id,
+        _result("blocked", error="not signed in", sign_in=WD_HOST),
+        mode="auto",
+        handler="workday",
+        started_at="2026-09-28T06:00:00+00:00",
+    )
+    sessions.mark_workday_signed_out(settings, WD_HOST, job_id=jid, url=WD_POSTING)
+
+    browser = PostingBrowser()
+    workday = PlacedHandler(
+        ats="workday", hosts=(WD_HOST,), elsewhere="the posting itself puts the job in Lonoke, AR"
+    )
+    record = _apply(conn, jid, settings, workday, browser=browser, mode="auto")
+    assert record["outcome"] == "skipped" and "Lonoke, AR" in record["reason"]
+    assert "sign_in" not in record, "no sign-in is asked for a job in the wrong place"
+    assert browser.page.visited == [WD_POSTING] and workday.calls == []
+    assert sessions.workday_waiting(settings, WD_HOST) == []
+    assert jobs.get_job(conn, jid)["status"] == "skipped"
+    # Tried once already, so it stays on record, marked withdrawn with the reason.
+    app = store.get_application(conn, app_id)
+    assert app["status"] == "withdrawn"
+    assert "Lonoke, AR" in store.list_events(conn, app_id)[-1]["note"]
+
+
+def test_a_parked_job_in_a_wanted_place_still_waits_for_the_sign_in(conn, settings, ready_job):
+    from jobagent.apply import sessions
+
+    _wanted(conn, "Remote")
+    _workday_signed_in(settings)
+    jid = ready_job(WD_POSTING)
+    sessions.mark_workday_signed_out(settings, WD_HOST, job_id=jid, url=WD_POSTING)
+    workday = PlacedHandler(ats="workday", hosts=(WD_HOST,), elsewhere=None)
+    record = _apply(conn, jid, settings, workday, browser=PostingBrowser())
+    assert record["outcome"] == "skipped" and record["sign_in"] == WD_HOST
+    assert workday.checked == [["remote"]]
+    assert sessions.workday_waiting(settings, WD_HOST) == [jid]

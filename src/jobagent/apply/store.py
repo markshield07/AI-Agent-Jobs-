@@ -305,6 +305,24 @@ def _application_dict(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, A
     return d
 
 
+def withdraw_unsent(conn: sqlite3.Connection, job_id: str, note: str) -> None:
+    """Stop an application to this job that was never sent: removed when nothing
+    was ever tried, else marked withdrawn with the note, so it asks nothing more."""
+    app = application_for_job(conn, job_id)
+    if app is None or app.get("submitted_at"):
+        return
+    tried = conn.execute(
+        "SELECT 1 FROM submission_attempts WHERE application_id = ? LIMIT 1", (app["id"],)
+    ).fetchone()
+    if tried is None:
+        with transaction(conn):
+            conn.execute("DELETE FROM application_events WHERE application_id = ?", (app["id"],))
+            conn.execute("DELETE FROM applications WHERE id = ?", (app["id"],))
+        return
+    if app.get("status") != "withdrawn":
+        add_event(conn, app["id"], to_status="withdrawn", note=note, source="campaign")
+
+
 def job_is_applied(conn: sqlite3.Connection, job_id: str) -> bool:
     row = conn.execute(
         "SELECT submitted_at FROM applications WHERE job_id = ?", (job_id,)

@@ -193,6 +193,17 @@ def456: dry_run via lever, 12 fields filled, application 5
 An answer is stored under its own key, so the next form that asks the same
 thing, on any site, is filled without asking you again.
 
+Before filling anything, or asking you to sign in, each handler reads where
+the employer's own posting says the job is: the schema.org JobPosting most
+career sites embed, then the site's own fields (Workday's locations and remote
+type). A board can list a job as remote when the company's posting names an
+office. If the posting puts the job in a specific place that is none of your
+locations, and nothing on it says remote, the job is skipped for good with that
+reason. Nothing is tried and no sign-in is asked for. A broad place ("United
+States"), several places, or no place at all lets it go ahead. A job already
+waiting for a Workday sign-in is checked the same way before it waits any
+longer.
+
 An application is only ever recorded as **submitted** when the page itself
 confirmed it. A button that was pressed with neither a confirmation nor an error
 is `unconfirmed`, and the job waits for you to look rather than being tried

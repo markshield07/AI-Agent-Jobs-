@@ -27,6 +27,7 @@ from typing import Any
 from jobagent.answers import list_answers, set_answer
 from jobagent.apply import sessions, store
 from jobagent.apply.answering import make_answerer
+from jobagent.apply.browser.fill import wait_settled
 from jobagent.apply.browser.session import BrowserSession, BrowserUnavailable, open_browser
 from jobagent.apply.handlers import default_handlers, handler_for
 from jobagent.apply.models import MODES, Handler, HandlerResult, NeededInput, Packet
@@ -35,6 +36,7 @@ from jobagent.config import Settings
 from jobagent.db.database import utcnow
 from jobagent.discovery import store as jobs
 from jobagent.discovery.ats import detect_ats
+from jobagent.discovery.criteria import load_criteria
 from jobagent.llm.backend import Completer, LLMUnavailable, resolve_backend
 from jobagent.resume.facts import list_facts, list_never_claim
 from jobagent.tailor import store as variants
@@ -173,7 +175,14 @@ def build_packet(
         facts=list_facts(conn),
         never_claim=[row["term"] for row in list_never_claim(conn)],
         variant_id=variant.id,
+        wanted_places=wanted_places(conn),
     )
+
+
+def wanted_places(conn: sqlite3.Connection) -> list[str]:
+    """The locations searched for, lower case; empty when none are set."""
+    criteria = load_criteria(conn)
+    return criteria.normalised(criteria.locations)
 
 
 # ------------------------------------------------------------------- run --
@@ -256,6 +265,10 @@ def apply_to_job(
         return _skipped(job_id, f"no handler for {ats or 'this site'}")
     waiting_on = _workday_signed_out(settings, url) if handler.ats == "workday" else None
     if waiting_on:
+        # The posting is public: no sign-in is asked for a job in the wrong place.
+        elsewhere = _posting_elsewhere(conn, settings, browser, handler, url)
+        if elsewhere:
+            return _wrong_place(conn, settings, job_id, url, elsewhere)
         sessions.mark_workday_signed_out(settings, waiting_on, job_id=job_id, url=url)
         app = store.application_for_job(conn, job_id)
         return {
@@ -339,6 +352,14 @@ def apply_to_job(
             ats=handler.ats if handler.ats != "generic" else detect_ats(onward_url),
         )
 
+    if result.wrong_place:
+        return {
+            **_wrong_place(
+                conn, settings, job_id, packet.job.get("apply_url") or url, result.wrong_place
+            ),
+            "notes": notes,
+        }
+
     if result.outcome == "dry_run" and mode == "review":
         result.outcome = "review"
     if result.outcome == "submitted" and not submit:
@@ -368,6 +389,43 @@ def apply_to_job(
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
     }
+
+
+def _posting_elsewhere(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    browser: BrowserSession | None,
+    handler: Handler,
+    url: str,
+) -> str | None:
+    """Open the posting only to read where it is; None when that is fine or unknown."""
+    wanted = wanted_places(conn)
+    check = getattr(handler, "wrong_place", None)
+    if not wanted or check is None:
+        return None
+    goto = getattr(handler, "application_url", lambda u: u)(url)
+    try:
+        session_cm = nullcontext(browser) if browser is not None else open_browser(settings)
+        with session_cm as session, session.new_page() as page:
+            page.goto(goto, wait_until="domcontentloaded", timeout=30_000)
+            wait_settled(page, getattr(handler, "settle_ms", 8_000))
+            return check(page, wanted)
+    except Exception as exc:  # unknown: the job waits for the sign-in as before
+        log.info("could not read where %s is: %s", url, exc)
+        return None
+
+
+def _wrong_place(
+    conn: sqlite3.Connection, settings: Settings, job_id: str, url: str, reason: str
+) -> dict[str, Any]:
+    """Skip the job for good, with the reason, and take it off any sign-in wait."""
+    jobs.set_status(conn, job_id, "skipped", reason)
+    store.withdraw_unsent(conn, job_id, reason)
+    try:
+        sessions.clear_workday_waiting(settings, sessions.workday_host(url), [job_id])
+    except sessions.UnknownSite:
+        pass
+    return {**_skipped(job_id, reason), "wrong_place": True}
 
 
 def _note_workday_sign_in(settings: Settings, job_id: str, url: str, result: HandlerResult) -> None:

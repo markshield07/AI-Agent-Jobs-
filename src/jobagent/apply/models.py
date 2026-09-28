@@ -162,6 +162,9 @@ class Packet:
     facts: list[Any] = field(default_factory=list)  # active Facts: all a model answer may use
     never_claim: list[str] = field(default_factory=list)
     variant_id: int | None = None
+    # The locations searched for; a posting whose own page puts it elsewhere,
+    # and not remote, is skipped. Empty means no check.
+    wanted_places: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -184,6 +187,9 @@ class HandlerResult:
     # Set when the run stopped at a sign-in page: the site to sign in to again
     # (linkedin, indeed, or a company's Workday host).
     sign_in: str | None = None
+    # Set when the posting's own location is outside the places wanted: the
+    # reason, and the job is skipped rather than tried again.
+    wrong_place: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
 

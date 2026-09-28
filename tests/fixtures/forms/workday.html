@@ -35,6 +35,9 @@
     draft        an earlier run saved a draft: the posting offers Continue Application, which
                  opens the first unsaved step (My Information) with no start choice
     stuck        Apply Manually leaves the loading page up for good
+  Where the posting says the job is, with more parameters: ?place=Lonoke, AR sets the
+  locations field, ?remote_type=Hybrid adds Workday's remote type field, and ?ld=... adds a
+  schema.org JobPosting at that city (?ld_remote=1 marks it TELECOMMUTE).
   Without autofill (manual, draft) My Experience has one empty work entry, as live.
 -->
 <style>
@@ -64,7 +67,7 @@
 
 <section id="posting">
   <h2 data-automation-id="jobPostingHeader">Network Engineering Manager</h2>
-  <div>Remote, USA</div>
+  <div data-automation-id="locations"><dl><dt>locations</dt><dd>Remote, USA</dd></dl></div>
   <div data-variant="closed"><p>This job posting is no longer accepting applications.</p></div>
   <div data-variant=",manual,signed_out,needs_input,invalid,unconfirmed,stuck,greyed">
     <a data-automation-id="adventureButton" role="button" href="#apply">Apply</a>
@@ -450,6 +453,26 @@
 <script>
 (function () {
   var variant = new URLSearchParams(location.search).get('variant') || '';
+  var qs = new URLSearchParams(location.search);
+  if (qs.get('place')) document.querySelector('[data-automation-id="locations"] dd').textContent = qs.get('place');
+  if (qs.get('remote_type')) {
+    var rt = document.createElement('div');
+    rt.setAttribute('data-automation-id', 'remoteType');
+    rt.innerHTML = '<dl><dt>remote type</dt><dd></dd></dl>';
+    rt.querySelector('dd').textContent = qs.get('remote_type');
+    document.getElementById('posting').appendChild(rt);
+  }
+  if (qs.get('ld')) {
+    var city = qs.get('ld').split(',');
+    var posting = { '@context': 'https://schema.org', '@type': 'JobPosting', title: 'Network Engineering Manager',
+      jobLocation: { '@type': 'Place', address: { '@type': 'PostalAddress', addressLocality: city[0].trim(),
+        addressRegion: (city[1] || '').trim(), addressCountry: 'US' } } };
+    if (qs.get('ld_remote')) posting.jobLocationType = 'TELECOMMUTE';
+    var ld = document.createElement('script');
+    ld.type = 'application/ld+json';
+    ld.textContent = JSON.stringify(posting);
+    document.head.appendChild(ld);
+  }
   var token = new URLSearchParams(location.search).get('token') || '';
   Array.prototype.forEach.call(document.querySelectorAll('[data-variant]'), function (el) {
     var wanted = el.getAttribute('data-variant').split(',');

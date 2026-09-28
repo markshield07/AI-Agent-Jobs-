@@ -165,6 +165,19 @@ def list_jobs(
     return [_row_to_dict(r) for r in rows]
 
 
+def jobs_with_ready_resume(conn: sqlite3.Connection, ids: list[str]) -> set[str]:
+    """The ids among `ids` that have a tailored resume which passed the fact check."""
+    if not ids:
+        return set()
+    marks = ",".join("?" * len(ids))
+    rows = conn.execute(
+        "SELECT DISTINCT job_id FROM resume_variants"
+        f" WHERE status = 'ready' AND job_id IN ({marks})",
+        ids,
+    ).fetchall()
+    return {r["job_id"] for r in rows}
+
+
 def count_jobs(conn: sqlite3.Connection) -> dict[str, int]:
     rows = conn.execute("SELECT status, COUNT(*) AS n FROM jobs GROUP BY status").fetchall()
     return {r["status"]: r["n"] for r in rows}

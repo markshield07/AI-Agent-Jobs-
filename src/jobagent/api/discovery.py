@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 
 from jobagent.api.models import DiscoverOut, JobStatusIn
 from jobagent.api.routes import DbDep, SettingsDep
-from jobagent.discovery import store
+from jobagent.discovery import brief, store
 from jobagent.discovery.criteria import SearchCriteria, dump_criteria, load_criteria, save_criteria
 from jobagent.discovery.pipeline import run_discovery
 
@@ -54,14 +54,17 @@ def get_jobs(
 ) -> list[dict[str, Any]]:
     if status is not None and status not in store.STATUSES:
         raise HTTPException(400, f"Unknown status {status!r}. One of: {', '.join(store.STATUSES)}.")
-    return store.list_jobs(
-        db.connection(),
-        status=status,
-        min_score=min_score,
-        source=source,
-        limit=limit,
-        offset=offset,
+    conn = db.connection()
+    found = store.list_jobs(
+        conn, status=status, min_score=min_score, source=source, limit=limit, offset=offset
     )
+    return job_cards(conn, found)
+
+
+def job_cards(conn, found: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each job's list form, and whether a resume is tailored and ready for it."""
+    ready = store.jobs_with_ready_resume(conn, [j["id"] for j in found])
+    return [{**brief.card(j), "resume_ready": j["id"] in ready} for j in found]
 
 
 @router.get("/jobs/counts")
@@ -71,10 +74,20 @@ def get_job_counts(db: DbDep) -> dict[str, int]:
 
 @router.get("/jobs/{job_id}")
 def get_job(job_id: str, db: DbDep) -> dict[str, Any]:
-    job = store.get_job(db.connection(), job_id)
+    conn = db.connection()
+    job = store.get_job(conn, job_id)
     if job is None:
         raise HTTPException(404, f"No job {job_id}.")
-    return job
+    return with_brief(job, ready=bool(store.jobs_with_ready_resume(conn, [job_id])))
+
+
+def with_brief(job: dict[str, Any], ready: bool | None = None) -> dict[str, Any]:
+    """The full job with its summary, pay and highlights beside the description."""
+    out = {**job, "summary": brief.summary(job.get("description")), "pay": brief.pay(job)}
+    out["highlights"] = brief.highlights(job.get("description"))
+    if ready is not None:
+        out["resume_ready"] = ready
+    return out
 
 
 @router.patch("/jobs/{job_id}")

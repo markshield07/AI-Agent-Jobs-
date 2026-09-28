@@ -2,28 +2,30 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f4f5f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e1116" media="(prefers-color-scheme: dark)">
 <title>Job Agent</title>
 <link rel="stylesheet" href="style.css">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f6fdf'/%3E%3Cpath d='M9 17l5 5 9-11' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233563e9'/%3E%3Cpath d='M9 17l5 5 9-11' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 </head>
 <body>
 <header class="top">
   <div class="brand">
-    <span class="logo" aria-hidden="true"></span>
-    <span>Job Agent</span>
+    <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6.5 12.5l3.5 3.5 7.5-8.5"/></svg></span>
+    <span class="name">Job Agent</span>
     <span class="mode" id="mode-badge" title="Submission mode">…</span>
   </div>
   <nav class="tabs" aria-label="Sections">
-    <a href="#overview" data-tab="overview">Overview</a>
-    <a href="#applications" data-tab="applications">Applications</a>
-    <a href="#jobs" data-tab="jobs">Jobs</a>
-    <a href="#profile" data-tab="profile">Resume &amp; answers</a>
-    <a href="#settings" data-tab="settings">Settings</a>
+    <a href="#overview" data-tab="overview"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg><span class="l">Overview</span></a>
+    <a href="#applications" data-tab="applications"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 3L10.5 13.5"/><path d="M21 3l-6.5 18-4-7.5L3 9.5 21 3z"/></svg><span class="l">Applications</span></a>
+    <a href="#jobs" data-tab="jobs"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M8.5 7V5.5a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2V7"/><path d="M3 12.5h18"/></svg><span class="l">Jobs</span></a>
+    <a href="#profile" data-tab="profile"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c.8-3.6 3.8-5.5 7.5-5.5s6.7 1.9 7.5 5.5"/></svg><span class="l">Resume &amp; answers</span><span class="s">Resume</span></a>
+    <a href="#settings" data-tab="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h9M17 6.5h3M4 12h3M11 12h9M4 17.5h11M19 17.5h1"/><circle cx="15" cy="6.5" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17.5" r="2"/></svg><span class="l">Settings</span></a>
   </nav>
   <div class="actions">
     <button type="button" data-run="discover" title="Search the boards now">Find jobs</button>
-    <button type="button" data-run="apply" title="Fill the forms of queued jobs that have a tailored resume">Apply</button>
+    <button type="button" data-run="apply" class="primary" title="Apply to queued jobs that have a tailored resume">Apply now</button>
     <button type="button" data-run="inbox" title="Read the mailbox for replies">Check replies</button>
   </div>
 </header>
@@ -33,11 +35,33 @@
 <main>
   <!-- ------------------------------------------------------------ overview -->
   <section id="view-overview" class="view" hidden>
-    <div class="attention" id="attention"></div>
+    <div class="hello">
+      <div>
+        <h1 id="hello-title">Overview</h1>
+        <p class="lede" id="hello-line"></p>
+      </div>
+      <div class="attention" id="attention"></div>
+    </div>
 
     <div class="kpis" id="kpis"></div>
 
     <div class="grid two">
+      <article class="card">
+        <header class="card-head">
+          <h2>Recently applied</h2>
+          <a class="more" href="#applications">All applications</a>
+        </header>
+        <div id="recent" class="job-list"></div>
+      </article>
+
+      <article class="card">
+        <header class="card-head">
+          <h2>Up next <span class="count" id="queued-count"></span></h2>
+          <a class="more" href="#jobs">Whole queue</a>
+        </header>
+        <div id="up-next" class="job-list"></div>
+      </article>
+
       <article class="card wide">
         <header class="card-head">
           <h2>Applications per day</h2>
@@ -62,6 +86,11 @@
       </article>
 
       <article class="card">
+        <header class="card-head"><h2>Recent activity</h2></header>
+        <ol id="activity" class="feed"></ol>
+      </article>
+
+      <article class="card">
         <header class="card-head"><h2>Job categories</h2></header>
         <div id="categories"></div>
       </article>
@@ -70,26 +99,22 @@
         <header class="card-head"><h2>By site</h2></header>
         <div id="sites"></div>
       </article>
-
-      <article class="card">
-        <header class="card-head"><h2>Recent activity</h2></header>
-        <ol id="activity" class="feed"></ol>
-      </article>
     </div>
   </section>
 
   <!-- -------------------------------------------------------- applications -->
   <section id="view-applications" class="view" hidden>
-    <div class="toolbar">
+    <div class="page-head">
+      <h1>Applications</h1>
       <div class="chips" id="app-filters"></div>
     </div>
     <div class="split">
       <div class="card list-card">
-        <table class="table" id="app-table">
-          <thead><tr><th>Job</th><th>Site</th><th>Status</th><th>Sent</th></tr></thead>
+        <table class="table rows" id="app-table">
+          <thead><tr><th>Job</th><th>Pay</th><th>Status</th><th>Sent</th></tr></thead>
           <tbody></tbody>
         </table>
-        <p class="empty" id="app-empty" hidden>No applications yet. Queue a few jobs, tailor them, then press Apply.</p>
+        <p class="empty" id="app-empty" hidden>No applications yet. Queue a few jobs, then press Apply now.</p>
       </div>
       <aside class="card detail" id="app-detail" hidden></aside>
     </div>
@@ -97,21 +122,21 @@
 
   <!-- ---------------------------------------------------------------- jobs -->
   <section id="view-jobs" class="view" hidden>
-    <div class="toolbar">
+    <div class="page-head">
+      <h1>Jobs</h1>
       <div class="chips" id="job-filters"></div>
-      <label class="inline">Min score <input type="number" id="job-min-score" min="0" max="100" step="5" value=""></label>
     </div>
-    <div class="card list-card">
-      <table class="table" id="job-table">
-        <thead><tr><th>Job</th><th>Category</th><th class="num">Score</th><th>Found</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <p class="empty" id="job-empty" hidden>Nothing here. Set what to search for under Settings, then press Find jobs.</p>
+    <div class="toolbar">
+      <input type="search" id="job-search" placeholder="Search title, company or place" aria-label="Search jobs">
+      <label class="inline">Match at least <input type="number" id="job-min-score" min="0" max="100" step="5" value=""></label>
     </div>
+    <div id="job-list" class="job-grid"></div>
+    <p class="empty card" id="job-empty" hidden>Nothing here. Set what to search for under Settings, then press Find jobs.</p>
   </section>
 
   <!-- ------------------------------------------------------------- profile -->
   <section id="view-profile" class="view" hidden>
+    <div class="page-head"><h1>Resume &amp; answers</h1></div>
     <div class="grid two">
       <article class="card">
         <header class="card-head"><h2>Resume</h2></header>
@@ -156,6 +181,7 @@
 
   <!-- ------------------------------------------------------------ settings -->
   <section id="view-settings" class="view" hidden>
+    <div class="page-head"><h1>Settings</h1></div>
     <div class="grid two">
       <article class="card">
         <header class="card-head"><h2>Sign-ins</h2></header>
@@ -172,8 +198,8 @@
       <article class="card wide">
         <header class="card-head"><h2>What to search for</h2></header>
         <form id="criteria-form" class="criteria">
-          <label>Job titles <textarea name="titles" rows="2" placeholder="One per line or comma-separated"></textarea></label>
-          <label>Locations <textarea name="locations" rows="2"></textarea></label>
+          <label>Job titles <textarea name="titles" rows="3" placeholder="One per line or comma-separated"></textarea></label>
+          <label>Locations <textarea name="locations" rows="3"></textarea></label>
           <label>Keywords that earn points <textarea name="keywords" rows="2"></textarea></label>
           <label>Words that rule a posting out <textarea name="exclude_keywords" rows="2"></textarea></label>
           <label>Companies to skip <textarea name="company_blacklist" rows="2"></textarea></label>
@@ -191,6 +217,10 @@
     </div>
   </section>
 </main>
+
+<!-- One job, opened from a card: the posting's summary, pay and main points. -->
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden></aside>
 
 <script src="app.js"></script>
 </body>

@@ -38,7 +38,7 @@ def test_application_is_one_per_job_and_details_overwrite(conn, job_id):
     app = store.get_application(conn, first)
     assert app["mode"] == "auto" and app["ats"] == "lever", "unset details are kept"
     assert app["status"] == "pending" and app["attempts"] == 0
-    assert app["job"] == {
+    assert {k: app["job"][k] for k in ("id", "title", "company", "url", "apply_url", "status")} == {
         "id": job_id,
         "title": "Engineer",
         "company": "Acme",
@@ -46,6 +46,8 @@ def test_application_is_one_per_job_and_details_overwrite(conn, job_id):
         "apply_url": None,
         "status": "queued",
     }
+    # What the dashboard's cards show; the full description stays out of lists.
+    assert app["job"]["pay"] is None and "description" not in app["job"]
     assert store.application_for_job(conn, job_id)["id"] == first
     assert store.application_for_job(conn, "nope") is None
 

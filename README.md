@@ -187,7 +187,19 @@ presses apply-with-LinkedIn (or Indeed, Google...), sign-ins, account creation
 or job alerts, and with a job-alert box beside the application it fills only
 the application. An Apply that lands on Workday, Greenhouse, Lever or Ashby is
 handed to that site's own handler. A sign-in with no guest way round is
-reported as such.
+reported as such, and so is a form that turns out to be a talent-community
+sign-up or a check of your email or phone by a code (ADP's guest step): nothing
+is typed into it. Before any press it reads the posting itself, and a posting
+whose own application deadline has passed, or that puts the job in a place you
+do not want, is skipped with the reason. A resume that goes through the page's
+own Upload Resume button goes first, the page gets up to 30 seconds to finish
+reading it (its spinner), and the page must then show the file as attached;
+if it never does, the application stops rather than go without it. After
+filling, it looks at the form again: a question an answer brought up (Serco's
+"Source" after "How did you hear") is answered, and a box the page emptied is
+filled again. A required field with no answer on file that the page already
+filled (a Country set to United States) keeps what the page chose, except for
+the questions only you answer.
 
 What goes on the form comes from three places, in order: your contact details
 and the tailored resume for that job, then the answer bank, then the model, and
@@ -336,12 +348,22 @@ you hear about us?" gets the board the job was found on; phone device type is
 Mobile; the self-identify form is signed with your name and today's date; the
 demographic questions are declined unless your answer bank says otherwise.
 A box agreeing to a company's terms or privacy policy is never ticked by
-accident: in `dry_run` or `review` the first form that has a required one stops
+accident: in `review` the first form that has a required one stops
 and asks, and your answer (`consent_terms`) is used on every form after. In
 `auto` mode, which sends applications all the way, a required box is ticked
 unless `consent_terms` is No, and the application shows it as "agreed because
-you chose auto mode". "Why are you interested in working for us?" gets
+you chose auto mode"; a dry run does the same, so it shows what auto mode
+would send. A required box is terms even when it also mentions future
+positions ("By continuing I understand..."); an optional one that asks to keep
+you informed is left unticked. "Why are you interested in working for us?" gets
 your cover letter without its greeting and sign-off.
+
+Salary currency and period follow `salary_expectation`: US dollars, and yearly
+for an amount in the thousands (hourly below), unless `salary_currency` or
+`salary_period` says otherwise. "Best time to contact" is any time and
+"Preferred contact method" is email unless `contact_time` or `contact_method`
+says otherwise. A second phone box (Home, Work) is left empty unless
+`other_phone` has a number, and "Town/City" gets the town alone.
 
 Workday saves a draft at every "Save and Continue". A dry run therefore leaves
 the application in that company's account, filled in and unsent, at the

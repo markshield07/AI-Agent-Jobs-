@@ -1023,3 +1023,18 @@ def test_a_queued_job_todays_rules_turn_away_is_skipped_before_any_browser(
     record = _apply(conn, jid, settings, handler, mode="auto")
     assert record["outcome"] == "skipped" and "excluded keyword: TS/SCI" in record["reason"]
     assert handler.calls == []
+
+
+def test_a_queued_job_whose_application_deadline_has_passed_is_skipped(conn, settings, ready_job):
+    jid = ready_job()
+    conn.execute(
+        "UPDATE jobs SET description = 'U.S. Citizenship is required. Application Deadline: "
+        "9/27/2020' WHERE id = ?",
+        (jid,),
+    )
+    conn.commit()
+    handler = FakeHandler(_result("dry_run"))
+    record = _apply(conn, jid, settings, handler, mode="auto")
+    assert record["outcome"] == "skipped" and record["wrong_place"] is True
+    assert "application deadline (2020-09-27) has passed" in record["reason"]
+    assert handler.calls == []

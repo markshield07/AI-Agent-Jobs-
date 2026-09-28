@@ -205,12 +205,50 @@ def test_a_page_that_applies_only_through_indeed_goes_to_indeeds_posting(page, p
 
 
 def test_a_phenom_step_takes_the_fields_and_the_resume_by_its_button(page, packet):
+    packet.job["source"] = "indeed"
     result = run_flow(page, packet, "phenom")
-    assert result.outcome == "dry_run", result.error
+    assert result.outcome == "dry_run", (result.error, result.needed)
     values = {f.key: f.value for f in result.filled}
     assert values["firstName"] == "Mark" and values["email"] == "mark@example.com"
     assert page.evaluate("() => window.__resume") == "mark-shield.pdf"
     assert not any("api_key" in f.key for f in result.filled), "not LinkedIn's widget box"
+    # The resume went first and the page finished reading it before the form
+    # was filled: the Last Name it emptied was filled after.
+    assert page.input_value("#lastName") == "Shield"
+    assert "homePhone" not in values, "no second number on file; not the mobile again"
+    assert page.input_value("#homePhone") == ""
+    # What the page chose itself stays; a question an answer brought up is filled.
+    assert values["division"] == "Networks"
+    assert {f.key: f.source for f in result.filled}["division"] == "prefilled"
+    assert values["sourceType"] == "Job Board"
+    assert values["source"] == "Indeed", "the board the job was found on"
+    assert page.eval_on_selector("#source", "el => el.options[el.selectedIndex].text") == "Indeed"
+
+
+def test_a_resume_the_page_never_shows_is_not_taken_as_attached(page, packet):
+    result = run_flow(page, packet, "phenomsilent", submit=True)
+    assert result.outcome == "needs_input"
+    assert [n.key for n in result.needed if n.required] == ["resume"]
+    assert "never showed it attached" in result.needed[0].reason
+
+
+@pytest.mark.parametrize(
+    ("variant", "why"),
+    [("signup", "verify an email or phone"), ("community", "talent community")],
+)
+def test_a_sign_up_in_place_of_the_application_is_stopped(page, packet, variant, why):
+    result = run_flow(page, packet, variant, submit=True)
+    assert result.outcome == "blocked"
+    assert why in result.error
+    assert not result.filled
+    assert page.input_value("input[type=email]") == "", "nothing typed into it"
+
+
+def test_a_posting_past_its_deadline_is_not_applied_to(page, packet):
+    result = run_flow(page, packet, "closed", submit=True)
+    assert result.outcome == "blocked"
+    assert result.wrong_place and "deadline (2020-09-27) has passed" in result.wrong_place
+    assert page.evaluate("() => window.__submitted || null") is None
 
 
 def test_a_form_with_nothing_filled_is_never_a_success(page, packet, monkeypatch):

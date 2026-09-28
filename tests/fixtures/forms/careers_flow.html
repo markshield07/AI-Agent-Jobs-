@@ -147,9 +147,14 @@
     });
     document.getElementById('sourceType').addEventListener('change', function (e) {
       var box = document.getElementById('source-box');
+      // Like Serco's: the list shows at once and its choices arrive a moment later.
       box.innerHTML = e.target.value === 'Job Board' ? '<label for="source">Source*</label>' +
-        '<select id="source" required><option value="">Please Select</option><option>Indeed</option>' +
-        '<option>LinkedIn</option><option>Other</option></select>' : '';
+        '<select id="source" required><option value="">Please Select</option></select>' : '';
+      if (e.target.value === 'Job Board') setTimeout(function () {
+        document.getElementById('source').insertAdjacentHTML('beforeend',
+          '<option value="45028">Indeed</option><option value="45030">LinkedIn</option>' +
+          '<option value="45033">Other Site</option>');
+      }, 1200);
     });
   } else if (step === 'signup') {
     main.innerHTML = variant === 'community'

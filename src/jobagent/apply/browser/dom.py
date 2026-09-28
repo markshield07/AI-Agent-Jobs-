@@ -207,7 +207,11 @@ def discover_fields(
             multiple=bool(control.get("multiple")),
             help_text=control.get("help") or None,
         )
-        if kind in ("select", "multiselect") and not field.options and expand_comboboxes:
+        # A native select with no options yet (still loading) has no list to
+        # open: clicking it would read whatever other list is on the page.
+        native = control.get("tag") == "select"
+        empty = kind in ("select", "multiselect") and not field.options
+        if empty and expand_comboboxes and not native:
             field.options = combobox_options(page, field.selector)
         fields.append(field)
 

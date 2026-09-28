@@ -100,6 +100,8 @@ class GenericHandler(BaseHandler):
     # How many more looks at the form after filling it, for questions that
     # appear only once an answer is given (Serco's "Source" after "How did you hear").
     more_looks = 2
+    # How long a list that appeared late gets to fill in its choices.
+    options_wait_ms = 8_000
     # Where the posting names its place: schema.org markup, ADP's location line.
     place_selectors = ('[itemprop="jobLocation"]', ".job-description-location-item")
 
@@ -311,6 +313,14 @@ class GenericHandler(BaseHandler):
                 log.debug("generic: could not look at the form again: %s", exc)
                 return
             new = [f for f in _unseen(found, fields) if not _widget(f) and _shown(page, f.selector)]
+            if _options_loading(page, new):
+                # A list that appeared with an answer fills its choices a
+                # moment later (Serco's Source): wait for them, then read again.
+                _wait_for_options(page, new, self.options_wait_ms)
+                found = _the_application(page, discover_fields(page))
+                new = [
+                    f for f in _unseen(found, fields) if not _widget(f) and _shown(page, f.selector)
+                ]
             emptied = _emptied(page, fields, filled)
             if not new and not emptied:
                 return
@@ -491,6 +501,31 @@ def _resume_shown(page: Any, resume: str) -> bool:
         or Path(resume).stem.lower() in text.lower()
         or bool(_UPLOADED.search(text))
     )
+
+
+_EMPTY_SELECTS_JS = """(selectors) => selectors.filter((sel) => {
+  let el = null;
+  try { el = document.querySelector(sel); } catch (e) { return false; }
+  return !!el && el.tagName === 'SELECT' && !Array.from(el.options).some((o) => o.value);
+}).length"""
+
+
+def _options_loading(page: Any, fields: list[FormField]) -> bool:
+    """A native select among `fields` that has no choices yet."""
+    selectors = [f.selector for f in fields if f.kind in ("select", "multiselect") and f.selector]
+    if not selectors:
+        return False
+    try:
+        return bool(page.evaluate(_EMPTY_SELECTS_JS, selectors))
+    except Exception:
+        return False
+
+
+def _wait_for_options(page: Any, fields: list[FormField], wait_ms: int) -> None:
+    waited = 0
+    while waited < wait_ms and _options_loading(page, fields):
+        page.wait_for_timeout(250)
+        waited += 250
 
 
 def _unseen(found: list[FormField], fields: list[FormField]) -> list[FormField]:

@@ -440,3 +440,13 @@ def test_the_description_outweighs_the_boards_remote_flag():
     # Occasional visits do not make a remote job an office job.
     visits = "Fully remote role. Occasional onsite visits to data centers."
     assert not rejected(remote_only, remote=True, location="Norfolk, VA", description=visits)
+
+
+def test_a_job_a_board_found_around_a_wanted_place_counts_as_there():
+    near = crit(locations=["Remote", "Orange County", "Menifee"])
+    irvine = {"remote": 0, "location": "Irvine, CA, US", "found_near": "Orange county"}
+    assert not rejected(near, **irvine)
+    assert points("location", near, **irvine) == 20
+    # Found near a place no longer wanted: back to the listing's own words.
+    assert rejected(crit(locations=["Remote", "Menifee"]), **irvine)
+    assert not rejected(near, remote=0, location="Menifee, CA", found_near=None)

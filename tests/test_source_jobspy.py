@@ -73,6 +73,7 @@ def criteria(**overrides: Any) -> SearchCriteria:
 
 
 def search(scraper: Scraper, crit: SearchCriteria | None = None, **kwargs: Any) -> list:
+    kwargs.setdefault("window", lambda: 0)
     return list(JobSpySource(scrape=scraper, **kwargs).search(crit or criteria()))
 
 
@@ -198,9 +199,13 @@ def test_a_remote_location_becomes_the_is_remote_flag(spelling):
 
     search(scraper, criteria(locations=[spelling]))
 
-    [call] = scraper.calls
-    assert call["location"] is None
-    assert call["is_remote"] is True
+    # Indeed alone, with its remote filter and no age (Indeed takes one filter
+    # per search), then the other boards with both.
+    indeed, rest = scraper.calls
+    assert indeed["site_name"] == ["indeed"] and rest["site_name"] == ["linkedin"]
+    assert indeed["location"] is None and rest["location"] is None
+    assert indeed["is_remote"] is True and rest["is_remote"] is True
+    assert indeed["hours_old"] is None and rest["hours_old"] == 72
 
 
 def test_other_locations_are_passed_through_as_text():
@@ -208,9 +213,10 @@ def test_other_locations_are_passed_through_as_text():
 
     search(scraper, criteria(locations=["Remote", "New York, NY"]))
 
-    assert [(c["search_term"], c["location"], c["is_remote"]) for c in scraper.calls] == [
-        ("Software Engineer", None, True),
-        ("Software Engineer", "New York, NY", False),
+    assert [(c["site_name"], c["location"], c["is_remote"]) for c in scraper.calls] == [
+        (["indeed"], None, True),
+        (["linkedin"], None, True),
+        (["indeed", "linkedin"], "New York, NY", False),
     ]
 
 
@@ -224,7 +230,9 @@ def test_queries_are_every_title_by_every_location():
 
     assert [(c["search_term"], c["location"]) for c in scraper.calls] == [
         ("Backend Engineer", None),
+        ("Backend Engineer", None),
         ("Backend Engineer", "Austin"),
+        ("Platform Engineer", None),
         ("Platform Engineer", None),
         ("Platform Engineer", "Austin"),
     ]
@@ -240,6 +248,7 @@ def test_repeated_and_blank_titles_and_locations_do_not_spend_queries():
     search(scraper, crit)
 
     assert [(c["search_term"], c["location"]) for c in scraper.calls] == [
+        ("Backend Engineer", None),
         ("Backend Engineer", None),
         ("Backend Engineer", "Austin"),
     ]
@@ -332,7 +341,7 @@ def test_the_same_url_is_yielded_once_per_search():
         ),
         frame(row(id="4", job_url=same, site="linkedin")),
     )
-    crit = criteria(locations=["Remote", "Austin"])
+    crit = criteria(locations=["Austin", "Remote"])
 
     jobs = search(scraper, crit)
 
@@ -473,7 +482,7 @@ def test_search_is_lazy():
     scraper = Scraper(frame(row()), frame(row(job_url="https://www.indeed.com/viewjob?jk=2")))
     source = JobSpySource(scrape=scraper)
 
-    it = source.search(criteria(locations=["Remote", "Austin"]))
+    it = source.search(criteria(locations=["Austin", "Remote"]))
 
     assert scraper.calls == []
     next(it)
@@ -521,3 +530,103 @@ def test_a_missing_jobspy_package_is_logged_and_yields_nothing(monkeypatch, capl
 
     assert jobs == []
     assert any("not installed" in r.getMessage() for r in caplog.records)
+
+
+def _days_ago(days: float) -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days)
+
+
+def test_indeeds_remote_results_are_held_to_the_age_wanted_here():
+    fresh = row(id="fresh", job_url="https://www.indeed.com/viewjob?jk=f", date_posted=_days_ago(1))
+    today = row(
+        id="today", job_url="https://www.indeed.com/viewjob?jk=t", date_posted=_days_ago(0).date()
+    )
+    stale = row(id="stale", job_url="https://www.indeed.com/viewjob?jk=s", date_posted=_days_ago(9))
+    undated = row(id="undated", job_url="https://www.indeed.com/viewjob?jk=u", date_posted=None)
+    scraper = Scraper(frame(fresh, today, stale, undated))
+
+    jobs = search(scraper, criteria(locations=["Remote"], jobspy_sites=["indeed"]))
+
+    assert [job.external_id for job in jobs] == ["fresh", "today", "undated"]
+    assert len(scraper.calls) == 1 and scraper.calls[0]["hours_old"] is None
+
+
+def test_what_a_boards_remote_filter_chose_counts_as_remote():
+    # jobspy's is_remote column is only "the word remote appears somewhere".
+    scraper = Scraper(
+        frame(row(id="a", is_remote=False, date_posted=None)),
+        frame(
+            row(
+                id="b",
+                job_url="https://www.linkedin.com/jobs/view/2",
+                is_remote=False,
+                site="linkedin",
+                date_posted=None,
+            )
+        ),
+        frame(row(id="c", job_url="https://www.indeed.com/viewjob?jk=c", is_remote=False)),
+    )
+
+    jobs = search(scraper, criteria(locations=["Remote", "Austin"]))
+
+    assert [(job.external_id, job.remote) for job in jobs] == [
+        ("a", True),
+        ("b", True),
+        ("c", False),
+    ]
+
+
+def test_linkedin_alone_takes_remote_and_age_in_one_search():
+    scraper = Scraper()
+
+    search(scraper, criteria(locations=["Remote"], jobspy_sites=["linkedin"]))
+
+    [call] = scraper.calls
+    assert call["site_name"] == ["linkedin"]
+    assert call["is_remote"] is True and call["hours_old"] == 72
+
+
+def test_over_the_cap_successive_runs_walk_through_every_query():
+    from jobagent.discovery.sources.jobspy_source import _queries
+
+    crit = criteria(titles=["A", "B", "C"], locations=["X", "Y", "Z"])
+    seen = []
+    for window in range(3):
+        seen += _queries(crit, 4, window)
+    assert set(seen) == {(t, loc) for t in "ABC" for loc in "XYZ"}
+    assert _queries(crit, 4, 1) == [("B", "Y"), ("B", "Z"), ("C", "X"), ("C", "Y")]
+    assert _queries(crit, 4, 2) == [("C", "Z"), ("A", "X"), ("A", "Y"), ("A", "Z")]
+
+
+def test_a_place_search_vouches_for_nearby_postings_in_the_same_state():
+    scraper = Scraper(
+        frame(
+            row(
+                id="irvine",
+                job_url="https://www.indeed.com/viewjob?jk=1",
+                location="Irvine, CA, US",
+            ),
+            row(
+                id="anaheim",
+                job_url="https://www.indeed.com/viewjob?jk=2",
+                location="Anaheim, California",
+            ),
+            row(id="dallas", job_url="https://www.indeed.com/viewjob?jk=3", location="Dallas, TX"),
+            row(id="nowhere", job_url="https://www.indeed.com/viewjob?jk=4", location=None),
+        )
+    )
+
+    jobs = search(scraper, criteria(locations=["Orange County"]))
+
+    assert {job.external_id: job.found_near for job in jobs} == {
+        "irvine": "Orange County",
+        "anaheim": "Orange County",
+        "dallas": None,
+        "nowhere": "Orange County",
+    }
+
+
+def test_remote_and_unlocated_searches_vouch_for_no_place():
+    remote = search(Scraper(frame(row(date_posted=None))), criteria(locations=["Remote"]))
+    anywhere = search(Scraper(frame(row())), criteria(locations=[]))
+    assert [job.found_near for job in remote + anywhere] == [None, None]

@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     posted_at     TEXT,
     remote        INTEGER,                   -- 1/0, NULL when the source did not say
     external_id   TEXT,                      -- the source's own id, when it has one
+    found_near    TEXT,                      -- the place a board's radius search found it near
     score         INTEGER,                   -- 0-100 from the rules pass
     score_reason  TEXT,
     tier          INTEGER,                   -- 1-4 from the model pass; NULL if rules rejected it

@@ -73,6 +73,39 @@ def test_the_schema_org_posting_is_read(page):
     assert read_place(page) == PostingPlace(["Lonoke, AR"], None)
 
 
+def test_a_region_alone_counts_only_where_the_title_names_it(page):
+    # Serco: a San Diego job whose schema.org address is its company default,
+    # "Virginia" with no town or postal code.
+    ld = {
+        "@context": "https://schema.org",
+        "@type": "JobPosting",
+        "jobLocation": {
+            "@type": "Place",
+            "address": {
+                "addressRegion": "Virginia",
+                "addressLocality": "",
+                "postalCode": "",
+                "addressCountry": "USA",
+            },
+        },
+    }
+    script = f'<script type="application/ld+json">{json.dumps(ld)}</script>'
+    page.set_content(
+        f"<html><head><title>Network Engineer - San Diego, CA in San Diego, California, US"
+        f"</title>{script}</head><body><h1>Network Engineer</h1></body></html>"
+    )
+    found = read_place(page)
+    assert found.locations == [] and found.regions == ["Virginia"]
+    assert wrong_place(found, WANTED) is None
+
+    page.set_content(
+        f"<html><head><title>Network Engineer - Richmond, Virginia</title>{script}</head>"
+        "<body></body></html>"
+    )
+    assert read_place(page).locations == ["Virginia"]
+    assert "Virginia" in (wrong_place(read_place(page), WANTED) or "")
+
+
 def test_the_sites_own_fields_and_words_are_read(page):
     fields = (
         '<div data-automation-id="locations"><dl><dt>locations</dt><dd>Lonoke, AR</dd></dl></div>'

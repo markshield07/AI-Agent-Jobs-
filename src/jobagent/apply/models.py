@@ -38,7 +38,15 @@ Outcome = Literal[
     "submitted", "dry_run", "review", "needs_input", "blocked", "unconfirmed", "failed"
 ]
 FillSource = Literal[
-    "contact", "resume", "cover_letter", "links", "answer_bank", "model", "default", "skip"
+    "contact",
+    "resume",
+    "cover_letter",
+    "links",
+    "answer_bank",
+    "model",
+    "default",
+    "skip",
+    "prefilled",  # the site filled it from the signed-in account; left as it was
 ]
 
 MODES: tuple[str, ...] = ("dry_run", "review", "auto")

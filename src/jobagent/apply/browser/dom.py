@@ -132,8 +132,9 @@ def _group_key(control: dict[str, Any]) -> str | None:
     return None
 
 
-def raw_controls(page: Any) -> list[dict[str, Any]]:
-    return list(page.evaluate(INVENTORY_JS) or [])
+def raw_controls(page: Any, root: str | None = None) -> list[dict[str, Any]]:
+    """The inventory's raw records; `root` limits it to the controls inside one element."""
+    return list(page.evaluate(INVENTORY_JS, root) or [])
 
 
 def combobox_options(page: Any, selector: str, *, settle_ms: int = 400) -> list[str]:
@@ -155,9 +156,14 @@ def combobox_options(page: Any, selector: str, *, settle_ms: int = 400) -> list[
     return [o for o in options if o and not re.match(r"^(select|choose|please select)\b", o, re.I)]
 
 
-def discover_fields(page: Any, *, expand_comboboxes: bool = True) -> list[FormField]:
-    """Every fillable control on the page, grouped and labelled, in document order."""
-    controls = raw_controls(page)
+def discover_fields(
+    page: Any, *, expand_comboboxes: bool = True, root: str | None = None
+) -> list[FormField]:
+    """Every fillable control on the page, grouped and labelled, in document order.
+
+    `root` is a selector for the element that holds the form, when the page
+    around it has controls of its own (a modal over a job listing)."""
+    controls = raw_controls(page, root)
     fields: list[FormField] = []
     groups: OrderedDict[str, FormField] = OrderedDict()
     for index, control in enumerate(controls):
@@ -217,3 +223,46 @@ def discover_fields(page: Any, *, expand_comboboxes: bool = True) -> list[FormFi
                 field.label = own
             field.options = []
     return fields
+
+
+_VALUES_JS = r"""(selectors) => selectors.map((sel) => {
+  let el = null;
+  try { el = document.querySelector(sel); } catch (e) { return null; }
+  if (!el) return null;
+  const tag = el.tagName.toLowerCase();
+  const type = (el.getAttribute('type') || '').toLowerCase();
+  if (type === 'file') return el.files && el.files.length ? el.files[0].name : null;
+  if (type === 'radio' || type === 'checkbox') {
+    const name = el.getAttribute('name');
+    if (!name) return el.checked ? (el.value || 'on') : null;
+    const on = Array.from(document.querySelectorAll('input[name="' + CSS.escape(name) + '"]'))
+      .filter((n) => n.checked);
+    return on.length ? on.map((n) => n.value).join(', ') : null;
+  }
+  if (tag === 'select') {
+    const opt = el.options[el.selectedIndex];
+    if (!opt || !opt.value) return null;
+    const text = (opt.text || '').replace(/\s+/g, ' ').trim();
+    return /^select\b|^choose\b|^please select/i.test(text) ? null : text;
+  }
+  if (el.isContentEditable) return (el.innerText || '').trim() || null;
+  const v = (el.value || '').trim();
+  return v || null;
+})"""
+
+
+def current_values(page: Any, fields: list[FormField]) -> dict[str, str]:
+    """What each field already holds, keyed by field key; empty fields are left out.
+
+    A site that prefills from the signed-in account (LinkedIn, Indeed) has
+    already put the person's own details there, and overwriting them with a
+    guess at the same thing only risks a mismatch.
+    """
+    if not fields:
+        return {}
+    try:
+        values = page.evaluate(_VALUES_JS, [f.selector for f in fields]) or []
+    except Exception as exc:
+        log.debug("could not read current values: %s", exc)
+        return {}
+    return {f.key: str(v) for f, v in zip(fields, values, strict=False) if v}

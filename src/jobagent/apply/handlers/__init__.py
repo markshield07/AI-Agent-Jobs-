@@ -21,6 +21,8 @@ _KNOWN: tuple[tuple[str, str, str], ...] = (
     ("greenhouse", "jobagent.apply.handlers.greenhouse", "GreenhouseHandler"),
     ("lever", "jobagent.apply.handlers.lever", "LeverHandler"),
     ("ashby", "jobagent.apply.handlers.ashby", "AshbyHandler"),
+    ("linkedin", "jobagent.apply.handlers.linkedin", "LinkedInHandler"),
+    ("indeed", "jobagent.apply.handlers.indeed", "IndeedHandler"),
 )
 _GENERIC = ("generic", "jobagent.apply.handlers.generic", "GenericHandler")
 

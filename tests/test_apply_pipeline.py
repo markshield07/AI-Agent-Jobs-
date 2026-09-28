@@ -663,3 +663,26 @@ def test_approve_submits_what_a_dry_run_left_at_the_button(conn, settings, ready
     with pytest.raises(ApplyError, match="No application 99"):
         approve_application(conn, 99, settings)
     assert len(handler.calls) == 2
+
+
+def test_linkedin_and_indeed_each_have_their_own_lower_cap(conn, settings, ready_job):
+    capped = settings.model_copy(update={"easy_apply_daily_cap": 1})
+    linkedin = FakeHandler(_result("submitted", confirmation="sent"), ats="linkedin")
+    first = ready_job(f"https://{FAKE_HOST}/acme/first")
+    second = ready_job(f"https://{FAKE_HOST}/acme/second")
+    third = ready_job(f"https://{FAKE_HOST}/acme/third")
+
+    assert _apply(conn, first, capped, linkedin, mode="auto")["outcome"] == "submitted"
+    record = _apply(conn, second, capped, linkedin, mode="auto")
+    assert record["outcome"] == "skipped"
+    assert record["reason"] == "LinkedIn cap of 1 applications a day reached; it goes out tomorrow"
+    assert len(linkedin.calls) == 1
+
+    # A dry run is not a submission, and another site's count is its own.
+    filling = FakeHandler(ats="linkedin")
+    assert _apply(conn, second, capped, filling, mode="dry_run")["outcome"] == "dry_run"
+    indeed = FakeHandler(_result("submitted", confirmation="sent"), ats="indeed")
+    assert _apply(conn, third, capped, indeed, mode="auto")["outcome"] == "submitted"
+    assert store.submitted_last_day(conn, ats="linkedin") == 1
+    assert store.submitted_last_day(conn, ats="indeed") == 1
+    assert store.submitted_last_day(conn) == 2

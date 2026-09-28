@@ -28,6 +28,7 @@ from jobagent.api.applications import router as applications_router
 from jobagent.api.discovery import router as discovery_router
 from jobagent.api.inbox import router as inbox_router
 from jobagent.api.routes import router
+from jobagent.api.sessions import router as sessions_router
 from jobagent.api.tailoring import router as tailoring_router
 from jobagent.config import Settings, get_settings
 from jobagent.db.database import open_database
@@ -57,6 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(tailoring_router)
     app.include_router(applications_router)
     app.include_router(inbox_router)
+    app.include_router(sessions_router)
     return app
 
 
@@ -152,6 +154,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="Read and classify, but record nothing."
     )
     inbox.add_argument("--json", action="store_true", help="Print the full report as JSON.")
+
+    login = sub.add_parser(
+        "login",
+        help="Sign in to LinkedIn or Indeed once, in a visible browser; the password is not kept.",
+    )
+    login.add_argument("site", choices=("linkedin", "indeed"))
+    login.add_argument("--status", action="store_true", help="Show whether a sign-in is saved.")
+    login.add_argument("--forget", action="store_true", help="Delete the saved sign-in.")
+    login.add_argument(
+        "--timeout", type=int, default=300, help="Seconds to wait for you to sign in."
+    )
     return parser
 
 
@@ -519,6 +532,50 @@ def _cmd_inbox(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_login(args: argparse.Namespace) -> int:
+    from jobagent.apply import sessions
+    from jobagent.apply.browser.session import BrowserUnavailable, interactive_login
+
+    settings = get_settings()
+    site = sessions.site(args.site)
+    if args.forget:
+        gone = sessions.forget_session(settings, site.name)
+        print(f"{site.label} sign-in deleted." if gone else f"No {site.label} sign-in was saved.")
+        return 0
+    if args.status:
+        status = sessions.session_status(settings, site.name)
+        if not status["saved"]:
+            print(f"{site.label}: not signed in. Run: jobagent login {site.name}")
+        elif not status["signed_in"]:
+            print(f"{site.label}: the saved sign-in has expired. Run: jobagent login {site.name}")
+        else:
+            until = f", good until {status['expires_at']}" if status["expires_at"] else ""
+            print(f"{site.label}: signed in (saved {status['saved_at']}{until}).")
+        return 0
+
+    print(
+        f"A browser window will open at {site.label}'s sign-in page. Sign in there as you "
+        "normally would, including any code the site asks for. The password goes to "
+        f"{site.label} only; what is kept is the site's cookies, in "
+        f"{sessions.session_path(settings, site.name)} (readable by you only)."
+    )
+    try:
+        state = interactive_login(
+            settings,
+            site.login_url,
+            lambda cookies: sessions.signed_in(
+                sessions.site_cookies({"cookies": cookies}, site.name), site.name
+            ),
+            timeout_s=args.timeout,
+        )
+        path = sessions.save_session(settings, site.name, state)
+    except (BrowserUnavailable, TimeoutError, ValueError) as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    print(f"Signed in to {site.label}. Saved to {path}.")
+    return 0
+
+
 _COMMANDS = {
     "discover": _cmd_discover,
     "criteria": _cmd_criteria,
@@ -528,6 +585,7 @@ _COMMANDS = {
     "answer": _cmd_answer,
     "approve": _cmd_approve,
     "inbox": _cmd_inbox,
+    "login": _cmd_login,
 }
 
 

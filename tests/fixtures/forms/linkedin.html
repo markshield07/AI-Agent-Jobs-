@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Senior Platform Engineer | Acme Robotics | LinkedIn</title>
+<!--
+  A LinkedIn job posting (linkedin.com/jobs/view/<id>) seen by a signed-in member, as the
+  reference repos describe it: the global search box in the nav, button.jobs-apply-button
+  labelled "Easy Apply to ...", and the .jobs-easy-apply-modal it opens, one step at a time:
+  contact info (prefilled from the profile), resume, additional questions, review. Steps move
+  with "Continue to next step" and "Review your application"; the last one has "Submit
+  application". Inline errors are .artdeco-inline-feedback--error. The sent state says
+  "Your application was sent to Acme Robotics". Dismiss asks whether to discard the draft.
+
+  Variants, chosen with ?variant=...:
+    needs_input  adds a required years-of-Kubernetes question nothing on file answers
+    signed_out   the page a visitor sees: a Sign in link and "Sign in to apply", no Easy Apply
+    external     the button applies on the company website instead of Easy Apply
+    invalid      the questions step rejects its answers with an inline error
+    stuck        Continue does nothing on the questions step
+    unconfirmed  Submit closes the modal and shows nothing
+-->
+<style>
+  body { font-family: -apple-system, Helvetica, Arial, sans-serif; margin: 0; color: #222; }
+  nav { display: flex; gap: 12px; padding: 8px 24px; border-bottom: 1px solid #ddd; }
+  .top-card { padding: 16px 24px; }
+  .jobs-apply-button { background: #0a66c2; color: #fff; border: 0; border-radius: 16px; padding: 6px 16px; }
+  .artdeco-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.4); }
+  .jobs-easy-apply-modal { position: fixed; top: 40px; left: 50%; transform: translateX(-50%); width: 640px;
+    background: #fff; padding: 16px; border-radius: 8px; }
+  .fb-dash-form-element { margin: 10px 0; }
+  .fb-dash-form-element label { display: block; font-weight: 600; }
+  .artdeco-inline-feedback--error { color: #b24020; }
+  .hidden-file { display: none; }
+  .discard-dialog { position: fixed; top: 120px; left: 50%; transform: translateX(-50%); z-index: 10;
+    background: #fff; padding: 16px; border: 1px solid #999; }
+  footer { margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end; }
+</style>
+</head>
+<body>
+<nav class="global-nav">
+  <input id="global-nav-search" type="text" aria-label="Search" placeholder="Search">
+  <span data-variant="signed_out"><a class="nav__button-secondary" href="https://www.linkedin.com/login">Sign in</a></span>
+</nav>
+
+<div class="top-card jobs-unified-top-card">
+  <h1>Senior Platform Engineer</h1>
+  <div>Acme Robotics · Austin, TX</div>
+  <div class="jobs-apply-button--top-card" data-variant="">
+    <button class="jobs-apply-button" aria-label="Easy Apply to Senior Platform Engineer at Acme Robotics">Easy Apply</button>
+  </div>
+  <div data-variant="needs_input,invalid,stuck,unconfirmed" class="jobs-apply-button--top-card">
+    <button class="jobs-apply-button" aria-label="Easy Apply to Senior Platform Engineer at Acme Robotics">Easy Apply</button>
+  </div>
+  <div data-variant="external">
+    <button class="jobs-apply-button" role="link" aria-label="Apply to Senior Platform Engineer on company website">Apply</button>
+  </div>
+  <div data-variant="signed_out">
+    <a class="sign-in-cta" href="https://www.linkedin.com/login">Sign in to apply</a>
+  </div>
+  <p>We build the control plane for warehouse robots.</p>
+</div>
+
+<div id="modal-host"></div>
+
+<template id="step-contact">
+  <h3>Contact info</h3>
+  <div class="fb-dash-form-element">
+    <label for="first-name">First name</label>
+    <input id="first-name" name="firstName" type="text" required value="Mark">
+  </div>
+  <div class="fb-dash-form-element">
+    <label for="last-name">Last name</label>
+    <input id="last-name" name="lastName" type="text" required value="Shield">
+  </div>
+  <div class="fb-dash-form-element">
+    <label for="email-select">Email address</label>
+    <select id="email-select" required>
+      <option value="Select an option">Select an option</option>
+      <option value="mark@example.com" selected>mark@example.com</option>
+    </select>
+  </div>
+  <div class="fb-dash-form-element">
+    <label for="phone-country">Phone country code</label>
+    <select id="phone-country" required>
+      <option value="Select an option">Select an option</option>
+      <option value="us" selected>United States (+1)</option>
+    </select>
+  </div>
+  <div class="fb-dash-form-element">
+    <label for="phone">Mobile phone number</label>
+    <input id="phone" name="phoneNumber" type="text" required>
+  </div>
+  <footer><button aria-label="Continue to next step" data-next="resume">Next</button></footer>
+</template>
+
+<template id="step-resume">
+  <h3>Resume</h3>
+  <p>Be sure to include an updated resume</p>
+  <div class="jobs-document-upload">
+    <label class="jobs-document-upload__upload-button" for="resume-upload">Upload resume</label>
+    <input id="resume-upload" class="hidden-file" type="file" name="file" accept=".pdf,.doc,.docx">
+  </div>
+  <footer><button aria-label="Continue to next step" data-next="questions">Next</button></footer>
+</template>
+
+<template id="step-questions">
+  <h3>Additional questions</h3>
+  <fieldset class="fb-dash-form-element">
+    <legend>Are you legally authorized to work in the United States?</legend>
+    <input type="radio" id="auth-yes" name="auth" value="Yes" required><label for="auth-yes">Yes</label>
+    <input type="radio" id="auth-no" name="auth" value="No" required><label for="auth-no">No</label>
+  </fieldset>
+  <div class="fb-dash-form-element">
+    <label for="sponsor">Will you now or in the future require sponsorship for employment visa status?</label>
+    <select id="sponsor" required>
+      <option value="Select an option">Select an option</option>
+      <option value="Yes">Yes</option>
+      <option value="No">No</option>
+    </select>
+  </div>
+  <div class="fb-dash-form-element" data-only="needs_input">
+    <label for="k8s">How many years of work experience do you have with Kubernetes?</label>
+    <input id="k8s" type="text" required>
+  </div>
+  <div class="artdeco-inline-feedback--error" id="q-error" hidden></div>
+  <footer><button aria-label="Review your application" data-next="review">Review</button></footer>
+</template>
+
+<template id="step-review">
+  <h3>Review your application</h3>
+  <p>The employer will also receive a copy of your profile.</p>
+  <footer><button aria-label="Submit application" id="submit">Submit application</button></footer>
+</template>
+
+<template id="step-sent">
+  <h3>Application sent</h3>
+  <p>Your application was sent to Acme Robotics!</p>
+  <footer><button aria-label="Dismiss" class="artdeco-modal__dismiss">Done</button></footer>
+</template>
+
+<template id="discard-dialog">
+  <div role="alertdialog" class="artdeco-modal discard-dialog">
+    <h3>Save this application?</h3>
+    <button data-control-name="discard_application_confirm_btn">Discard</button>
+    <button data-control-name="save_application_btn">Save</button>
+  </div>
+</template>
+
+<script>
+(function () {
+  var variant = new URLSearchParams(location.search).get('variant') || '';
+  Array.prototype.forEach.call(document.querySelectorAll('[data-variant]'), function (el) {
+    var wanted = el.getAttribute('data-variant').split(',');
+    if (wanted.indexOf(variant) < 0) el.parentNode.removeChild(el);
+  });
+  window.__steps = [];
+  var host = document.getElementById('modal-host');
+
+  function open() {
+    host.innerHTML = '<div class="artdeco-modal-overlay"></div>' +
+      '<div class="jobs-easy-apply-modal artdeco-modal" role="dialog">' +
+      '<button aria-label="Dismiss" class="artdeco-modal__dismiss">×</button>' +
+      '<div class="jobs-easy-apply-content"></div></div>';
+    host.querySelector('.artdeco-modal__dismiss').addEventListener('click', dismiss);
+    show('contact');
+  }
+
+  function show(name) {
+    window.__steps.push(name);
+    var content = host.querySelector('.jobs-easy-apply-content');
+    content.innerHTML = document.getElementById('step-' + name).innerHTML;
+    Array.prototype.forEach.call(content.querySelectorAll('[data-only]'), function (el) {
+      if (el.getAttribute('data-only') !== variant) el.parentNode.removeChild(el);
+    });
+    var next = content.querySelector('[data-next]');
+    if (next) next.addEventListener('click', function () { advance(name, next.getAttribute('data-next')); });
+    var submit = content.querySelector('#submit');
+    if (submit) submit.addEventListener('click', send);
+    var done = content.querySelector('.artdeco-modal__dismiss');
+    if (done) done.addEventListener('click', function () { host.innerHTML = ''; });
+  }
+
+  function value(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+
+  function advance(from, to) {
+    if (from === 'contact') {
+      window.__contact = { first: value('first-name'), last: value('last-name'),
+        email: value('email-select'), phone: value('phone') };
+      if (!value('phone')) return;
+    }
+    if (from === 'resume') {
+      var f = document.getElementById('resume-upload');
+      window.__resume = f.files.length ? f.files[0].name : null;
+    }
+    if (from === 'questions') {
+      var checked = document.querySelector('input[name="auth"]:checked');
+      window.__questions = { auth: checked ? checked.value : null, sponsor: value('sponsor'),
+        k8s: value('k8s') };
+      if (variant === 'stuck') return;
+      if (variant === 'invalid') {
+        var err = document.getElementById('q-error');
+        err.textContent = 'Please enter a valid answer';
+        err.hidden = false;
+        return;
+      }
+    }
+    show(to);
+  }
+
+  function send() {
+    window.__submitted = true;
+    if (variant === 'unconfirmed') { host.innerHTML = ''; return; }
+    show('sent');
+  }
+
+  function dismiss() {
+    var d = document.createElement('div');
+    d.innerHTML = document.getElementById('discard-dialog').innerHTML;
+    document.body.appendChild(d);
+    d.querySelector('[data-control-name="discard_application_confirm_btn"]').addEventListener('click', function () {
+      window.__discarded = true; host.innerHTML = ''; d.remove();
+    });
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('.jobs-apply-button[aria-label^="Easy Apply"]'), function (b) {
+    b.addEventListener('click', open);
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.jobs-apply-button[role="link"]'), function (b) {
+    b.addEventListener('click', function () { window.__left = true; });
+  });
+})();
+</script>
+</body>
+</html>

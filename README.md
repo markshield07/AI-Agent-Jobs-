@@ -15,7 +15,8 @@ Architecture and the reasoning behind each decision:
 | 2 | Discovery, dedupe, enrichment, scoring | done |
 | 3 | Tailoring and PDF rendering | done |
 | 4 | Submission, on career-page boards, off by default | done |
-| 5 | Response tracking | **this branch** |
+| 4b | LinkedIn Easy Apply and Indeed's own application | **this branch** |
+| 5 | Response tracking | done |
 | 6 | Dashboard and scheduling | not started |
 
 ## The fact base
@@ -61,6 +62,7 @@ behind it, picked by `JOBAGENT_LLM_BACKEND` in `.env`:
 |---|---|---|
 | `JOBAGENT_APPLY_MODE` | `dry_run` | `dry_run` fills and stops, `review` parks it for approval, `auto` submits |
 | `JOBAGENT_DAILY_APPLY_CAP` | `20` | Submissions in any trailing 24 hours, in `auto` mode |
+| `JOBAGENT_EASY_APPLY_DAILY_CAP` | `10` | LinkedIn's and Indeed's own caps, each, inside the daily one |
 | `JOBAGENT_APPLY_DELAY_SECONDS` | `45` | The pause between submissions, jittered |
 | `JOBAGENT_APPLY_MODEL_ANSWERS` | `true` | Let the model draft answers to open questions, from the fact base |
 | `JOBAGENT_HEADLESS` | `true` | `false`, or `--headed`, shows the browser window |
@@ -165,8 +167,9 @@ agent opens the form, fills every field it can, takes a screenshot to
 parks the application for your approval. Only `auto` presses the button, and
 only under a daily cap with a jittered pause between submissions.
 
-Four sites are handled: Greenhouse, Lever and Ashby have a handler each, and
-anything else falls to a generic filler that works from what the page shows. The
+Greenhouse, Lever, Ashby, LinkedIn Easy Apply and Indeed's own application
+have a handler each, and anything else falls to a generic filler that works
+from what the page shows. The
 generic one refuses to fill a form that is not an application: a careers page's
 search box is a form too.
 
@@ -196,6 +199,43 @@ is `unconfirmed`, and the job waits for you to look rather than being tried
 again. A captcha, a login wall or a "we emailed you a code" prompt is `blocked`,
 with what to do about it. Every attempt is kept, so you can read a dry run
 before changing the mode.
+
+### LinkedIn and Indeed
+
+Easy Apply and Indeed's application only exist for someone signed in, so sign
+in once, on your own machine:
+
+```bash
+jobagent login linkedin          # a browser window opens at LinkedIn's sign-in page
+jobagent login indeed
+jobagent login linkedin --status # still good?
+jobagent login linkedin --forget # delete it
+```
+
+You sign in on the site's own page, two-step code included. **Your password is
+never seen or kept.** What is kept is the site's cookies, in
+`data/sessions/<site>.json`, readable by your user only (`data/` is not in
+git). Every apply run loads them. Signing out of the site, or changing the
+password, ends it; run `login` again.
+
+Both sites apply in steps: contact details, resume, the employer's questions,
+review. The agent reads one step at a time, leaves what the site filled in from
+your profile as it is, uploads the resume tailored for the job, answers the
+rest the same way as any other form, and moves on until the Submit button. It
+stops, and closes the form unsent (LinkedIn: Dismiss, then Discard, so no draft
+is left in your account), when:
+
+- you are not signed in (`blocked`, with the `login` command to run);
+- the posting applies on the company's site instead (`blocked`; add that site as
+  a career-page job);
+- a question has no answer on file (`needs_input`, as with any form);
+- a step will not accept an answer, or Next does nothing (`blocked`, with the
+  site's message and a screenshot);
+- there is no Submit after 12 steps (`failed`).
+
+In `auto` mode each of the two sites has its own cap, 10 a day by default, on
+top of the overall one. See [the warning below](#before-you-turn-submission-on)
+before turning it on.
 
 ### Playwright
 
@@ -288,6 +328,8 @@ end an application from anywhere.
 | `GET` | `/api/inbox` | Everything read, newest first. Filter by `application_id`, `matched`, `label` |
 | `GET` | `/api/inbox/counts` | How many messages per label, and how many unmatched |
 | `POST` | `/api/inbox/{id}/attach` | File a message against an application, and move its status |
+| `GET` | `/api/sessions` | Whether LinkedIn and Indeed are signed in, and until when (never the cookies) |
+| `DELETE` | `/api/sessions/{site}` | Forget a saved sign-in |
 
 Interactive docs at `/docs` while the server is running.
 
@@ -332,7 +374,9 @@ src/jobagent/
 │   │   ├── session.py  Launching Chromium; the only place Playwright is imported
 │   │   ├── dom.py      Reading a form: what each control is and what it is called
 │   │   └── fill.py     Putting the plan on the page, and reading what it says back
-│   ├── handlers/       One per ATS (Greenhouse, Lever, Ashby) plus the generic filler
+│   ├── handlers/       One per ATS (Greenhouse, Lever, Ashby) plus the generic filler;
+│   │                   wizard.py is the step loop LinkedIn and Indeed share
+│   ├── sessions.py     Saved LinkedIn and Indeed sign-ins: cookies only, owner-readable
 │   ├── store.py        Applications and attempts on disk; status derived from events
 │   └── pipeline.py     One apply pass: job, variant, packet, handler, attempt
 ├── inbox/
@@ -372,9 +416,13 @@ violate those platforms' terms of service, and can get your accounts
 rate-limited or banned. Every one of the five references above carries a version
 of this warning. The risk is real and it does not engineer away.
 
-This is why submission ships off. `dry_run` is the default mode, there is no
-LinkedIn Easy Apply or Indeed Quick Apply handler, and the sites that are
-handled are the ones where applying is an ordinary form on a company's own
-careers page. `auto` keeps a daily cap and a jittered delay on, and even then an
-application is only recorded as sent when the page says so. Read a dry run and
-its screenshot before you change the mode.
+LinkedIn and Indeed carry the most risk here, since the application is made
+from your own account there. Their handlers exist because you asked for them;
+they are built to look like a person applying rather than to go fast: one step
+at a time, your own session, 10 a day per site by default, a jittered pause
+between submissions, and nothing sent until you change the mode.
+
+This is why submission ships off. `dry_run` is the default mode, and `auto`
+keeps both caps and the jittered delay on. Even then an application is only
+recorded as sent when the page says so. Read a dry run and its screenshot
+before you change the mode.

@@ -30,6 +30,7 @@ from jobagent.apply.answering import make_answerer
 from jobagent.apply.browser.session import BrowserSession, BrowserUnavailable, open_browser
 from jobagent.apply.handlers import default_handlers, handler_for
 from jobagent.apply.models import MODES, Handler, HandlerResult, NeededInput, Packet
+from jobagent.apply.sessions import SITES
 from jobagent.config import Settings
 from jobagent.db.database import utcnow
 from jobagent.discovery import store as jobs
@@ -229,6 +230,15 @@ def apply_to_job(
     handler = handler_for(url, ats, handlers)
     if handler is None:
         return _skipped(job_id, f"no handler for {ats or 'this site'}")
+    submit = mode == "auto"
+    if submit and handler.ats in SITES:
+        sent = store.submitted_last_day(conn, ats=handler.ats)
+        if sent >= settings.easy_apply_daily_cap:
+            return _skipped(
+                job_id,
+                f"{SITES[handler.ats].label} cap of {settings.easy_apply_daily_cap} "
+                "applications a day reached; it goes out tomorrow",
+            )
 
     notes: list[str] = []
     completer = _resolve_completer(settings, completer, notes)
@@ -245,7 +255,6 @@ def apply_to_job(
     attempt_no = len(store.list_attempts(conn, application_id)) + 1
     screenshot = settings.screenshots_dir / f"{job_id}-{attempt_no}.png"
     screenshot.parent.mkdir(parents=True, exist_ok=True)
-    submit = mode == "auto"
 
     started = utcnow()
     try:

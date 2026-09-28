@@ -180,6 +180,12 @@ def _in_office(text: str) -> bool:
     return any(term in lower for term in _IN_OFFICE)
 
 
+def place_matches(want: str, have: str) -> bool:
+    """Whether the wanted place (lower case) names the location `have`."""
+    lower = have.lower()
+    return _location_matches(want, lower, set(_words(lower)))
+
+
 def _location_matches(want: str, have: str, have_words: set[str]) -> bool:
     if _contains(have, want):
         return True

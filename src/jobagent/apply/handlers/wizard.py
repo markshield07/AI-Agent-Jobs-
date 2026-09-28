@@ -168,6 +168,10 @@ class WizardHandler(BaseHandler):
         wait_settled(page, self.settle_ms)
         click_first_visible(page, COOKIE_BUTTON_SELECTORS)
 
+        # Before any sign-in: a job in the wrong place needs no account.
+        elsewhere = self.wrong_place(page, packet.wanted_places)
+        if elsewhere:
+            return HandlerResult(outcome="blocked", error=elsewhere, wrong_place=elsewhere)
         if self.signed_out(page):
             return self._result(
                 page,

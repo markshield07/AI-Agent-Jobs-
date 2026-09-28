@@ -374,6 +374,8 @@ class WorkdayHandler(WizardHandler):
     pause_ms = SETTLE_MS
     max_steps = 10
     settle_ms = 8_000
+    place_selectors = ('[data-automation-id="locations"] dd',)
+    remote_type_selectors = ('[data-automation-id="remoteType"] dd',)
     # The longest wait for the next step to be drawn after Save and Continue.
     step_timeout_ms = 20_000
     poll_ms = 250

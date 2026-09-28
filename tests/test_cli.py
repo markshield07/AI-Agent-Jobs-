@@ -340,3 +340,117 @@ def test_approve_prints_the_result(cli_settings, db, monkeypatch, capsys):
     )
     main.run(["approve", "3"])
     assert "j1: submitted via lever: Application submitted" in capsys.readouterr().out
+
+
+# ------------------------------------------------------------------ inbox --
+
+
+@pytest.fixture
+def fake_mailbox(monkeypatch):
+    """A mailbox holding the fixture mail, in place of a real IMAP server."""
+    from pathlib import Path
+
+    from jobagent.inbox import poller
+    from jobagent.inbox.mailbox import parse_message
+
+    emails = Path(__file__).parent / "fixtures" / "emails"
+
+    class FakeMailbox:
+        name = "fake"
+
+        def __init__(self, *names):
+            self.messages = [parse_message((emails / f"{n}.eml").read_bytes()) for n in names]
+
+        def fetch(self, *, since=None, limit=200):
+            return list(self.messages)
+
+    box = FakeMailbox("rejection", "newsletter")
+    monkeypatch.setattr(poller, "open_mailbox", lambda settings: box)
+    return box
+
+
+@pytest.fixture
+def an_application(conn):
+    from jobagent.apply import store as applications
+    from jobagent.discovery.models import RawJob
+    from jobagent.discovery.store import upsert_jobs
+
+    raw = RawJob(
+        url="https://boards.greenhouse.io/acme/jobs/1",
+        title="Senior Backend Engineer",
+        company="Acme Robotics",
+        source="greenhouse",
+    )
+    job_id = upsert_jobs(conn, [raw]).new_ids[0]
+    app_id = applications.get_or_create_application(conn, job_id, mode="auto")
+    conn.execute(
+        "UPDATE applications SET submitted_at = '2026-09-20T12:00:00+00:00' WHERE id = ?",
+        (app_id,),
+    )
+    return app_id
+
+
+def test_inbox_reads_the_mailbox_and_says_what_it_did(
+    cli_settings, an_application, fake_mailbox, capsys
+):
+    main.run(["inbox"])
+    out = capsys.readouterr().out
+    assert "2 messages, 1 matched, 1 unmatched, 1 statuses moved." in out
+    assert f"application {an_application}" in out
+    assert "reads as rejected" in out and "moved to rejected" in out
+    assert "unmatched, attach it with" in out
+
+
+def test_inbox_dry_run_records_nothing(cli_settings, an_application, fake_mailbox, conn, capsys):
+    from jobagent.inbox import store as inbox
+
+    main.run(["inbox", "--dry-run"])
+    assert "Nothing was recorded." in capsys.readouterr().out
+    assert inbox.list_messages(conn) == []
+
+
+def test_inbox_list_shows_the_log(cli_settings, an_application, fake_mailbox, capsys):
+    main.run(["inbox"])
+    capsys.readouterr()
+    main.run(["inbox", "--list"])
+    out = capsys.readouterr().out
+    assert "rejected" in out and "digest@jobsweekly.example" in out
+
+    main.run(["inbox", "--list", "--unmatched", "--json"])
+    rows = json.loads(capsys.readouterr().out)
+    assert len(rows) == 1 and rows[0]["application_id"] is None
+
+
+def test_inbox_attach_files_a_message_and_moves_the_status(
+    cli_settings, an_application, fake_mailbox, conn, capsys
+):
+    from jobagent.inbox import store as inbox
+
+    main.run(["inbox"])
+    capsys.readouterr()
+    row_id = inbox.list_messages(conn, matched=False)[0]["id"]
+
+    main.run(["inbox", "--attach", f"{row_id}={an_application}", "--status", "screening"])
+    out = capsys.readouterr().out
+    assert f"filed against application {an_application}" in out
+
+
+def test_inbox_attach_wants_two_numbers(cli_settings, an_application, fake_mailbox, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main.run(["inbox", "--attach", "twelve"])
+    assert exc.value.code == 2
+    assert "MESSAGE=APPLICATION" in capsys.readouterr().err
+
+
+def test_inbox_without_a_mailbox_says_what_to_set(cli_settings, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main.run(["inbox"])
+    assert exc.value.code == 2
+    assert "JOBAGENT_IMAP_HOST" in capsys.readouterr().err
+
+
+def test_inbox_json_prints_the_whole_report(cli_settings, an_application, fake_mailbox, capsys):
+    main.run(["inbox", "--json"])
+    report = json.loads(capsys.readouterr().out)
+    assert report["fetched"] == 2 and report["matched"] == 1
+    assert report["results"][0]["reading"]["label"] == "rejected"

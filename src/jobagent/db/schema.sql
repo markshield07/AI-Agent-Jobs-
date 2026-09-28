@@ -236,3 +236,35 @@ CREATE TABLE IF NOT EXISTS answers (
     updated_at       TEXT NOT NULL
 );
 
+
+-- -------------------------------------------------------------- the inbox --
+
+-- One row per mail the poller has read, whether or not it belonged to an
+-- application. The row is the record of having seen it: `message_id` is the
+-- mail's own Message-ID, so a second poll over the same window records
+-- nothing twice. Bodies are not kept, only an excerpt, and no credential ever
+-- reaches this table.
+CREATE TABLE IF NOT EXISTS inbox_messages (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id       TEXT NOT NULL UNIQUE,
+    application_id   INTEGER REFERENCES applications(id) ON DELETE SET NULL,
+    subject          TEXT,
+    from_addr        TEXT,
+    from_name        TEXT,
+    received_at      TEXT NOT NULL,
+    excerpt          TEXT,
+    label            TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (label IN ('acknowledgement','screening','interviewing','offer',
+                         'rejected','withdrawn','unknown')),
+    confidence       REAL NOT NULL DEFAULT 0,
+    reason           TEXT,
+    read_by          TEXT
+        CHECK (read_by IS NULL OR read_by IN ('rules','model','none','manual')),
+    match_confidence REAL,
+    match_reason     TEXT,
+    event_id         INTEGER REFERENCES application_events(id) ON DELETE SET NULL,
+    seen_at          TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_inbox_app ON inbox_messages(application_id, received_at);
+CREATE INDEX IF NOT EXISTS idx_inbox_received ON inbox_messages(received_at);

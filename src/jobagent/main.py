@@ -9,6 +9,7 @@ jobagent apply           fill application forms; submit only in auto mode
 jobagent applications    list applications and what they wait on
 jobagent answer          answer questions a form asked, then try again
 jobagent approve         submit an application left at the button
+jobagent inbox           read replies from the mailbox and record what they say
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from fastapi import FastAPI
 
 from jobagent.api.applications import router as applications_router
 from jobagent.api.discovery import router as discovery_router
+from jobagent.api.inbox import router as inbox_router
 from jobagent.api.routes import router
 from jobagent.api.tailoring import router as tailoring_router
 from jobagent.config import Settings, get_settings
@@ -42,16 +44,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.last_report = None
         app.state.apply_lock = threading.Lock()
         app.state.last_apply_report = None
+        app.state.inbox_lock = threading.Lock()
+        app.state.last_inbox_report = None
         try:
             yield
         finally:
             app.state.db.close()
 
-    app = FastAPI(title="Job Agent", version="0.4.0", lifespan=lifespan)
+    app = FastAPI(title="Job Agent", version="0.5.0", lifespan=lifespan)
     app.include_router(router)
     app.include_router(discovery_router)
     app.include_router(tailoring_router)
     app.include_router(applications_router)
+    app.include_router(inbox_router)
     return app
 
 
@@ -131,6 +136,22 @@ def build_parser() -> argparse.ArgumentParser:
     approve = sub.add_parser("approve", help="Submit an application left at the button.")
     approve.add_argument("application_id", type=int)
     approve.add_argument("--headed", action="store_true")
+
+    inbox = sub.add_parser("inbox", help="Read replies and record what they say.")
+    inbox.add_argument("--list", action="store_true", help="Show the log instead of polling.")
+    inbox.add_argument("--unmatched", action="store_true", help="With --list: only unattached.")
+    inbox.add_argument(
+        "--attach",
+        metavar="MESSAGE=APPLICATION",
+        help="File a message against an application, e.g. 12=3.",
+    )
+    inbox.add_argument("--status", help="With --attach: also move the application to this status.")
+    inbox.add_argument("--since", help="Read mail received on or after this date, e.g. 2026-09-01.")
+    inbox.add_argument("--limit", type=int, help="At most this many messages.")
+    inbox.add_argument(
+        "--dry-run", action="store_true", help="Read and classify, but record nothing."
+    )
+    inbox.add_argument("--json", action="store_true", help="Print the full report as JSON.")
     return parser
 
 
@@ -416,6 +437,88 @@ def _cmd_approve(args: argparse.Namespace) -> int:
     return 1 if record["outcome"] == "failed" else 0
 
 
+def _describe_reply(result: dict) -> str:
+    message = result["message"]
+    who = message["from_name"] or message["from_addr"]
+    line = f"{message['received_at']}  {who}: {message['subject']}"
+    match, reading = result.get("match"), result.get("reading")
+    if match is None:
+        return line + "\n    unmatched, attach it with: jobagent inbox --attach ID=APPLICATION"
+    line += f"\n    application {match['application_id']} ({match['reason']})"
+    if reading:
+        line += f"\n    reads as {reading['label']} ({reading['reason']})"
+        if result.get("advanced"):
+            line += f", moved to {reading['status']}"
+        elif reading["status"]:
+            line += ", status unchanged"
+    return line
+
+
+def _cmd_inbox(args: argparse.Namespace) -> int:
+    from jobagent.inbox import store as inbox
+    from jobagent.inbox.poller import attach_message, poll_inbox
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    settings = get_settings()
+    db = open_database(settings.db_path)
+    try:
+        conn = db.connection()
+        if args.attach:
+            row_id, sep, application_id = args.attach.partition("=")
+            if not sep or not row_id.strip().isdigit() or not application_id.strip().isdigit():
+                print("Expected MESSAGE=APPLICATION, both numbers.", file=sys.stderr)
+                return 2
+            try:
+                done = attach_message(
+                    conn,
+                    int(row_id),
+                    int(application_id),
+                    to_status=args.status,
+                    settings=settings,
+                )
+            except ValueError as exc:
+                print(exc, file=sys.stderr)
+                return 2
+            where = done["application"]
+            print(f"message {row_id} filed against application {where['id']}, {where['status']}")
+            return 0
+
+        if args.list:
+            rows = inbox.list_messages(
+                conn, matched=False if args.unmatched else None, limit=args.limit or 100
+            )
+            if args.json:
+                print(json.dumps(rows, indent=2, default=str))
+                return 0
+            if not rows:
+                print("No messages read yet.")
+                return 0
+            for row in rows:
+                where = f"application {row['application_id']}" if row["application_id"] else "-"
+                print(f"{row['id']}: {row['received_at']}  {row['label']:15} {where}")
+                print(f"    {row['from_addr']}: {row['subject']}")
+            return 0
+
+        report = poll_inbox(
+            conn, settings, since=args.since, limit=args.limit, write=not args.dry_run
+        )
+    finally:
+        db.close()
+
+    if args.json:
+        print(json.dumps(report.as_dict(), indent=2))
+        return 1 if report.error else 0
+    if report.error:
+        print(report.error, file=sys.stderr)
+        return 2
+    print(report.summary() + (" Nothing was recorded." if args.dry_run else ""))
+    for result in report.results:
+        print(_describe_reply(result))
+    for note in report.notes:
+        print(f"  note: {note}")
+    return 0
+
+
 _COMMANDS = {
     "discover": _cmd_discover,
     "criteria": _cmd_criteria,
@@ -424,6 +527,7 @@ _COMMANDS = {
     "applications": _cmd_applications,
     "answer": _cmd_answer,
     "approve": _cmd_approve,
+    "inbox": _cmd_inbox,
 }
 
 

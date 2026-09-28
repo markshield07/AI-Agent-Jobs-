@@ -14,8 +14,8 @@ Architecture and the reasoning behind each decision:
 | 1 | Scaffold, database schema, resume intake, fact base | done |
 | 2 | Discovery, dedupe, enrichment, scoring | done |
 | 3 | Tailoring and PDF rendering | done |
-| 4 | Submission, on career-page boards, off by default | **this branch** |
-| 5 | Response tracking | not started |
+| 4 | Submission, on career-page boards, off by default | done |
+| 5 | Response tracking | **this branch** |
 | 6 | Dashboard and scheduling | not started |
 
 ## The fact base
@@ -65,6 +65,19 @@ behind it, picked by `JOBAGENT_LLM_BACKEND` in `.env`:
 | `JOBAGENT_APPLY_MODEL_ANSWERS` | `true` | Let the model draft answers to open questions, from the fact base |
 | `JOBAGENT_HEADLESS` | `true` | `false`, or `--headed`, shows the browser window |
 | `JOBAGENT_BROWSER_EXECUTABLE` | unset | A Chromium binary, when Playwright's own is not there |
+
+### Response tracking settings
+
+| Setting | Default | What it does |
+|---|---|---|
+| `JOBAGENT_IMAP_HOST` | unset | The mailbox to read replies from. Unset means response tracking does nothing |
+| `JOBAGENT_IMAP_PORT` | `993` | |
+| `JOBAGENT_IMAP_USER` | unset | |
+| `JOBAGENT_IMAP_PASSWORD` | unset | An app password for Gmail and Outlook, not your account password |
+| `JOBAGENT_IMAP_FOLDER` | `INBOX` | A dedicated folder, if you filter application mail into one |
+| `JOBAGENT_INBOX_LOOKBACK_DAYS` | `30` | How far back the first poll reads |
+| `JOBAGENT_INBOX_MODEL_TRIAGE` | `true` | Ask the model about replies the phrase rules cannot read |
+| `JOBAGENT_INBOX_MIN_CONFIDENCE` | `0.6` | Below this a reply is logged but moves no status |
 
 For the subscription route: install Claude Code, run `claude auth login`
 once, and leave `ANTHROPIC_API_KEY` unset. The agent shells out to
@@ -205,6 +218,38 @@ ruff check . && ruff format --check .
 Parsing a resume costs one model call. Re-uploading a byte-identical file
 returns the existing record instead of parsing it again.
 
+### Tracking replies
+
+```bash
+jobagent inbox                      # read the mailbox and record what came back
+jobagent inbox --dry-run            # read and classify, record nothing
+jobagent inbox --list               # the log of everything read so far
+jobagent inbox --list --unmatched   # what could not be filed automatically
+jobagent inbox --attach 12=3 --status screening
+```
+
+Set the IMAP settings above and the poller reads the mailbox, works out which
+application each reply belongs to, reads what it says, and appends it to that
+application's event log. The mailbox is opened read-only: nothing is sent,
+moved, deleted or even marked read.
+
+Matching has no thread id to follow, so it weighs several weak signals — the
+sender's domain against the company's, the company's name in the sender's
+display name or the subject, the job's title in either — and refuses to file
+anything it is not sure about. Those land in the log unmatched, and
+`--attach MESSAGE=APPLICATION` is how you place one by hand.
+
+Reading a reply is rules first: a list of the phrases an applicant tracking
+system actually sends, specific enough that a hit is close to decisive. What
+they cannot read goes to the model, and a reply nobody is confident about is
+recorded as `unknown` and moves no status. The asymmetry is deliberate — a
+missed interview invitation costs you a look in your own inbox, a wrong
+rejection costs you the interview.
+
+A reply only ever moves an application **forward**: an interview invitation
+after a rejection is kept as a note, not a reversal. `rejected` and `withdrawn`
+end an application from anywhere.
+
 ## API
 
 | Method | Path | What it does |
@@ -238,6 +283,11 @@ returns the existing record instead of parsing it again.
 | `POST` | `/api/applications/{id}/answers` | Answer what a form asked; `retry` to fill it again |
 | `POST` | `/api/applications/{id}/approve` | Submit one a dry run left at the button |
 | `POST` | `/api/applications/{id}/events` | Log a reply, an interview, a rejection, a note |
+| `POST` | `/api/inbox/poll` | Read the mailbox once; `?wait=true` returns the report |
+| `GET` | `/api/inbox/last` | The last poll's report |
+| `GET` | `/api/inbox` | Everything read, newest first. Filter by `application_id`, `matched`, `label` |
+| `GET` | `/api/inbox/counts` | How many messages per label, and how many unmatched |
+| `POST` | `/api/inbox/{id}/attach` | File a message against an application, and move its status |
 
 Interactive docs at `/docs` while the server is running.
 
@@ -285,6 +335,13 @@ src/jobagent/
 │   ├── handlers/       One per ATS (Greenhouse, Lever, Ashby) plus the generic filler
 │   ├── store.py        Applications and attempts on disk; status derived from events
 │   └── pipeline.py     One apply pass: job, variant, packet, handler, attempt
+├── inbox/
+│   ├── models.py       A message, a match, a reading, and what one poll did
+│   ├── mailbox.py      IMAP, read-only, and raw mail to plain text
+│   ├── match.py        Which application a reply belongs to, or none
+│   ├── classify.py     What it says: phrase rules first, the model on the rest
+│   ├── store.py        The inbox log; the reason a mail is never read twice
+│   └── poller.py       One pass: fetch, match, read, append
 ├── api/                FastAPI routes
 └── main.py             App factory and the command line
 ```
@@ -294,7 +351,8 @@ Two invariants the schema enforces and the rest of the code assumes:
 - **`application_events` is append-only.** An application's status is derived
   from its newest event by the `application_status` view, never written in
   place. Response rate and time-to-first-reply are computed from the gaps
-  between events, and a status column overwrites that history.
+  between events, and a status column overwrites that history. Phase 5 appends
+  to the same log from the mailbox and writes no status of its own.
 - **`resume_facts` is the only source a tailored resume may draw from.** The
   validator in `tailor/validate.py` is where that is enforced.
 

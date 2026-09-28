@@ -130,3 +130,75 @@ def test_a_page_with_only_a_search_box_is_not_an_application(page, packet):
     assert result.outcome == "failed" and result.error == NOT_AN_APPLICATION
     assert page.input_value("#q") == ""
     assert page.evaluate("() => window.__searched || null") is None
+
+
+# ------------------------------------------------ pressing through to it --
+
+FLOW = Path(__file__).parent / "fixtures" / "forms" / "careers_flow.html"
+
+
+def run_flow(page, packet, variant, *, submit=False):
+    packet.job["url"] = f"{FLOW.as_uri()}?variant={variant}"
+    handler = GenericHandler()
+    handler.settle_ms = 1_500
+    handler.new_tab_ms = 1_500
+    result = handler.apply(
+        page, packet, make_answerer(packet, completer=None, allow_model=False), submit=submit
+    )
+    return result
+
+
+@pytest.mark.parametrize(
+    "variant", ["link", "newtab", "choice", "guest", "reveal", "consent", "filter", "onetrust"]
+)
+def test_it_presses_through_to_the_form_past_alerts_and_other_sites(page, packet, variant):
+    result = run_flow(page, packet, variant)
+    assert result.outcome == "dry_run", result.error
+    values = {f.key: f.value for f in result.filled}
+    assert values["first_name"] == "Mark" and values["email"] == "mark@example.com"
+    assert "alert_email" not in values, "the talent-community box is not the application"
+    assert page.evaluate("() => window.__opened") in ([], None), "no LinkedIn or Indeed apply"
+
+
+def test_a_pressed_through_form_is_submitted(page, packet):
+    result = run_flow(page, packet, "choice", submit=True)
+    assert result.outcome == "submitted", result.error
+    assert page.evaluate("() => window.__submitted")["first_name"] == "Mark"
+    assert page.evaluate("() => window.__subscribed || null") is None
+
+
+def test_a_sign_in_with_no_guest_way_is_a_login_wall(page, packet):
+    result = run_flow(page, packet, "wall")
+    assert result.outcome == "blocked"
+    assert result.error == "the page wants a login before the form"
+
+
+def test_an_apply_that_lands_on_workday_hands_over(monkeypatch):
+    from jobagent.apply.handlers.generic import HANDED_OFF
+
+    class Page:
+        url = "https://acme.wd5.myworkdayjobs.com/en-US/careers/job/Remote/Engineer_R1"
+
+    handler = GenericHandler()
+    assert "workday" in HANDED_OFF and handler._handed_off(Page())
+    assert handler.discover(Page()) == [], "nothing is filled by the generic handler there"
+    Page.url = "https://careers.example.com/job/1"
+    assert not GenericHandler()._handed_off(Page())
+
+
+def test_a_search_filters_apply_is_not_the_jobs(page, packet):
+    result = run_flow(page, packet, "filter")
+    assert result.outcome == "dry_run", result.error
+    assert page.evaluate("() => window.__filtered || null") is None
+
+
+def test_a_page_that_applies_only_through_indeed_goes_to_indeeds_posting(page, packet):
+    packet.job["url"] = "https://www.indeed.com/viewjob?jk=abc123"
+    packet.job["apply_url"] = f"{FLOW.as_uri()}?variant=indeedapply"
+    handler = GenericHandler()
+    handler.settle_ms = 1_500
+    result = handler.apply(
+        page, packet, make_answerer(packet, completer=None, allow_model=False), submit=False
+    )
+    assert result.outcome == "blocked" and "Indeed Apply" in result.error
+    assert result.external_url == "https://www.indeed.com/viewjob?jk=abc123"

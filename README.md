@@ -180,7 +180,14 @@ Greenhouse, Lever, Ashby, Workday, LinkedIn Easy Apply and Indeed's own
 application have a handler each, and anything else falls to a generic filler that works
 from what the page shows. The
 generic one refuses to fill a form that is not an application: a careers page's
-search box is a form too.
+search box is a form too. It presses through to the form, up to three pages
+deep: the posting's Apply (a link, a button, or one that opens a new tab), then
+"Apply manually" or "Continue as guest" where a site offers them. It never
+presses apply-with-LinkedIn (or Indeed, Google...), sign-ins, account creation
+or job alerts, and with a job-alert box beside the application it fills only
+the application. An Apply that lands on Workday, Greenhouse, Lever or Ashby is
+handed to that site's own handler. A sign-in with no guest way round is
+reported as such.
 
 What goes on the form comes from three places, in order: your contact details
 and the tailored resume for that job, then the answer bank, then the model, and

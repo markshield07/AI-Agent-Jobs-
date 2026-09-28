@@ -44,6 +44,9 @@ COOKIE_BUTTON_SELECTORS: tuple[str, ...] = (
     '[class*="consent" i] button:has-text("Accept")',
     'button:has-text("Accept all cookies")',
     'button:has-text("Accept Cookies")',
+    # OneTrust's preference centre, when it is what shows (EY): save as is.
+    "#onetrust-pc-sdk .save-preference-btn-handler",
+    "#onetrust-pc-sdk #accept-recommended-btn-handler",
 )
 
 

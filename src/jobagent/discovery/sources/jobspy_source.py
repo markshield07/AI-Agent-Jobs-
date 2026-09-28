@@ -2,7 +2,9 @@
 
 jobspy scrapes the boards' public listings, so one (title, location) query is
 one scrape per site and rate limits arrive fast: the query count is capped and
-a failed query is skipped, not fatal. The library is imported inside `search`
+a failed query is skipped, not fatal. A Remote query sends Indeed its remote
+filter in a search of its own (Indeed ignores it next to a max age) and keeps
+what the boards' remote filters chose as remote. The library is imported inside `search`
 so this module loads even where the package is missing. Named `jobspy_source`
 so it does not shadow the installed `jobspy` package.
 
@@ -15,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterator
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from jobagent.discovery.ats import detect_ats
@@ -47,34 +50,79 @@ class JobSpySource:
 
         seen: set[str] = set()
         for title, location in _queries(criteria, self.max_queries):
-            remote = location is not None and location.lower() == "remote"
-            try:
-                frame = scrape(
-                    site_name=list(criteria.jobspy_sites),
-                    search_term=title,
-                    location=None if remote else location,
-                    is_remote=remote,
-                    results_wanted=criteria.results_per_query,
-                    hours_old=criteria.max_age_hours,
-                    country_indeed=INDEED_COUNTRY,
-                )
-                rows = _records(frame)
-            except ImportError as exc:
-                log.warning("jobspy: python-jobspy cannot be used, skipping it: %s", exc)
-                return
-            except Exception as exc:
-                log.warning("jobspy: query %r in %r failed: %s", title, location, exc)
-                continue
+            for call, board_remote in _calls(criteria, title, location):
+                try:
+                    rows = _records(scrape(**call))
+                except ImportError as exc:
+                    log.warning("jobspy: python-jobspy cannot be used, skipping it: %s", exc)
+                    return
+                except Exception as exc:
+                    log.warning("jobspy: query %r in %r failed: %s", title, location, exc)
+                    continue
+                if board_remote and call["hours_old"] is None:
+                    rows = [r for r in rows if _fresh(r.get("date_posted"), criteria.max_age_hours)]
 
-            for row in rows:
-                job = _to_job(row)
-                if job is None:
-                    log.debug("jobspy: skipping a row without url, title or company: %r", row)
-                    continue
-                if job.url in seen:
-                    continue
-                seen.add(job.url)
-                yield job
+                for row in rows:
+                    job = _to_job(row)
+                    if job is None:
+                        log.debug("jobspy: skipping a row without url, title or company: %r", row)
+                        continue
+                    if job.url in seen:
+                        continue
+                    seen.add(job.url)
+                    if board_remote:
+                        # The board's own remote filter chose it. jobspy's is_remote
+                        # column only says "remote" appears somewhere in the text.
+                        job.remote = True
+                    yield job
+
+
+def _calls(
+    criteria: SearchCriteria, title: str, location: str | None
+) -> list[tuple[dict[str, Any], bool]]:
+    """The scrape_jobs calls for one query, each with whether the boards'
+    remote filter applies to it.
+
+    Indeed takes one filter per search: given a max age, it drops the remote
+    filter and returns every job in the country. So a Remote query asks
+    Indeed on its own with the remote filter and no age, and the age is
+    checked here; the other boards take both at once."""
+    sites = list(criteria.jobspy_sites)
+    remote = location is not None and location.lower() == "remote"
+    base = {
+        "search_term": title,
+        "location": None if remote else location,
+        "is_remote": remote,
+        "results_wanted": criteria.results_per_query,
+        "hours_old": criteria.max_age_hours,
+        "country_indeed": INDEED_COUNTRY,
+    }
+    if not (remote and "indeed" in sites):
+        return [({"site_name": sites, **base}, remote)]
+    calls = [({"site_name": ["indeed"], **base, "hours_old": None}, True)]
+    others = [site for site in sites if site != "indeed"]
+    if others:
+        calls.append(({"site_name": others, **base}, True))
+    return calls
+
+
+def _fresh(posted: Any, max_age_hours: int | None) -> bool:
+    """Whether a posting is within the age wanted; one with no date is kept."""
+    if not max_age_hours or posted is None:
+        return True
+    if isinstance(posted, str):
+        try:
+            posted = datetime.fromisoformat(posted)
+        except ValueError:
+            return True
+    now = datetime.now(UTC)
+    if isinstance(posted, datetime):
+        stamp = posted if posted.tzinfo else posted.replace(tzinfo=UTC)
+        return stamp >= now - timedelta(hours=max_age_hours)
+    if isinstance(posted, date):
+        # A day only: kept if any part of that day falls inside the window.
+        return posted >= (now - timedelta(hours=max_age_hours)).date()
+    return True
 
 
 def _import_scrape() -> Callable[..., Any] | None:

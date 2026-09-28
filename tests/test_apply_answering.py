@@ -470,3 +470,23 @@ def test_a_planning_bug_becomes_a_needed_input_not_a_crash(packet, monkeypatch):
     monkeypatch.setattr(answering, "_section", lambda field: 1 / 0)
     plan = plan_fills([F("x", "Anything", required=True)], packet)
     assert plan.needed[0].key == "x" and "planning failed" in plan.needed[0].reason
+
+
+@pytest.mark.parametrize(
+    ("label", "from_letter"),
+    [
+        ("Why are you interested in working for CrowdStrike?", True),
+        ("Why do you want to join Beta?", True),
+        ("Tell us why you are applying for this role", True),
+        ("What interests you in joining our team?", False),
+        ("Why are you leaving your current job?", False),
+    ],
+)
+def test_why_this_company_is_answered_from_the_cover_letter(packet, label, from_letter):
+    field = FormField(key="why", label=label, kind="textarea")
+    plan = plan_fills([field], packet)
+    if from_letter:
+        assert fills(plan) == {"why": packet.cover_letter}
+        assert sources(plan) == {"why": "cover_letter"}
+    else:
+        assert "why" not in fills(plan)

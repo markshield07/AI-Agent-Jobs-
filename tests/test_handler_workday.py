@@ -91,11 +91,13 @@ def packet(tmp_path) -> Packet:
     )
 
 
-def run(page, packet, *, submit=False, variant="", shot=None):
+def run(page, packet, *, submit=False, variant="", shot=None, settle_ms=500, draw_ms=None):
     packet.job["url"] = fixture_url(variant)
+    if draw_ms:
+        packet.job["url"] += ("&" if variant else "?") + f"draw_ms={draw_ms}"
     answerer = make_answerer(packet, completer=None, allow_model=False)
     handler = WorkdayHandler()
-    handler.settle_ms = 500
+    handler.settle_ms = settle_ms
     handler.pause_ms = 100
     handler.step_timeout_ms = 5_000
     handler.poll_ms = 50
@@ -158,7 +160,12 @@ def test_workdays_own_controls_are_filled_like_a_person_would(page, packet):
     assert answers["info"]["phoneType"] == "Mobile", "phone device type is housekeeping"
     assert answers["info"]["phone"] == "+1 555 0100"
     assert answers["info"]["previous"] == "false"
-    assert answers["questions"] == {"auth": "Yes", "sponsor": "No", "teams": ""}
+    assert answers["questions"] == {
+        "auth": "Yes",
+        "sponsor": "No",
+        "teams": "",
+        "why": "I run networks.",
+    }
     assert answers["disclosures"]["gender"] == "I do not wish to self-identify"
     assert answers["disclosures"]["veteran"] == "I don't wish to answer"
     assert answers["disclosures"]["terms"] is True
@@ -307,6 +314,39 @@ def test_an_empty_entry_takes_the_most_recent_role(page, packet):
         }
     ]
     assert not [n for n in result.needed if n.required]
+
+
+@pytest.mark.usefixtures("page")
+def test_a_date_box_under_its_display_still_takes_the_date(page, packet):
+    """Live, "MM" is drawn over the month box and a plain click on it times out."""
+    result = run(page, packet, variant="manual")
+    assert result.outcome == "dry_run", result.error
+    assert js(page, "__answers")["jobs"][0]["from"] == "04/2018"
+
+
+@pytest.mark.usefixtures("page")
+def test_the_next_step_is_awaited_while_the_bar_has_moved_over_the_old_page(page, packet):
+    """Live, the progress bar moves first, then the page goes blank, then loads,
+    and Save and Continue's page settles long before that."""
+    result = run(page, packet, settle_ms=50, draw_ms=2000)
+    assert result.outcome == "dry_run", result.error
+    assert js(page, "__early") is None, "Save and Continue pressed on a step still going"
+    assert js(page, "__steps") == [
+        "autofill",
+        "info",
+        "experience",
+        "questions",
+        "disclosures",
+        "selfid",
+        "review",
+    ]
+
+
+@pytest.mark.usefixtures("page")
+def test_why_this_company_takes_the_cover_letter(page, packet):
+    result = run(page, packet)
+    assert result.outcome == "dry_run", result.error
+    assert js(page, "__answers")["questions"]["why"] == "I run networks."
 
 
 @pytest.mark.usefixtures("page")
@@ -528,3 +568,21 @@ def test_the_loading_page_between_steps_is_not_the_next_step():
     assert not _arrived("", before)
     assert not _arrived(before, before)
     assert _arrived("applyFlowMyInfoPage|current step 2 of 7 My Information", before)
+
+
+def test_a_moved_progress_bar_over_the_old_page_is_not_the_next_step():
+    from jobagent.apply.handlers.workday import _arrived
+
+    before = "applyFlowMyExpPage|current step 2 of 6 My Experience"
+    moved = "applyFlowMyExpPage|current step 3 of 6 Application Questions 1 of 2"
+    assert not _arrived(moved, before)
+    assert _arrived(moved, before, seen_loading=True)
+
+    questions = "applyFlowPrimaryQuestionsPage|current step 3 of 6 Application Questions 1 of 2"
+    second = "applyFlowPrimaryQuestionsPage|current step 4 of 6 Application Questions 2 of 2"
+    assert not _arrived(second, questions)
+    assert _arrived(second, questions, seen_loading=True)
+
+    blank = "|current step 3 of 6 Application Questions 1 of 2"
+    assert not _arrived(blank, before)
+    assert not _arrived(blank, before, seen_loading=True)

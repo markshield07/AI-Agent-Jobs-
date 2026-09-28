@@ -527,11 +527,16 @@ class WorkdayHandler(WizardHandler):
         if not before:
             return
         root = self._mark_root(page)
-        # A step that will not save shows its errors and stays; the loop reports them.
-        self._wait_until(
-            page,
-            lambda: _arrived(self.step_marker(page), before) or bool(self._step_errors(page, root)),
-        )
+        seen_loading = False
+
+        def done() -> bool:
+            nonlocal seen_loading
+            marker = self.step_marker(page)
+            seen_loading = seen_loading or _between_steps(marker)
+            # A step that will not save shows its errors and stays; the loop reports them.
+            return _arrived(marker, before, seen_loading) or bool(self._step_errors(page, root))
+
+        self._wait_until(page, done)
         self._wait_drawn(page)
 
     def _wait_until(self, page: Any, done: Any) -> bool:
@@ -945,17 +950,54 @@ class WorkdayHandler(WizardHandler):
                 continue
             if part is None:
                 raise ValueError(f"the form wants a {name} and {value!r} does not give one")
-            control = page.locator(selector).first
-            control.click(timeout=3000)
+            _focus_date_part(page.locator(selector).first)
             page.keyboard.type(part)
             page.wait_for_timeout(100)
 
 
-def _arrived(marker: str, before: str) -> bool:
-    """True once a new step is on screen. Between steps Workday shows
-    applyFlowLoadingPage with the next step already active in the progress bar,
-    and that is not the step yet."""
-    return marker not in ("", before) and not marker.startswith("applyFlowLoadingPage")
+def _focus_date_part(control: Any) -> None:
+    """Put the caret in one spin button of a Workday date.
+
+    The live site draws an "MM" / "YYYY" display over each input, so a plain
+    click waits on an element that never receives it. The section around the
+    input takes the click and hands focus on; failing that, focus it directly.
+    """
+    try:
+        control.click(timeout=3000)
+        return
+    except Exception:
+        pass
+    try:
+        control.locator("xpath=..").click(timeout=3000)
+        if control.evaluate("(el) => el === document.activeElement"):
+            return
+    except Exception:
+        pass
+    control.focus(timeout=3000)
+
+
+_LOADING = "applyFlowLoadingPage"
+
+
+def _arrived(marker: str, before: str, seen_loading: bool = False) -> bool:
+    """True once a new step is on screen.
+
+    After Save and Continue Workday moves the progress bar to the next step
+    while the old step's page is still drawn, then shows applyFlowLoadingPage,
+    then the new step. Neither of the first two is the step yet: the page
+    wrapper has to change, or, for two steps that share a wrapper (the two
+    Application Questions pages), the loading page (or a moment with no step
+    page drawn at all) has to have come and gone.
+    """
+    if marker == before or _between_steps(marker):
+        return False
+    page_now, page_before = marker.split("|", 1)[0], before.split("|", 1)[0]
+    return page_now != page_before or seen_loading
+
+
+def _between_steps(marker: str) -> bool:
+    """The loading page, or no step page drawn at all (only the progress bar)."""
+    return not marker.split("|", 1)[0] or marker.startswith(_LOADING)
 
 
 # A work-history field: "workExperience-6--startDate" is entry workExperience-6, part startDate.

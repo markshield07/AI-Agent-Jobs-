@@ -47,6 +47,9 @@
   [data-automation-id="selectedItem"] { display: inline-block; background: #eef; padding: 2px 6px; border-radius: 10px; }
   .file-input { position: absolute; left: -9999px; }
   .date input { width: 48px; }
+  /* Live, the "MM" display lies over the month box and takes its clicks. */
+  .overlaid { position: relative; display: inline-block; }
+  .overlaid [data-automation-id$="-display"] { position: absolute; inset: 0; background: #fff; }
   footer { margin-top: 16px; }
   #start { border: 1px solid #999; padding: 16px; width: 360px; }
 </style>
@@ -316,7 +319,7 @@
         <fieldset><legend><label id="workExperience-5-from"><span>From<abbr>*</abbr></span></label></legend>
         <div aria-hidden="true" id="helpText-workExperience-5--startDate">current value is MM/YYYY</div>
         <div id="workExperience-5--startDate" role="group" data-automation-id="dateInputWrapper" class="date">
-          <div id="workExperience-5--startDate-dateSectionMonth"><div data-automation-id="dateSectionMonth-display">MM</div>
+          <div id="workExperience-5--startDate-dateSectionMonth" class="overlaid"><div data-automation-id="dateSectionMonth-display">MM</div>
             <input role="spinbutton" aria-label="Month" aria-valuemax="12" aria-valuemin="1" id="workExperience-5--startDate-dateSectionMonth-input" data-automation-id="dateSectionMonth-input" value=""></div>
           <span>/</span>
           <div id="workExperience-5--startDate-dateSectionYear"><div data-automation-id="dateSectionYear-display">YYYY</div>
@@ -365,6 +368,10 @@
   <div data-automation-id="formField-sponsor">
     <label for="q-sponsor">Will you now or in the future require sponsorship for employment visa status?<abbr title="required">*</abbr></label>
     <button type="button" id="q-sponsor" aria-haspopup="listbox" data-options="Yes|No">Select One</button>
+  </div>
+  <div data-automation-id="formField-932ff5fbe6fa1001a49d69becb4e0001" data-fkit-id="primaryQuestionnaire--932ff5fbe6fa1001a49d69becb4e0001">
+    <fieldset><legend><div id="label-932ff5fbe6fa1001a49d69becb4e0001"><div data-automation-id="richText"><p><b>Why are you interested in working for Acme Robotics?</b></p></div></div></legend>
+    <textarea id="primaryQuestionnaire--932ff5fbe6fa1001a49d69becb4e0001" aria-required="false"></textarea></fieldset>
   </div>
   <div data-automation-id="formField-teams" data-only="needs_input">
     <label for="q-teams">How many years have you managed network engineering teams?<abbr title="required">*</abbr></label>
@@ -456,10 +463,12 @@
     review: 'Review' };
   // How long the step just left stays on screen before the next one is drawn:
   // longer than the handler's settle wait, so a handler that does not wait
-  // for the new step reads the old one. Then, as on the live site, a loading
-  // page with the progress bar already on the next step.
-  var DRAW_MS = 500;
+  // for the new step reads the old one. As on the live site the progress bar
+  // moves to the next step at once, over the old page; then no page at all,
+  // then a loading page, then the step.
+  var DRAW_MS = Number(new URLSearchParams(location.search).get('draw_ms')) || 500;
   var LOADING_MS = 400;
+  var BLANK_MS = 150;
   var drawing = false;
 
   // The prompt's lists: the first list, and what each category opens.
@@ -544,10 +553,13 @@
 
   function later(name) {
     drawing = true;
+    progressOn(name);
     setTimeout(function () {
-      flow.innerHTML = '<div data-automation-id="applyFlowLoadingPage"><p>Loading</p></div>';
-      progressOn(name);
-      setTimeout(function () { drawing = false; show(name); }, LOADING_MS);
+      flow.innerHTML = '';
+      setTimeout(function () {
+        flow.innerHTML = '<div data-automation-id="applyFlowLoadingPage"><p>Loading</p></div>';
+        setTimeout(function () { drawing = false; show(name); }, LOADING_MS);
+      }, BLANK_MS);
     }, DRAW_MS);
   }
 
@@ -573,10 +585,17 @@
       f.addEventListener('change', function () { window.__uploads += f.files.length; });
     });
     wireDropdowns(flow);
+    Array.prototype.forEach.call(flow.querySelectorAll('[id$="-dateSectionMonth"], [id$="-dateSectionYear"]'), function (sec) {
+      sec.addEventListener('click', function () { var i = sec.querySelector('input'); if (i) i.focus(); });
+    });
     Array.prototype.forEach.call(flow.querySelectorAll('[data-automation-id="multiSelectContainer"]'), wirePrompt);
     progressOn(name);
     var next = flow.querySelector('[data-automation-id="pageFooterNextButton"]');
-    if (next) next.addEventListener('click', function () { if (!drawing) advance(name); });
+    // Live, a press here lands on the next step before it is filled in.
+    if (next) next.addEventListener('click', function () {
+      if (drawing) { window.__early = (window.__early || 0) + 1; return; }
+      advance(name);
+    });
   }
 
   function error(message) {
@@ -628,7 +647,8 @@
       }
     }
     if (from === 'questions') {
-      a.questions = { auth: shown('q-auth'), sponsor: shown('q-sponsor'), teams: val('q-teams') };
+      a.questions = { auth: shown('q-auth'), sponsor: shown('q-sponsor'), teams: val('q-teams'),
+        why: val('primaryQuestionnaire--932ff5fbe6fa1001a49d69becb4e0001') };
       if (variant === 'invalid') { error('Error: The field Sponsorship could not be saved'); return; }
       if (a.questions.auth === 'Select One' || a.questions.sponsor === 'Select One') { error('Errors Found'); return; }
     }

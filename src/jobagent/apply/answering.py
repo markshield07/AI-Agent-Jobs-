@@ -154,6 +154,13 @@ _MARKETING = re.compile(
     r"|\bfuture\s+(?:opportunit|roles|positions)|\bkeep\s+(?:me|my)\b|\bcontact\s+me\b",
     re.IGNORECASE,
 )
+# "Why are you interested in working for us?": what the cover letter says,
+# in words already checked against the facts.
+_WHY_US = re.compile(
+    r"\bwhy\b[^?]*\b(?:interested|want\s+to\s+(?:work|join)|join(?:ing)?|appl(?:y|ying))\b"
+    r"|\binterest(?:ed)?\s+in\s+(?:working|joining)\b",
+    re.IGNORECASE,
+)
 _YES = frozenset({"yes", "y", "true", "1", "i do", "i am", "i have"})
 _NO = frozenset({"no", "n", "false", "0", "i do not", "i am not", "i have not"})
 _ASKABLE = frozenset({"text", "textarea", "select", "multiselect", "radio", "number", "unknown"})
@@ -431,6 +438,9 @@ class _Planner:
             return
         if key == "heard_about":
             self._plan_heard_about(field)
+            return
+        if field.kind == "textarea" and self.packet.cover_letter and _WHY_US.search(field.label):
+            self._fill(field, self.packet.cover_letter, "cover_letter")
             return
         self._plan_open(field)
 

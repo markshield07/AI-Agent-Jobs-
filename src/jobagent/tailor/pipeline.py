@@ -4,10 +4,12 @@
 
 The model proposes; the validator disposes. A plan that claims anything the
 fact base does not state goes back to the model with the exact objections,
-once, and a second failure is kept as a rejected variant rather than shipped.
-The coverage gate applies the same discipline to usefulness: a tailored resume
-that mentions fewer of the posting's keywords than the uploaded one did is not
-an improvement, so it is sent back too.
+up to twice, and a third failure is kept as a rejected variant rather than
+shipped. The coverage gate applies the same discipline to usefulness: a
+tailored resume that mentions clearly fewer of the posting's keywords than the
+uploaded one did is not an improvement, so it is sent back too. "Clearly" is
+`COVERAGE_TOLERANCE`: a one-page selection leaves some facts out on purpose,
+and a point or two of coverage is not worth a rejected resume.
 """
 
 from __future__ import annotations
@@ -32,6 +34,9 @@ from jobagent.tailor.validate import fact_pool_text, validate_cover_letter, vali
 
 log = logging.getLogger(__name__)
 
+# How far under the uploaded resume's keyword coverage a tailored one may fall.
+COVERAGE_TOLERANCE = 0.05
+
 CONTACT_KEYS = ("full_name", "email", "phone", "location")
 
 
@@ -54,7 +59,7 @@ def tailor_job(
     *,
     completer: Completer | None = None,
     with_cover_letter: bool = True,
-    max_attempts: int = 2,
+    max_attempts: int = 3,
     criteria: SearchCriteria | None = None,
 ) -> Variant:
     """Produce a variant for `job_id` and store it. Returns it ready or rejected."""
@@ -114,7 +119,7 @@ def tailor_job(
         if not issues:
             text = resume_text(plan, by_id, contact)
             variant.keyword_coverage = coverage(text, keywords)
-            if base_cov is None or variant.keyword_coverage >= base_cov:
+            if base_cov is None or variant.keyword_coverage >= base_cov - COVERAGE_TOLERANCE:
                 break
             dropped = [
                 k for k in supported if contains_term(base_text, k) and not contains_term(text, k)

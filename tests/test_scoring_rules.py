@@ -214,6 +214,35 @@ def test_location_remote_criterion_only_matches_remote_jobs():
     assert points("location", no_remote, remote=True, location="Remote") == 0
 
 
+def test_remote_only_drops_postings_that_are_plainly_not_remote():
+    remote_only = crit(locations=["Remote"])
+    assert rejected(remote_only, remote=False, location="Austin, TX")
+    assert rejected(remote_only, remote=0, location="Tempe, AZ")
+    assert rejected(remote_only, remote=True, title="Network Engineer (Hybrid - Herndon, VA)")
+    assert rejected(remote_only, location="On-site, Mount Laurel, NJ")
+    assert "only Remote" in score(remote_only, remote=False).reason
+
+
+def test_remote_only_keeps_remote_and_open_postings():
+    remote_only = crit(locations=["Remote"])
+    assert not rejected(remote_only, remote=True, location="Austin, TX")
+    assert not rejected(remote_only, location="Remote, US")
+    assert not rejected(remote_only, title="Network Manager (Remote)", location=None)
+    assert not rejected(remote_only, location="United States")
+    assert not rejected(remote_only, location=None)
+
+
+def test_a_second_location_keeps_on_site_postings_in_play():
+    assert not rejected(crit(locations=["Remote", "Austin, TX"]), remote=False)
+    assert not rejected(crit(locations=[]), remote=False)
+
+
+def test_hybrid_is_not_counted_as_remote():
+    criteria = crit(locations=["Herndon, VA"])
+    assert points("location", criteria, remote=True, location="Hybrid - Herndon, VA") == 20
+    assert points("location", crit(locations=["Boston"]), remote=True, location="Hybrid") == 0
+
+
 # ---------------------------------------------------------------- keywords --
 
 

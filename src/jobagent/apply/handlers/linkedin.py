@@ -39,11 +39,16 @@ class LinkedInHandler(WizardHandler):
         "button[aria-label*='Easy Apply']",
         ".jobs-apply-button--top-card button:has-text('Easy Apply')",
         "button:has-text('Easy Apply')",
+        "a[aria-label*='Easy Apply']",
     )
     # The company-site button is the same `.jobs-apply-button`, labelled
     # "Apply" and marked as leaving LinkedIn (assumption: the aria-label reads
-    # "Apply to <title> on company website", as it did when last seen).
+    # "Apply to <title> on company website", as it did when last seen). The
+    # 2026 layout draws it as a link labelled "Apply on company website" whose
+    # href is linkedin.com/safety/go/?url=<the company's page>.
     external_apply_selectors = (
+        "a[aria-label*='company website'][href]",
+        "a[aria-label^='Apply on'][href]",
         "button.jobs-apply-button[aria-label*='company website']",
         "a.jobs-apply-button[href]:not([href*='linkedin.com'])",
         "button[role='link'].jobs-apply-button",

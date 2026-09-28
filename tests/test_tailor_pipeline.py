@@ -155,21 +155,21 @@ def test_invented_claim_is_sent_back_once_then_accepted(conn, settings, world):
     assert "rejected" in retry_prompt.lower() and "kubernetes" in retry_prompt.lower()
 
 
-def test_two_bad_plans_are_kept_as_rejected(conn, settings, world):
-    completer = FakeCompleter([bad_plan(world), bad_plan(world)], [LETTER])
+def test_three_bad_plans_are_kept_as_rejected(conn, settings, world):
+    completer = FakeCompleter([bad_plan(world)] * 3, [LETTER])
 
     variant = tailor_job(conn, world["job_id"], settings, completer=completer)
 
-    assert variant.status == "rejected" and variant.attempts == 2
+    assert variant.status == "rejected" and variant.attempts == 3
     assert any(i.term and "kubernetes" in i.term.lower() for i in variant.issues)
     assert variant.pdf_path is None and variant.cover_letter is None
-    assert len(completer.calls) == 2  # no letter attempted
+    assert len(completer.calls) == 3  # no letter attempted
     assert store.get_variant(conn, variant.id).status == "rejected"
     assert store.latest_ready_variant(conn, world["job_id"]) is None
 
 
 def test_coverage_gate_sends_a_thin_plan_back(conn, settings, world):
-    completer = FakeCompleter([thin_plan(world), thin_plan(world)], [LETTER])
+    completer = FakeCompleter([thin_plan(world)] * 3, [LETTER])
 
     variant = tailor_job(conn, world["job_id"], settings, completer=completer)
 
@@ -177,6 +177,18 @@ def test_coverage_gate_sends_a_thin_plan_back(conn, settings, world):
     assert variant.issues[0].where == "coverage"
     assert "terraform" in (variant.issues[0].term or "")
     assert "coverage" in completer.calls[1]["prompt"].lower()
+
+
+def test_coverage_a_little_under_the_upload_still_ships(conn, settings, world, monkeypatch):
+    from jobagent.tailor import pipeline
+
+    monkeypatch.setattr(pipeline, "COVERAGE_TOLERANCE", 1.0)
+    completer = FakeCompleter([thin_plan(world)], [LETTER])
+
+    variant = tailor_job(conn, world["job_id"], settings, completer=completer)
+
+    assert variant.status == "ready" and variant.attempts == 1
+    assert variant.keyword_coverage < variant.base_coverage
 
 
 def test_bad_cover_letter_is_dropped_not_the_resume(conn, settings, world):

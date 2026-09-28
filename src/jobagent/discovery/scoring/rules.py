@@ -1,7 +1,8 @@
 """The free pass: a deterministic 0-100 score for every discovered posting.
 
-Adapted from AutoApply's filter module. Three hard disqualifiers (an excluded
-keyword, a blacklisted company, a stated salary under the floor) zero a posting
+Adapted from AutoApply's filter module. Four hard disqualifiers (an excluded
+keyword, a blacklisted company, a stated salary under the floor, an on-site or
+hybrid posting when Remote is the only location wanted) zero a posting
 outright. Everything else is the sum of four components, title, salary,
 location and keywords, each scoring in the middle when the criteria leave it
 unconstrained, so an empty setting never drags every posting under the
@@ -26,6 +27,9 @@ _KEYWORD_FULL_HITS = 6
 _REASON_TERMS = 8
 
 _WORD = re.compile(r"[a-z0-9+#.]+")
+# A posting that names one of these in its title or location wants people in
+# an office, whatever the board's remote flag says.
+_IN_OFFICE = ("hybrid", "on-site", "onsite", "in-office", "in office")
 
 
 @dataclass(slots=True)
@@ -47,7 +51,7 @@ def score_rules(
     title = _text(job, "title")
     haystack = f"{title}\n{_text(job, 'description')}".lower()
 
-    rejected = _disqualify(job, criteria, haystack)
+    rejected = _disqualify(job, criteria, haystack) or _not_remote(job, title, criteria)
     if rejected:
         return RuleScore(score=0, disqualified=True, reason=rejected)
 
@@ -92,6 +96,22 @@ def _disqualify(job: Mapping[str, Any], criteria: SearchCriteria, haystack: str)
     return None
 
 
+def _not_remote(job: Mapping[str, Any], title: str, criteria: SearchCriteria) -> str | None:
+    """A reason to drop a posting that is not remote when Remote is the only
+    location wanted: the board marks it on-site, or its title or location says
+    hybrid or on-site. A posting that leaves the question open stays in."""
+    wanted = criteria.normalised(criteria.locations)
+    if not wanted or any(want != "remote" for want in wanted):
+        return None
+    if _is_remote(job, title):
+        return None
+    flag = job.get("remote")
+    have = _text(job, "location").strip()
+    if flag is False or flag == 0 or _in_office(title) or _in_office(have):
+        return f"not remote ({have or 'on-site'}); only Remote is wanted"
+    return None
+
+
 # -------------------------------------------------------------- components --
 
 
@@ -123,8 +143,7 @@ def _score_salary(job: Mapping[str, Any], criteria: SearchCriteria) -> int:
 
 def _score_location(job: Mapping[str, Any], title: str, criteria: SearchCriteria) -> int:
     have = _text(job, "location").strip().lower()
-    is_remote = _flag(job.get("remote")) or _contains(have, "remote") or _contains(title, "remote")
-    if is_remote and criteria.remote_ok:
+    if _is_remote(job, title) and criteria.remote_ok:
         return 20
 
     wanted = criteria.normalised(criteria.locations)
@@ -137,6 +156,18 @@ def _score_location(job: Mapping[str, Any], title: str, criteria: SearchCriteria
         if want != "remote" and _location_matches(want, have, have_words):
             return 20
     return 8 if not have else 0
+
+
+def _is_remote(job: Mapping[str, Any], title: str) -> bool:
+    have = _text(job, "location").lower()
+    if _in_office(title) or _in_office(have):
+        return False
+    return _flag(job.get("remote")) or _contains(have, "remote") or _contains(title, "remote")
+
+
+def _in_office(text: str) -> bool:
+    lower = text.lower()
+    return any(term in lower for term in _IN_OFFICE)
 
 
 def _location_matches(want: str, have: str, have_words: set[str]) -> bool:

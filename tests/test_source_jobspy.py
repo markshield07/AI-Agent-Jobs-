@@ -632,41 +632,65 @@ def test_remote_and_unlocated_searches_vouch_for_no_place():
     assert [job.found_near for job in remote + anywhere] == [None, None]
 
 
-def test_on_site_only_asks_linkedin_for_easy_apply_and_indeed_for_indeed_apply():
+def test_on_site_only_asks_linkedin_for_easy_apply_and_indeed_both_ways():
     from jobagent.discovery.sources.jobspy_source import _calls
 
     crit = criteria(jobspy_sites=["indeed", "linkedin", "zip_recruiter"], max_age_hours=72)
     place = _calls(crit, "Network Engineer", "Riverside, CA", on_site_only=True)
-    by_site = {tuple(call["site_name"]): (call, remote) for call, remote in place}
-    assert set(by_site) == {("indeed",), ("linkedin",)}, "boards it cannot apply on are left out"
-    indeed, _ = by_site[("indeed",)]
-    assert indeed["easy_apply"] is True and indeed["hours_old"] is None, "Indeed Apply, no age"
-    assert indeed["search_term"] == '"Network Engineer"', "the title as a phrase"
-    linkedin, _ = by_site[("linkedin",)]
+    assert {tuple(c["site_name"]) for c, _ in place} == {("indeed",), ("linkedin",)}
+    usual, apply_here = [c for c, _ in place if c["site_name"] == ["indeed"]]
+    assert "easy_apply" not in usual and usual["hours_old"] == 72
+    assert usual["search_term"] == "Network Engineer"
+    assert apply_here["easy_apply"] is True and apply_here["hours_old"] is None
+    assert apply_here["search_term"] == '"Network Engineer"', "the title as a phrase"
+    assert apply_here["location"] == "Riverside, CA"
+    linkedin = [c for c, _ in place if c["site_name"] == ["linkedin"]][0]
     assert linkedin["easy_apply"] is True and linkedin["hours_old"] == 72
 
     remote = _calls(crit, "Network Engineer", "Remote", on_site_only=True)
-    indeed = [(call, flag) for call, flag in remote if call["site_name"] == ["indeed"]]
-    (filtered, flag), (apply_here, apply_flag) = indeed
+    (filtered, flag), (apply_here, apply_flag) = [
+        (c, f) for c, f in remote if c["site_name"] == ["indeed"]
+    ]
     assert "easy_apply" not in filtered and filtered["is_remote"] and flag, "the remote filter"
+    assert filtered["hours_old"] is None, "Indeed drops the remote filter beside an age"
     assert apply_here["easy_apply"] is True and apply_here["location"] == "Remote"
     assert not apply_here["is_remote"] and not apply_flag, "not taken as remote on its say"
-    linkedin = [call for call, _ in remote if call["site_name"] == ["linkedin"]]
-    assert linkedin[0]["easy_apply"] is True and linkedin[0]["search_term"] == "Network Engineer"
-    assert (
-        _calls(crit, "Network Engineer", "Remote", on_site_only=False)[0][0].get("easy_apply")
-        is None
+    assert _calls(crit, "Network Engineer", "Remote")[0][0].get("easy_apply") is None
+
+
+def test_an_indeed_apply_search_keeps_only_matching_titles():
+    scraper = Scraper(
+        frame(row(job_url="https://www.indeed.com/viewjob?jk=u", title="Network Engineer")),
+        frame(
+            row(job_url="https://www.indeed.com/viewjob?jk=1", title="Wine & Spirits Sales"),
+            row(job_url="https://www.indeed.com/viewjob?jk=2", title="Senior Network Engineer"),
+        ),
     )
+    found = list(
+        JobSpySource(scrape=scraper, on_site_only=True).search(
+            criteria(
+                jobspy_sites=["indeed"],
+                titles=["Network Engineer"],
+                max_age_hours=24 * 365 * 30,
+                locations=["Riverside, CA"],
+            )
+        )
+    )
+    assert [j.url for j in found] == [
+        "https://www.indeed.com/viewjob?jk=u",
+        "https://www.indeed.com/viewjob?jk=2",
+    ]
 
 
 def test_an_indeed_apply_search_keeps_only_fresh_postings():
     now = datetime.datetime.now(datetime.UTC)
     old, new = (now - datetime.timedelta(days=30)).date(), now.date()
     scraper = Scraper(
+        frame(),
         frame(
             row(job_url="https://www.indeed.com/viewjob?jk=1", date_posted=old),
             row(job_url="https://www.indeed.com/viewjob?jk=2", date_posted=new),
-        )
+        ),
     )
     found = list(
         JobSpySource(scrape=scraper, on_site_only=True).search(
@@ -674,4 +698,4 @@ def test_an_indeed_apply_search_keeps_only_fresh_postings():
         )
     )
     assert [j.url for j in found] == ["https://www.indeed.com/viewjob?jk=2"]
-    assert scraper.calls[0]["easy_apply"] is True
+    assert scraper.calls[1]["easy_apply"] is True

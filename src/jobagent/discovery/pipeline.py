@@ -200,8 +200,8 @@ def _enrich(
 ) -> None:
     """Fetch the full postings, those whose title matches first. LinkedIn
     answers 429 Too Many Requests to a quick run of page loads, so its pages
-    are spaced out, and a 429 from any site ends that site's fetches for the
-    run: the rest wait for the next one."""
+    are spaced out and a run reads only so many, and a 429 from any site ends
+    that site's fetches for the run: the rest wait for the next one."""
     sleep = sleep or time.sleep
     todo = store.jobs_needing_enrichment(conn)
     if criteria is not None:
@@ -214,10 +214,15 @@ def _enrich(
         todo = todo[:max_enrich]
     last: dict[str, float] = {}
     stopped: set[str] = set()
+    counted: dict[str, int] = {}
     for job in todo:
         host = _host(job["url"])
         if host in stopped:
             continue
+        cap = next((c for h, c in ENRICH_CAPS.items() if host.endswith(h)), None)
+        if cap is not None and counted.get(host, 0) >= cap:
+            continue
+        counted[host] = counted.get(host, 0) + 1
         gap = next((g for h, g in ENRICH_GAPS.items() if host.endswith(h)), 0.0)
         if gap and host in last:
             wait = last[host] + gap * random.uniform(0.8, 1.4) - time.monotonic()
@@ -240,8 +245,10 @@ def _enrich(
             report.enriched += 1
 
 
-# Seconds between page loads on a site that limits them, before jitter.
-ENRICH_GAPS = {"linkedin.com": 4.0}
+# Seconds between page loads on a site that limits them, before jitter, and
+# how many of its pages one run reads at most (LinkedIn answered 429 at 4s).
+ENRICH_GAPS = {"linkedin.com": 8.0}
+ENRICH_CAPS = {"linkedin.com": 25}
 
 
 def _host(url: str) -> str:

@@ -12,6 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from jobagent.llm.backend import Completer
 from jobagent.resume.facts import Fact
 
 FactKind = Literal["role", "project", "skill", "education", "credential", "summary"]
@@ -56,24 +57,17 @@ class ParsedResume(BaseModel):
     facts: list[ParsedFact]
 
 
-def parse_resume(text: str, *, model: str, api_key: str | None = None) -> ParsedResume:
+def parse_resume(text: str, *, completer: Completer) -> ParsedResume:
     """Extract contact details and facts from resume text."""
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
-
-    # No cache_control here: the system prompt is well under the minimum cacheable
-    # prefix and the resume differs per upload. Caching belongs on the fact base
-    # in phase 3, where the same prefix is reused across every job.
-    response = client.messages.parse(
-        model=model,
-        max_tokens=16000,
-        thinking={"type": "adaptive"},
+    # No cached prefix here: the system prompt is short and the resume differs per
+    # upload. Caching belongs on the fact base in phase 3, where one prefix is
+    # reused across every job.
+    completion = completer.complete(
         system=_SYSTEM,
-        messages=[{"role": "user", "content": f"<resume>\n{text}\n</resume>"}],
-        output_format=ParsedResume,
+        prompt=f"<resume>\n{text}\n</resume>",
+        output=ParsedResume,
     )
-    return response.parsed_output
+    return completion.result  # type: ignore[return-value]
 
 
 def to_facts(parsed: ParsedResume, base_id: int | None = None) -> list[Fact]:

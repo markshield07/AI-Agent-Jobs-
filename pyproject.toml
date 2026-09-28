@@ -12,10 +12,13 @@ dependencies = [
     "anthropic>=0.40",
     "pypdf>=5.1",
     "python-docx>=1.1",
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    "python-jobspy>=1.1.80",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3", "httpx>=0.27", "ruff>=0.8"]
+dev = ["pytest>=8.3", "ruff>=0.8"]
 
 [project.scripts]
 jobagent = "jobagent.main:run"

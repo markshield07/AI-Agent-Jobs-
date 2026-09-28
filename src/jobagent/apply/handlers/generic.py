@@ -305,9 +305,11 @@ class GenericHandler(BaseHandler):
         brought up, or a box the page emptied again after it was filled."""
         if self._answerer is None:
             return
-        for _ in range(self.more_looks):
+        quiet = 0
+        for _ in range(self.more_looks + 1):
             try:
-                page.wait_for_timeout(500)
+                # A second, longer wait before deciding nothing more is coming.
+                page.wait_for_timeout(500 if not quiet else 1_500)
                 found = _the_application(page, discover_fields(page))
             except Exception as exc:
                 log.debug("generic: could not look at the form again: %s", exc)
@@ -323,7 +325,10 @@ class GenericHandler(BaseHandler):
                 ]
             emptied = _emptied(page, fields, filled)
             if not new and not emptied:
-                return
+                quiet += 1
+                if quiet > 1:
+                    return
+                continue
             if emptied:
                 again = type(plan)(fills=emptied)
                 _, lost, more = super().fill(page, fields, again)
@@ -506,7 +511,11 @@ def _resume_shown(page: Any, resume: str) -> bool:
 _EMPTY_SELECTS_JS = """(selectors) => selectors.filter((sel) => {
   let el = null;
   try { el = document.querySelector(sel); } catch (e) { return false; }
-  return !!el && el.tagName === 'SELECT' && !Array.from(el.options).some((o) => o.value);
+  // A choice is an option with a value and words that are not a placeholder
+  // ("Please Select", "Loading...", "--"), the same test the field reader uses.
+  const real = (o) => o.value && o.value !== '-1' && o.value !== '0'
+    && !/^\s*$|^-+$|^select\b|^choose\b|^please\s+select|^loading/i.test(o.text || '');
+  return !!el && el.tagName === 'SELECT' && !Array.from(el.options).some(real);
 }).length"""
 
 

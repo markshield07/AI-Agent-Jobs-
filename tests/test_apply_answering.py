@@ -736,3 +736,11 @@ def test_a_source_list_gets_the_board_the_job_was_found_on(packet):
         "src", "Source", kind="select", required=True, options=["Indeed", "LinkedIn", "Other"]
     )
     assert fills(plan_fills([field], packet)) == {"src": "LinkedIn"}
+
+
+def test_a_source_list_read_before_its_choices_came_gets_the_board_by_name(packet):
+    packet.job["source"] = "indeed"
+    field = F("src", "Source", kind="select", required=True, options=[])
+    assert fills(plan_fills([field], packet)) == {"src": "Indeed"}
+    packet.job["source"] = "company site"
+    assert plan_fills([field], packet).needed[0].key == "src"

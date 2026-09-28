@@ -93,6 +93,10 @@ _SELECT_OPTIONS_JS = (
 )
 
 
+# A select's prompt or its stand-in while the choices load: not an answer.
+_PLACEHOLDER = re.compile(r"^\s*(?:-+|select\b.*|choose\b.*|please\s+select.*|loading.*)\s*$", re.I)
+
+
 def _native_select(page: Any, field: FormField, values: list[str]) -> None:
     """Pick by index, after matching the wanted text against the options the
     select actually has.
@@ -106,9 +110,18 @@ def _native_select(page: Any, field: FormField, values: list[str]) -> None:
     from jobagent.apply.answering import pick_option
 
     control = page.locator(field.selector).first
-    options = list(control.evaluate(_SELECT_OPTIONS_JS) or [])
-    # A prompt ("Please select") is not an answer: it is the empty value.
-    choosable = [o for o in options if o["value"] != "" and o["text"]]
+    # A list that appeared a moment ago may still be waiting for its choices.
+    for _ in range(20):
+        options = list(control.evaluate(_SELECT_OPTIONS_JS) or [])
+        # A prompt ("Please select") is not an answer: it is the empty value.
+        choosable = [
+            o
+            for o in options
+            if o["value"] != "" and o["text"] and not _PLACEHOLDER.match(o["text"])
+        ]
+        if choosable:
+            break
+        page.wait_for_timeout(250)
     texts = [o["text"] for o in choosable]
     indices: list[int] = []
     for wanted in values:

@@ -37,6 +37,7 @@ from jobagent.db.database import utcnow
 from jobagent.discovery import store as jobs
 from jobagent.discovery.ats import detect_ats
 from jobagent.discovery.criteria import load_criteria
+from jobagent.discovery.scoring.rules import not_remote
 from jobagent.llm.backend import Completer, LLMUnavailable, resolve_backend
 from jobagent.resume.facts import list_facts, list_never_claim
 from jobagent.tailor import store as variants
@@ -253,11 +254,16 @@ def apply_to_job(
         app = store.application_for_job(conn, job_id)
         return _skipped(job_id, "already applied", app["id"] if app else None)
 
+    url = job.get("apply_url") or job.get("url") or ""
+    # Queued before the rules knew better, or the places wanted changed since.
+    office = not_remote(job, load_criteria(conn))
+    if office:
+        return _wrong_place(conn, settings, job_id, url, office)
+
     variant = variants.latest_ready_variant(conn, job_id)
     if variant is None or not variant.pdf_path or not Path(variant.pdf_path).is_file():
         return _skipped(job_id, "no ready resume for this job; run tailor first")
 
-    url = job.get("apply_url") or job.get("url") or ""
     ats = job.get("ats_type") or detect_ats(url)
     handlers = list(handlers) if handlers is not None else default_handlers(generic=allow_generic)
     handler = handler_for(url, ats, handlers)

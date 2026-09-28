@@ -5,7 +5,12 @@ from typing import Any
 import pytest
 
 from jobagent.discovery.criteria import SearchCriteria
-from jobagent.discovery.scoring.rules import RuleScore, passes, score_rules
+from jobagent.discovery.scoring.rules import (
+    RuleScore,
+    office_in_description,
+    passes,
+    score_rules,
+)
 
 
 def crit(**overrides: Any) -> SearchCriteria:
@@ -393,3 +398,45 @@ def test_cities_plus_remote_drop_on_site_postings_elsewhere():
     assert not rejected(local, remote=0, location="Temecula, CA, US")
     assert not rejected(local, remote=True, location="Lonoke, AR, US")
     assert not rejected(local, location="San Diego, CA, US")
+
+
+@pytest.mark.parametrize(
+    ("text", "said"),
+    [
+        (
+            "The Lead Network Engineer will work onsite at Naval Station Norfolk in Norfolk, VA.",
+            "onsite at Naval Station Norfolk",
+        ),
+        ("This position is onsite.", "This position is onsite"),
+        ("This is a hybrid role based in Austin.", "hybrid role"),
+        ("Work arrangement: On-site", "Work arrangement: On-site"),
+        ("You must work onsite 5 days a week.", "must work onsite"),
+        ("Expect 3 days a week in the office.", "3 days a week in the office"),
+        ("Occasional onsite visits to our data centers.", None),
+        ("This is not an onsite role.", None),
+        ("Travel onsite at customer sites up to 20%.", None),
+        ("Provide on-site support at remote locations.", None),
+        ("Provide onsite and remote support to users.", None),
+        ("This is a fully remote role. Onsite at HQ for the kickoff.", None),
+        ("Remote position; report to the office in Dallas quarterly.", None),
+        ("", None),
+    ],
+)
+def test_a_description_that_puts_the_job_in_an_office(text, said):
+    assert office_in_description(text) == said
+
+
+def test_the_description_outweighs_the_boards_remote_flag():
+    remote_only = crit(locations=["Remote"])
+    onsite = "The engineer will work onsite at Naval Station Norfolk."
+    result = score(remote_only, remote=True, location="Norfolk, VA", description=onsite)
+    assert result.disqualified
+    assert 'the description says "onsite at Naval Station Norfolk"' in result.reason
+    assert points("location", crit(), remote=True, description=onsite) == 15
+    # In a place that is wanted, it stays in.
+    near = crit(locations=["Remote", "Norfolk, VA"])
+    assert not rejected(near, remote=True, location="Norfolk, VA", description=onsite)
+    assert not rejected(near, remote=True, location=None, description=onsite)
+    # Occasional visits do not make a remote job an office job.
+    visits = "Fully remote role. Occasional onsite visits to data centers."
+    assert not rejected(remote_only, remote=True, location="Norfolk, VA", description=visits)

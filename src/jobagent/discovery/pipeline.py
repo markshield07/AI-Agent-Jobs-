@@ -24,7 +24,7 @@ from jobagent.discovery.enrich import enrich_description
 from jobagent.discovery.http import make_client
 from jobagent.discovery.models import RawJob
 from jobagent.discovery.scoring.classify import classify_jobs
-from jobagent.discovery.scoring.rules import passes, score_rules
+from jobagent.discovery.scoring.rules import RuleScore, passes, score_rules
 from jobagent.discovery.sources import all_sources
 from jobagent.llm.backend import Completer, LLMUnavailable, resolve_backend
 from jobagent.resume.profile import profile_tags, profile_text
@@ -56,6 +56,8 @@ class RunReport:
     input_tokens: int = 0
     output_tokens: int = 0
     per_source: dict[str, int] = field(default_factory=dict)
+    # Why postings failed the rules pass this run, by kind of reason.
+    rule_misses: dict[str, int] = field(default_factory=dict)
     source_errors: dict[str, str] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
@@ -73,6 +75,9 @@ class RunReport:
         if self.unclassified:
             parts.append(f"{self.unclassified} awaiting the model")
         line = f"Run {self.run_id}: " + ", ".join(parts) + "."
+        if self.rule_misses:
+            top = sorted(self.rule_misses.items(), key=lambda kv: (-kv[1], kv[0]))[:5]
+            line += " Turned away by the rules: " + ", ".join(f"{k} {n}" for k, n in top) + "."
         if self.input_tokens or self.output_tokens:
             line += f" Tokens: {self.input_tokens:,} in / {self.output_tokens:,} out."
         return line
@@ -211,6 +216,25 @@ def _score(conn: sqlite3.Connection, criteria: SearchCriteria, report: RunReport
         else:
             store.set_status(conn, job["id"], "skipped")
             report.skipped += 1
+            kind = miss_kind(result, criteria)
+            report.rule_misses[kind] = report.rule_misses.get(kind, 0) + 1
+
+
+def miss_kind(result: RuleScore, criteria: SearchCriteria) -> str:
+    """A short name for why a posting failed the rules, to count them by."""
+    if result.disqualified:
+        reason = result.reason
+        if reason.startswith("not remote"):
+            return "not remote"
+        if reason.startswith("salary"):
+            return "salary under the minimum"
+        return reason.split(":", 1)[0]
+    weak = [name for name, pts in result.breakdown.items() if pts == 0]
+    if "title" in weak:
+        return "title not a match"
+    if "location" in weak:
+        return "location not a match"
+    return f"score under {criteria.min_score}"
 
 
 def _classify(

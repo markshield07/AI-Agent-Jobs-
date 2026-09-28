@@ -164,6 +164,9 @@ def test_full_run(conn, settings, criteria, profile, monkeypatch):
     assert excluded["status"] == "skipped" and excluded["score"] == 0
     assert "clearance" in excluded["score_reason"]
     assert by_id[_ids(OFF_TOPIC)[0]]["status"] == "skipped"
+    # Why the two failed the rules, counted for the run's summary line.
+    assert sum(report.rule_misses.values()) == 2
+    assert report.rule_misses.get("excluded keyword") == 1
 
     # The profile went into the system prompt, so it is the cacheable prefix.
     assert "Terraform" in completer.calls[0]["system"]
@@ -243,3 +246,22 @@ def test_summary_line(conn, settings, criteria, profile):
     line = report.summary()
     assert line.startswith(f"Run {report.run_id}: found 2 (2 new, 0 seen before)")
     assert "rules passed 1 of 2" in line and "queued 1" in line and "Tokens:" in line
+    assert "Turned away by the rules: " in line
+
+
+def test_misses_are_counted_by_kind():
+    from jobagent.discovery.pipeline import miss_kind
+    from jobagent.discovery.scoring.rules import RuleScore
+
+    crit = SearchCriteria(min_score=60)
+
+    def miss(reason="", disqualified=False, **parts):
+        return miss_kind(RuleScore(0, disqualified, reason, parts), crit)
+
+    assert miss("not remote (Norfolk, VA); only Remote is wanted", True) == "not remote"
+    assert miss("excluded keyword: clearance", True) == "excluded keyword"
+    assert miss("blacklisted company: Acme", True) == "blacklisted company"
+    assert miss("salary 90000 below minimum 120000", True) == "salary under the minimum"
+    assert miss(title=0, salary=10, location=20, keywords=5) == "title not a match"
+    assert miss(title=35, salary=10, location=0, keywords=5) == "location not a match"
+    assert miss(title=20, salary=10, location=8, keywords=5) == "score under 60"

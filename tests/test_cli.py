@@ -791,9 +791,125 @@ def test_keep_alive_visits_each_signed_in_company_and_keeps_what_it_left(
     assert main._keep_workday_alive(settings, every_min=30, once=True) == 0
     out = capsys.readouterr().out
     assert len(visited) == 2, "a company whose sign-in has ended is left alone"
-    assert f"Workday {live}: still signed in; cookies refreshed." in out
+    assert f"Workday {live}: still signed in; cookies refreshed (candidate home" in out
     assert f"Workday {gone}: the sign-in has ended" in out
     assert f"Workday {lapsed}: needs a new sign-in" in out
     assert sessions.load_workday_session(settings, live)[0]["value"] == "fresh"
     assert sessions.workday_status(settings, live)["state"] == "signed_in"
     assert sessions.workday_status(settings, gone)["state"] == "needs_sign_in"
+    assert "keep-alive round 1: 3 companies with a saved sign-in" in out
+    # Each visit is stamped, so --status shows the keep-alive is at work.
+    assert sessions.workday_status(settings, live)["keep_alive"] == "signed_in"
+    assert sessions.workday_status(settings, gone)["keep_alive"] == "signed_out"
+    assert sessions.workday_status(settings, lapsed)["kept_alive_at"] is None
+
+
+def test_keep_alive_checks_the_posting_when_candidate_home_says_nothing(
+    settings, monkeypatch, capsys
+):
+    from contextlib import contextmanager
+
+    from jobagent.apply import sessions
+    from jobagent.apply.handlers.workday import WorkdayHandler
+
+    def cookie(host, value):
+        return {"name": "PLAY_SESSION", "value": value, "domain": host, "path": "/", "expires": -1}
+
+    odd, broken, fine = (f"{c}.wd5.myworkdayjobs.com" for c in ("odd", "broken", "fine"))
+    for host in (odd, broken, fine):
+        sessions.save_workday_session(
+            settings,
+            host,
+            {"cookies": [cookie(host, "old")]},
+            url=f"https://{host}/careers/job/Remote/Engineer_R1",
+        )
+
+    class Page:
+        url = ""
+
+        class context:  # noqa: N801
+            @staticmethod
+            def cookies():
+                return [cookie(odd, "fresh")]
+
+        def content(self):
+            return "<html><body>A page nobody expected</body></html>"
+
+    class Browser:
+        @contextmanager
+        def new_page(self):
+            yield Page()
+
+    @contextmanager
+    def fake_open(settings_):
+        yield Browser()
+
+    def fake_keep_alive(self, page, url, **kw):
+        if broken in url:
+            raise RuntimeError("page crashed")
+        return "unknown" if odd in url else "signed_in"
+
+    checked = []
+
+    def fake_check(self, page, url, **kw):
+        checked.append(url)
+        return "signed_in"
+
+    monkeypatch.setattr("jobagent.apply.browser.session.open_browser", fake_open)
+    monkeypatch.setattr(WorkdayHandler, "keep_alive", fake_keep_alive)
+    monkeypatch.setattr(WorkdayHandler, "check_session", fake_check)
+    assert main._keep_workday_alive(settings, every_min=30, once=True) == 0
+    out = capsys.readouterr().out
+    assert checked == [f"https://{odd}/careers/job/Remote/Engineer_R1"]
+    assert f"Workday {odd}: still signed in; cookies refreshed (candidate home, then" in out
+    assert sessions.load_workday_session(settings, odd)[0]["value"] == "fresh"
+    # A failure at one company is recorded, and the next company still gets its visit.
+    assert f"Workday {broken}: the visit failed: RuntimeError: page crashed" in out
+    assert sessions.workday_status(settings, broken)["keep_alive"] == "error"
+    assert sessions.workday_status(settings, fine)["keep_alive"] == "signed_in"
+    # Candidate Home is kept only when it did not settle the question.
+    assert not list(sessions.workday_dir(settings).glob("*-home.html"))
+
+
+def test_keep_alive_keeps_what_an_unreadable_candidate_home_showed(settings, monkeypatch, capsys):
+    import stat
+    from contextlib import contextmanager
+
+    from jobagent.apply import sessions
+    from jobagent.apply.handlers.workday import WorkdayHandler
+
+    host = "odd.wd5.myworkdayjobs.com"
+    sessions.save_workday_session(
+        settings,
+        host,
+        {"cookies": [{"name": "s", "value": "v", "domain": host, "path": "/", "expires": -1}]},
+        url=f"https://{host}/careers/job/Remote/Engineer_R1",
+    )
+
+    class Page:
+        url = f"https://{host}/careers/userHome"
+
+        def content(self):
+            return "<html><body>A page nobody expected</body></html>"
+
+    class Browser:
+        @contextmanager
+        def new_page(self):
+            yield Page()
+
+    @contextmanager
+    def fake_open(settings_):
+        yield Browser()
+
+    monkeypatch.setattr("jobagent.apply.browser.session.open_browser", fake_open)
+    monkeypatch.setattr(WorkdayHandler, "keep_alive", lambda self, page, url, **kw: "unknown")
+    monkeypatch.setattr(WorkdayHandler, "check_session", lambda self, page, url, **kw: "unknown")
+    assert main._keep_workday_alive(settings, every_min=30, once=True) == 0
+    out = capsys.readouterr().out
+    saved = sessions.workday_dir(settings) / f"{host}-home.html"
+    assert "A page nobody expected" in saved.read_text()
+    assert stat.S_IMODE(saved.stat().st_mode) == 0o600
+    assert "could not tell (unknown)" in out and str(saved) in out
+    status = sessions.workday_status(settings, host)
+    assert status["keep_alive"] == "unknown" and status["state"] == "unchecked"
+    assert "keep-alive last visited" in main._workday_line(status)

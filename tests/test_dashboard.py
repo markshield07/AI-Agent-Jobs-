@@ -249,6 +249,7 @@ def test_a_lapsed_workday_sign_in_is_flagged_with_its_waiting_jobs(page, server,
     posting = f"https://{host}/crowdstrikecareers/job/USA-Remote/Manager_R1"
     cookie = {"name": "PLAY_SESSION", "value": "x", "domain": host, "expires": -1}
     sessions.save_workday_session(settings, host, {"cookies": [cookie]}, url=posting)
+    sessions.record_keep_alive(settings, host, "unknown", how="candidate home")
     sessions.mark_workday_signed_out(settings, host, job_id="j1")
     errors: list[str] = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
@@ -262,6 +263,7 @@ def test_a_lapsed_workday_sign_in_is_flagged_with_its_waiting_jobs(page, server,
     row = page.inner_text("#sessions .session:has-text('crowdstrike')")
     assert "Sign in again" in row and f"jobagent login workday {posting}" in row
     assert "1 application wait" in row
+    assert "Keep-alive last visited" in row and "could not tell" in row
     assert errors == [], errors
 
 

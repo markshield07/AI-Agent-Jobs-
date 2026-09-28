@@ -845,12 +845,14 @@
       unchecked: ['', `Saved ${when(s.saved_at)}, not checked`],
     }[s.state] || ['', s.state];
     const waiting = s.waiting ? ` ${s.waiting} application${s.waiting === 1 ? '' : 's'} wait for it and run right after.` : '';
+    const KEPT = { signed_in: 'still signed in', signed_out: 'the sign-in had ended', unknown: 'could not tell', timed_out: 'the site was slow', error: 'the visit failed' };
+    const kept = s.kept_alive_at ? ` Keep-alive last visited ${when(s.kept_alive_at)}: ${KEPT[s.keep_alive] || s.keep_alive}.` : '';
     const action = s.saved
       ? el('button', { type: 'button', class: 'danger', onclick: (e) => forgetSession(`workday/${encodeURIComponent(s.host)}`, e.currentTarget) }, 'Forget')
       : null;
     return el('div', { class: 'session' },
       el('div', {}, el('b', {}, s.label), ' ', el('span', { class: `badge ${badge[0]}` }, badge[1]),
-        el('div', { class: 'job-meta' }, 'Run ', el('code', {}, s.login_command), ' in a terminal on your machine.' + waiting)),
+        el('div', { class: 'job-meta' }, 'Run ', el('code', {}, s.login_command), ' in a terminal on your machine.' + waiting + kept)),
       action);
   }
 

@@ -357,6 +357,34 @@ def detect_captcha(page: Any) -> str | None:
     return str(found) if found else None
 
 
+_CHALLENGE_JS = r"""() => {
+  const title = (document.title || '').trim().toLowerCase();
+  const titles = /^(just a moment|attention required|verifying you are human|checking your)/;
+  if (titles.test(title)) return true;
+  return !!document.querySelector('#challenge-form, #challenge-running, #cf-challenge-running,'
+    + ' [id^="cf-chl"], script[src*="/cdn-cgi/challenge-platform/"]');
+}"""
+
+
+def bot_check(page: Any, wait_ms: int = 20_000) -> str | None:
+    """A site-wide bot check standing in front of the page (Cloudflare's
+    "Just a moment..."), after giving it `wait_ms` to pass on its own; None
+    when there is none or it passed."""
+    waited = 0
+    while True:
+        try:
+            if not page.evaluate(_CHALLENGE_JS):
+                return None
+            title = (page.title() or "").strip()
+        except Exception:
+            return None
+        if waited >= wait_ms:
+            shown = title or "Cloudflare"
+            return f"the site's bot check ({shown!r}) did not let the browser through"
+        page.wait_for_timeout(1000)
+        waited += 1000
+
+
 def detect_login_wall(page: Any) -> bool:
     try:
         if page.evaluate(LOGIN_WALL_JS):

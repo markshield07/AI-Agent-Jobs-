@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Just a moment...</title>
+<!--
+  Cloudflare's interstitial as the Mac met it on indeed.com/viewjob (2026-09-28): the title
+  "Just a moment...", a challenge box, and no page behind it. ?then=<file> goes on to that
+  page after a second, the way the check does when it lets a browser through.
+-->
+</head>
+<body>
+<div id="challenge-running"><h1>www.indeed.com</h1><p>Verifying you are human. This may take a few seconds.</p></div>
+<script>
+  var then = new URLSearchParams(location.search).get('then');
+  if (then) setTimeout(function () { location.href = then; }, 1000);
+</script>
+</body>
+</html>

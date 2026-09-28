@@ -139,6 +139,9 @@ CREATE INDEX IF NOT EXISTS idx_variants_job ON resume_variants(job_id);
 
 -- ------------------------------------------------------------- applications --
 
+-- One row per job the agent has tried to apply to. Each try is a row in
+-- `submission_attempts`; `submitted_at` is set once, by the attempt that saw
+-- the confirmation page, and never cleared.
 CREATE TABLE IF NOT EXISTS applications (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id            TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
@@ -146,10 +149,41 @@ CREATE TABLE IF NOT EXISTS applications (
     cover_letter_path TEXT,
     mode              TEXT NOT NULL CHECK (mode IN ('dry_run','review','auto')),
     ats               TEXT,
-    screenshot_path   TEXT,
+    screenshot_path   TEXT,                  -- the newest attempt's screenshot
     submitted_at      TEXT,
+    created_at        TEXT,
     UNIQUE (job_id)
 );
+
+-- What one try at the form did. `dry_run` and `review` stop before the submit
+-- button; `needs_input` stops because the form asked something nobody on file
+-- can answer (the questions are in `needed`); `blocked` is a captcha, a login
+-- wall or a verification code; `unconfirmed` means the button was pressed and
+-- no confirmation or error followed; `failed` is anything else. `filled`
+-- records what went on the form, so a dry run can be read before anything is
+-- sent.
+CREATE TABLE IF NOT EXISTS submission_attempts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id  INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    mode            TEXT NOT NULL CHECK (mode IN ('dry_run','review','auto')),
+    outcome         TEXT NOT NULL
+        CHECK (outcome IN ('submitted','dry_run','review','needs_input','blocked',
+                           'unconfirmed','failed')),
+    handler         TEXT,                    -- greenhouse | lever | ashby | generic
+    filled          TEXT,                    -- JSON array of fills
+    needed          TEXT,                    -- JSON array of unanswered questions
+    fields          TEXT,                    -- JSON array of the form's fields
+    confirmation    TEXT,
+    error           TEXT,
+    screenshot_path TEXT,
+    final_url       TEXT,
+    tokens_in       INTEGER NOT NULL DEFAULT 0,
+    tokens_out      INTEGER NOT NULL DEFAULT 0,
+    started_at      TEXT NOT NULL,
+    ended_at        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_attempts_app ON submission_attempts(application_id, id);
 
 -- Append-only. Never UPDATE a row here.
 CREATE TABLE IF NOT EXISTS application_events (
@@ -167,15 +201,26 @@ CREATE TABLE IF NOT EXISTS application_events (
 
 CREATE INDEX IF NOT EXISTS idx_events_app ON application_events(application_id, created_at);
 
--- Current status per application, derived rather than stored.
-CREATE VIEW IF NOT EXISTS application_status AS
+-- Current status per application, derived rather than stored: the newest
+-- status event wins; before any event, a submitted application is 'applied'
+-- and an unsubmitted one shows its newest attempt's outcome ('dry_run',
+-- 'review', 'needs_input', 'blocked', 'unconfirmed', 'failed'), or 'pending'
+-- with no attempt.
+-- Dropped and recreated on every start so its shape follows this file.
+DROP VIEW IF EXISTS application_status;
+CREATE VIEW application_status AS
 SELECT a.id AS application_id,
        a.job_id,
-       COALESCE((
-           SELECT e.to_status FROM application_events e
-           WHERE e.application_id = a.id AND e.to_status IS NOT NULL
-           ORDER BY e.created_at DESC, e.id DESC LIMIT 1
-       ), 'applied') AS status,
+       COALESCE(
+           (SELECT e.to_status FROM application_events e
+            WHERE e.application_id = a.id AND e.to_status IS NOT NULL
+            ORDER BY e.created_at DESC, e.id DESC LIMIT 1),
+           CASE WHEN a.submitted_at IS NOT NULL THEN 'applied' ELSE
+               COALESCE((SELECT s.outcome FROM submission_attempts s
+                         WHERE s.application_id = a.id
+                         ORDER BY s.id DESC LIMIT 1), 'pending')
+           END
+       ) AS status,
        (SELECT MIN(e.created_at) FROM application_events e
         WHERE e.application_id = a.id AND e.kind = 'email') AS first_reply_at
 FROM applications a;

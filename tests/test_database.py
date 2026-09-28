@@ -144,7 +144,46 @@ def test_init_db_migrates_a_version_one_database(tmp_path):
     init_db(conn)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(resume_variants)")}
     assert {"content", "cover_letter", "status", "issues", "attempts"} <= columns
+    app_columns = {row[1] for row in conn.execute("PRAGMA table_info(applications)")}
+    assert "created_at" in app_columns, "phase 4 added created_at to applications"
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "submission_attempts" in tables
     assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == SCHEMA_VERSION
 
     init_db(conn)  # a second start is a no-op, not a duplicate-column error
-    assert conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 3
+
+
+def test_unsubmitted_application_status_follows_its_newest_attempt(conn):
+    """Before submission the derived status is the newest attempt's outcome."""
+    conn.execute(
+        """INSERT INTO jobs (id, url, title, company, source, scraped_at)
+           VALUES ('a', 'https://x/1', 'Eng', 'Acme', 'lever', ?)""",
+        (utcnow(),),
+    )
+    cur = conn.execute("INSERT INTO applications (job_id, mode) VALUES ('a', 'dry_run')")
+    app_id = int(cur.lastrowid)
+
+    def status():
+        return conn.execute(
+            "SELECT status FROM application_status WHERE application_id = ?", (app_id,)
+        ).fetchone()["status"]
+
+    assert status() == "pending"
+    for outcome in ("dry_run", "needs_input"):
+        conn.execute(
+            """INSERT INTO submission_attempts
+                   (application_id, mode, outcome, started_at, ended_at)
+               VALUES (?, 'dry_run', ?, ?, ?)""",
+            (app_id, outcome, utcnow(), utcnow()),
+        )
+        assert status() == outcome
+
+    conn.execute("UPDATE applications SET submitted_at = ? WHERE id = ?", (utcnow(), app_id))
+    assert status() == "applied", "submitted_at outranks the attempt outcome"
+    conn.execute(
+        """INSERT INTO application_events (application_id, kind, to_status, source, created_at)
+           VALUES (?, 'status_change', 'rejected', 'email', ?)""",
+        (app_id, utcnow()),
+    )
+    assert status() == "rejected", "and a status event outranks both"

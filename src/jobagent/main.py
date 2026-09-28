@@ -4,6 +4,11 @@ jobagent                 serve the API on 127.0.0.1:8000
 jobagent serve           the same, with --host and --port
 jobagent discover        run one discovery pass now and print what it did
 jobagent criteria        show or change what to search for
+jobagent tailor          tailor the resume to jobs and render PDFs
+jobagent apply           fill application forms; submit only in auto mode
+jobagent applications    list applications and what they wait on
+jobagent answer          answer questions a form asked, then try again
+jobagent approve         submit an application left at the button
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from jobagent.api.applications import router as applications_router
 from jobagent.api.discovery import router as discovery_router
 from jobagent.api.routes import router
 from jobagent.api.tailoring import router as tailoring_router
@@ -34,15 +40,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.db = open_database(settings.db_path)
         app.state.discovery_lock = threading.Lock()
         app.state.last_report = None
+        app.state.apply_lock = threading.Lock()
+        app.state.last_apply_report = None
         try:
             yield
         finally:
             app.state.db.close()
 
-    app = FastAPI(title="Job Agent", version="0.3.0", lifespan=lifespan)
+    app = FastAPI(title="Job Agent", version="0.4.0", lifespan=lifespan)
     app.include_router(router)
     app.include_router(discovery_router)
     app.include_router(tailoring_router)
+    app.include_router(applications_router)
     return app
 
 
@@ -92,6 +101,36 @@ def build_parser() -> argparse.ArgumentParser:
     tailor.add_argument("--queued", action="store_true", help="Every queued job without a variant.")
     tailor.add_argument("--limit", type=int, default=10, help="With --queued: at most this many.")
     tailor.add_argument("--no-cover-letter", action="store_true")
+
+    apply = sub.add_parser("apply", help="Fill application forms; submit only in auto mode.")
+    apply.add_argument("job_ids", nargs="*", help="Job ids to apply to.")
+    apply.add_argument("--queued", action="store_true", help="Every queued job with a resume.")
+    apply.add_argument("--limit", type=int, default=10, help="With --queued: at most this many.")
+    apply.add_argument(
+        "--mode",
+        choices=("dry_run", "review", "auto"),
+        help="dry_run fills and stops; review parks for approval; auto submits.",
+    )
+    apply.add_argument("--submit", action="store_true", help="The same as --mode auto.")
+    apply.add_argument("--headed", action="store_true", help="Show the browser window.")
+    apply.add_argument(
+        "--no-generic", action="store_true", help="Skip forms no handler recognises."
+    )
+    apply.add_argument("--json", action="store_true", help="Print the full report as JSON.")
+
+    applications = sub.add_parser("applications", help="List applications and what they wait on.")
+    applications.add_argument("--status", help="Only this status, e.g. needs_input or applied.")
+    applications.add_argument("--json", action="store_true")
+
+    answer = sub.add_parser("answer", help="Answer questions a form asked, then try again.")
+    answer.add_argument("application_id", type=int)
+    answer.add_argument("pairs", nargs="+", metavar="KEY=VALUE", help="Answers, by key.")
+    answer.add_argument("--no-retry", action="store_true", help="Store the answers only.")
+    answer.add_argument("--headed", action="store_true")
+
+    approve = sub.add_parser("approve", help="Submit an application left at the button.")
+    approve.add_argument("application_id", type=int)
+    approve.add_argument("--headed", action="store_true")
     return parser
 
 
@@ -237,6 +276,157 @@ def _describe_variant(jid: str, variant) -> str:
     return line
 
 
+def _settings_for(args: argparse.Namespace) -> Settings:
+    settings = get_settings()
+    if getattr(args, "headed", False):
+        settings = settings.model_copy(update={"headless": False})
+    return settings
+
+
+def _describe_result(record: dict) -> str:
+    outcome = record["outcome"]
+    line = f"{record['job_id']}: {outcome}"
+    if record.get("handler"):
+        line += f" via {record['handler']}"
+    if outcome == "skipped":
+        line += f" ({record.get('reason')})"
+    elif record.get("confirmation"):
+        line += f": {record['confirmation']}"
+    elif record.get("error"):
+        line += f": {record['error']}"
+    elif outcome in ("dry_run", "review"):
+        line += f", {record.get('filled', 0)} fields filled, application {record['application_id']}"
+        if record.get("screenshot_path"):
+            line += f", {record['screenshot_path']}"
+    for question in record.get("needed") or []:
+        if question.get("required"):
+            line += f"\n    ask: {question['label']} [{question['answer_key']}]"
+    return line
+
+
+def _cmd_apply(args: argparse.Namespace) -> int:
+    from jobagent.apply.pipeline import ApplyError, run_apply
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    if not args.job_ids and not args.queued:
+        print("Nothing to apply to: pass job ids or use --queued.", file=sys.stderr)
+        return 2
+    settings = _settings_for(args)
+    mode = "auto" if args.submit else args.mode
+    db = open_database(settings.db_path)
+    try:
+        report = run_apply(
+            db.connection(),
+            settings,
+            job_ids=args.job_ids or None,
+            limit=args.limit,
+            mode=mode,
+            allow_generic=not args.no_generic,
+        )
+    except ApplyError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    finally:
+        db.close()
+    if args.json:
+        print(json.dumps(report.as_dict(), indent=2))
+    else:
+        print(report.summary())
+        for record in report.results:
+            print(_describe_result(record))
+        for note in report.notes:
+            print(f"  note: {note}")
+    return 1 if report.failed else 0
+
+
+def _cmd_applications(args: argparse.Namespace) -> int:
+    from jobagent.apply import store as applications
+
+    settings = get_settings()
+    db = open_database(settings.db_path)
+    try:
+        rows = applications.list_applications(db.connection(), status=args.status, limit=500)
+    finally:
+        db.close()
+    if args.json:
+        print(json.dumps(rows, indent=2, default=str))
+        return 0
+    if not rows:
+        print("No applications yet.")
+        return 0
+    for app in rows:
+        job = app["job"]
+        line = f"{app['id']}: {app['status']}  {job['title']} at {job['company']}"
+        if app["submitted_at"]:
+            line += f"  submitted {app['submitted_at']}"
+        print(line)
+        for question in app["needed"]:
+            if question.get("required"):
+                print(f"    ask: {question['label']} [{question['answer_key']}]")
+    return 0
+
+
+def _cmd_answer(args: argparse.Namespace) -> int:
+    from jobagent.apply.pipeline import ApplyError, answer_questions, retry_application
+
+    answers: dict[str, str] = {}
+    for pair in args.pairs:
+        key, sep, value = pair.partition("=")
+        if not sep or not key.strip():
+            print(f"Expected KEY=VALUE, got {pair!r}.", file=sys.stderr)
+            return 2
+        answers[key.strip()] = value.strip()
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    settings = _settings_for(args)
+    db = open_database(settings.db_path)
+    try:
+        conn = db.connection()
+        try:
+            remaining = answer_questions(conn, args.application_id, answers)
+            for question in remaining:
+                if question.required:
+                    print(f"still needed: {question.label} [{question.answer_key}]")
+            if args.no_retry:
+                return 0
+            record = retry_application(conn, args.application_id, settings)
+        except ApplyError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+    finally:
+        db.close()
+    print(_describe_result(record))
+    return 1 if record["outcome"] == "failed" else 0
+
+
+def _cmd_approve(args: argparse.Namespace) -> int:
+    from jobagent.apply.pipeline import ApplyError, approve_application
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    settings = _settings_for(args)
+    db = open_database(settings.db_path)
+    try:
+        try:
+            record = approve_application(db.connection(), args.application_id, settings)
+        except ApplyError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+    finally:
+        db.close()
+    print(_describe_result(record))
+    return 1 if record["outcome"] == "failed" else 0
+
+
+_COMMANDS = {
+    "discover": _cmd_discover,
+    "criteria": _cmd_criteria,
+    "tailor": _cmd_tailor,
+    "apply": _cmd_apply,
+    "applications": _cmd_applications,
+    "answer": _cmd_answer,
+    "approve": _cmd_approve,
+}
+
+
 def run(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     command = args.command or "serve"
@@ -244,12 +434,8 @@ def run(argv: Sequence[str] | None = None) -> None:
         if args.command is None:
             args.host, args.port = "127.0.0.1", 8000
         code = _cmd_serve(args)
-    elif command == "discover":
-        code = _cmd_discover(args)
-    elif command == "tailor":
-        code = _cmd_tailor(args)
     else:
-        code = _cmd_criteria(args)
+        code = _COMMANDS[command](args)
     if code:
         raise SystemExit(code)
 

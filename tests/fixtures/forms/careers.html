@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Marlow Instruments - Careers</title>
+<!--
+  A company's own application page, on no applicant tracking system at all: the case the
+  generic fallback exists for. It also carries a site search box above the form, which is
+  a form too and must not be filled in.
+
+  Variants, chosen with ?variant=...:
+    search_only  the application form is gone; only the search box is left
+    hidden_form  the form is behind an "Apply Now" button
+-->
+<style>
+  body { font-family: Georgia, serif; margin: 0; color: #222; }
+  .wrap { max-width: 680px; margin: 0 auto; padding: 24px; }
+  .row { margin: 12px 0; }
+  .row label { display: block; font-weight: bold; margin-bottom: 3px; }
+  .row input[type=text], .row input[type=email], .row input[type=tel], .row textarea { width: 100%; padding: 6px; box-sizing: border-box; }
+  .hidden { display: none; }
+  button { padding: 9px 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <form id="site-search" action="/search">
+    <label for="q">Search this site</label>
+    <input type="text" id="q" name="q" placeholder="Search">
+    <button type="submit" id="search-go">Go</button>
+  </form>
+
+  <h1>Instrumentation Engineer</h1>
+  <p>Marlow Instruments builds field spectrometers. Apply below.</p>
+
+  <button type="button" id="apply-now" class="hidden">Apply Now</button>
+
+  <form id="apply" enctype="multipart/form-data">
+    <div class="row">
+      <label for="applicant-name">Your name</label>
+      <input type="text" id="applicant-name" name="applicant_name" required>
+    </div>
+    <div class="row">
+      <label for="applicant-email">Email address</label>
+      <input type="email" id="applicant-email" name="applicant_email" required>
+    </div>
+    <div class="row">
+      <label for="applicant-phone">Phone number</label>
+      <input type="tel" id="applicant-phone" name="applicant_phone">
+    </div>
+    <div class="row">
+      <label for="applicant-linkedin">LinkedIn profile</label>
+      <input type="text" id="applicant-linkedin" name="applicant_linkedin">
+    </div>
+    <div class="row">
+      <label for="applicant-cv">Upload your CV</label>
+      <input type="file" id="applicant-cv" name="cv" accept=".pdf,.doc,.docx" required>
+    </div>
+    <div class="row">
+      <label for="applicant-letter">Cover letter</label>
+      <textarea id="applicant-letter" name="cover_letter"></textarea>
+    </div>
+    <button type="submit" id="apply-go">Send application</button>
+  </form>
+
+  <div id="done" class="hidden"><h2>Thank you for applying</h2><p>We have received your application.</p></div>
+</div>
+<script>
+(function () {
+  var variant = new URLSearchParams(location.search).get('variant') || '';
+  var form = document.getElementById('apply');
+  if (variant === 'search_only') form.parentNode.removeChild(form);
+  if (variant === 'hidden_form') {
+    form.classList.add('hidden');
+    var b = document.getElementById('apply-now');
+    b.classList.remove('hidden');
+    b.addEventListener('click', function () { form.classList.remove('hidden'); b.classList.add('hidden'); });
+  }
+  document.getElementById('site-search').addEventListener('submit', function (e) {
+    e.preventDefault(); window.__searched = document.getElementById('q').value;
+  });
+  if (!form) return;
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var record = {};
+    new FormData(form).forEach(function (value, key) {
+      record[key] = (typeof File !== 'undefined' && value instanceof File) ? value.name : value;
+    });
+    window.__submitted = record;
+    form.classList.add('hidden');
+    document.getElementById('done').classList.remove('hidden');
+  });
+})();
+</script>
+</body>
+</html>

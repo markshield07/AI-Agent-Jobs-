@@ -25,6 +25,16 @@ class Settings(BaseSettings):
     # Read without the JOBAGENT_ prefix so it matches what the Anthropic SDK expects.
     anthropic_api_key: str | None = None
 
+    # Submission. `dry_run` fills every form and stops at the submit button;
+    # `review` does the same and parks the application for your approval;
+    # `auto` submits. Nothing is sent unless you change this.
+    apply_mode: Literal["dry_run", "review", "auto"] = "dry_run"
+    daily_apply_cap: int = 20
+    apply_delay_seconds: float = 45.0  # between submissions, with jitter
+    apply_model_answers: bool = True  # let the model draft answers from the fact base
+    headless: bool = True
+    browser_executable: str | None = None  # a Chromium binary, when Playwright's is absent
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "jobagent.db"
@@ -37,9 +47,14 @@ class Settings(BaseSettings):
     def variants_dir(self) -> Path:
         return self.data_dir / "variants"
 
+    @property
+    def screenshots_dir(self) -> Path:
+        return self.data_dir / "screenshots"
+
     def ensure_dirs(self) -> None:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         self.variants_dir.mkdir(parents=True, exist_ok=True)
+        self.screenshots_dir.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache

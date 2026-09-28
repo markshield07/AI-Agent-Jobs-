@@ -13,8 +13,8 @@ Architecture and the reasoning behind each decision:
 |---|---|---|
 | 1 | Scaffold, database schema, resume intake, fact base | done |
 | 2 | Discovery, dedupe, enrichment, scoring | done |
-| 3 | Tailoring and PDF rendering | **this branch** |
-| 4 | Submission | not started |
+| 3 | Tailoring and PDF rendering | done |
+| 4 | Submission, on career-page boards, off by default | **this branch** |
 | 5 | Response tracking | not started |
 | 6 | Dashboard and scheduling | not started |
 
@@ -54,6 +54,17 @@ behind it, picked by `JOBAGENT_LLM_BACKEND` in `.env`:
 | `claude-code` | The `claude` command line, on your Claude subscription login | You already pay for Claude and the agent runs on a machine where you are logged in |
 | `api` | The Claude API with `ANTHROPIC_API_KEY`, metered per token | Headless or scheduled runs on a box with no login, or you want per-run cost figures |
 | `auto` (default) | The API if a key is set, otherwise `claude` if it is installed | You do not want to think about it |
+
+### Submission settings
+
+| Setting | Default | What it does |
+|---|---|---|
+| `JOBAGENT_APPLY_MODE` | `dry_run` | `dry_run` fills and stops, `review` parks it for approval, `auto` submits |
+| `JOBAGENT_DAILY_APPLY_CAP` | `20` | Submissions in any trailing 24 hours, in `auto` mode |
+| `JOBAGENT_APPLY_DELAY_SECONDS` | `45` | The pause between submissions, jittered |
+| `JOBAGENT_APPLY_MODEL_ANSWERS` | `true` | Let the model draft answers to open questions, from the fact base |
+| `JOBAGENT_HEADLESS` | `true` | `false`, or `--headed`, shows the browser window |
+| `JOBAGENT_BROWSER_EXECUTABLE` | unset | A Chromium binary, when Playwright's own is not there |
 
 For the subscription route: install Claude Code, run `claude auth login`
 once, and leave `ANTHROPIC_API_KEY` unset. The agent shells out to
@@ -124,6 +135,66 @@ what the guardrail caught, and nothing is rendered. A keyword-coverage gate
 applies the same discipline to usefulness: a variant that mentions fewer of the
 posting's keywords than your uploaded resume did is sent back too.
 
+### Applying
+
+```bash
+jobagent apply --queued                  # fill the forms, stop at the button
+jobagent apply <job id> --headed         # watch it happen in a real window
+jobagent applications                    # what is filled, and what it waits on
+jobagent answer 7 work_authorization=Yes # answer once; it is kept for next time
+jobagent approve 7                       # send the one you have read
+jobagent apply --queued --submit         # send them without reading them first
+```
+
+**Nothing is sent unless you ask for it.** The default mode is `dry_run`: the
+agent opens the form, fills every field it can, takes a screenshot to
+`data/screenshots/` and stops at the submit button. `review` does the same and
+parks the application for your approval. Only `auto` presses the button, and
+only under a daily cap with a jittered pause between submissions.
+
+Four sites are handled: Greenhouse, Lever and Ashby have a handler each, and
+anything else falls to a generic filler that works from what the page shows. The
+generic one refuses to fill a form that is not an application: a careers page's
+search box is a form too.
+
+What goes on the form comes from three places, in order: your contact details
+and the tailored resume for that job, then the answer bank, then the model, and
+the model's answers are held to the same fact base the resume is. Questions
+about work authorization, sponsorship, salary, start dates, relocation and the
+like are **never guessed**. They come back as questions:
+
+```
+$ jobagent apply --queued
+mode dry_run, considered 3, dry run 2, needs input 1
+abc123: dry_run via greenhouse, 14 fields filled, application 4, data/screenshots/abc123-1.png
+def456: needs_input via lever, 11 fields filled
+    ask: Will you now or in the future require sponsorship? [visa_sponsorship]
+
+$ jobagent answer 5 visa_sponsorship=No
+def456: dry_run via lever, 12 fields filled, application 5
+```
+
+An answer is stored under its own key, so the next form that asks the same
+thing, on any site, is filled without asking you again.
+
+An application is only ever recorded as **submitted** when the page itself
+confirmed it. A button that was pressed with neither a confirmation nor an error
+is `unconfirmed`, and the job waits for you to look rather than being tried
+again. A captcha, a login wall or a "we emailed you a code" prompt is `blocked`,
+with what to do about it. Every attempt is kept, so you can read a dry run
+before changing the mode.
+
+### Playwright
+
+Submission drives a real Chromium through Playwright. Once, after installing:
+
+```bash
+playwright install chromium
+```
+
+If Chromium lives somewhere else on your machine, point at it with
+`JOBAGENT_BROWSER_EXECUTABLE`.
+
 Tests and linting:
 
 ```bash
@@ -158,6 +229,15 @@ returns the existing record instead of parsing it again.
 | `GET` | `/api/variants/{id}` | One variant: plan, coverage, issues, cover letter |
 | `GET` | `/api/variants/{id}/pdf` | The rendered PDF |
 | `GET` | `/api/variants/{id}/cover-letter` | The cover letter as plain text |
+| `POST` | `/api/apply` | Start an apply pass; `?wait=true` returns the report |
+| `GET` | `/api/apply/last` | The last apply pass's report |
+| `GET` | `/api/applications` | Applications, newest first. Filter by `status` |
+| `GET` | `/api/applications/counts` | How many applications in each status |
+| `GET` | `/api/applications/{id}` | One application with its attempts and events |
+| `GET` | `/api/applications/{id}/screenshot` | The form as the agent left it |
+| `POST` | `/api/applications/{id}/answers` | Answer what a form asked; `retry` to fill it again |
+| `POST` | `/api/applications/{id}/approve` | Submit one a dry run left at the button |
+| `POST` | `/api/applications/{id}/events` | Log a reply, an interview, a rejection, a note |
 
 Interactive docs at `/docs` while the server is running.
 
@@ -195,6 +275,16 @@ src/jobagent/
 │   ├── render.py       Plan + facts to ATS-safe HTML, text and PDF (Jinja2, WeasyPrint)
 │   ├── store.py        Variants on disk, ready or rejected
 │   └── pipeline.py     Plan, check, gate, render, keep
+├── apply/
+│   ├── models.py       Form fields, the packet, the plan, what a handler reports
+│   ├── answering.py    Fields to answers, from the packet, the bank, then the model
+│   ├── browser/
+│   │   ├── session.py  Launching Chromium; the only place Playwright is imported
+│   │   ├── dom.py      Reading a form: what each control is and what it is called
+│   │   └── fill.py     Putting the plan on the page, and reading what it says back
+│   ├── handlers/       One per ATS (Greenhouse, Lever, Ashby) plus the generic filler
+│   ├── store.py        Applications and attempts on disk; status derived from events
+│   └── pipeline.py     One apply pass: job, variant, packet, handler, attempt
 ├── api/                FastAPI routes
 └── main.py             App factory and the command line
 ```
@@ -217,11 +307,16 @@ from: [AutoApply](https://github.com/AbhishekMandapmalvi/AutoApply),
 [AIApplyJobs](https://github.com/vivekshekharrai-del/AIApplyJobs),
 [job-agent](https://github.com/lordvacuum/job-agent).
 
-## Before you turn on phase 4
+## Before you turn submission on
 
 Automating submissions to LinkedIn, Indeed, Workday and the ATS vendors may
 violate those platforms' terms of service, and can get your accounts
 rate-limited or banned. Every one of the five references above carries a version
-of this warning. The design leans on public ATS boards first and keeps a
-submission delay and a daily cap on by default, but the risk to your accounts is
-real and it does not engineer away.
+of this warning. The risk is real and it does not engineer away.
+
+This is why submission ships off. `dry_run` is the default mode, there is no
+LinkedIn Easy Apply or Indeed Quick Apply handler, and the sites that are
+handled are the ones where applying is an ordinary form on a company's own
+careers page. `auto` keeps a daily cap and a jittered delay on, and even then an
+application is only recorded as sent when the page says so. Read a dry run and
+its screenshot before you change the mode.

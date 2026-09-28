@@ -339,7 +339,10 @@ def _cmd_tailor(args: argparse.Namespace) -> int:
         conn = db.connection()
         ids = list(args.job_ids)
         if args.queued:
-            for job in jobs.list_jobs(conn, status="queued", limit=500):
+            from jobagent.apply.pipeline import in_apply_order
+
+            queued = jobs.list_jobs(conn, status="queued", limit=500)
+            for job in in_apply_order(queued, settings.apply_site_list):
                 if variants.latest_ready_variant(conn, job["id"]) is None:
                     ids.append(job["id"])
                 if len(ids) >= args.limit:

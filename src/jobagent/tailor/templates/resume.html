@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ resume.title }}</title>
+<style>
+  /* One column, system fonts, no decoration an ATS parser could trip on. */
+  @page { size: Letter; margin: 0.6in; }
+  body { font-family: Helvetica, Arial, sans-serif; font-size: 10.5pt; line-height: 1.3;
+         color: #111; margin: 0; }
+  h1 { font-size: 18pt; margin: 0; }
+  h2 { font-size: 11pt; margin: 11pt 0 4pt; padding-bottom: 1pt; border-bottom: 1px solid #444;
+       page-break-after: avoid; }
+  h3 { font-size: 10.5pt; margin: 7pt 0 0; page-break-after: avoid; }
+  p { margin: 0 0 3pt; }
+  .contact, .dates { color: #333; }
+  .target { font-size: 11pt; }
+  ul { margin: 0 0 4pt; padding-left: 14pt; }
+  li { margin: 0 0 2pt; page-break-inside: avoid; }
+</style>
+</head>
+<body>
+{% if resume.name %}
+<h1>{{ resume.name }}</h1>
+{% endif %}
+{% if resume.contact_line %}
+<p class="contact">{{ resume.contact_line }}</p>
+{% endif %}
+{% if resume.target_title %}
+<p class="target">{{ resume.target_title }}</p>
+{% endif %}
+
+{% if resume.summary %}
+<h2>Summary</h2>
+<p>{{ resume.summary }}</p>
+{% endif %}
+
+{% if resume.skills %}
+<h2>Skills</h2>
+<p>{{ resume.skills | join(", ") }}</p>
+{% endif %}
+
+{% for section, entries in [("Experience", resume.experience), ("Projects", resume.projects)] %}
+{% if entries %}
+<h2>{{ section }}</h2>
+{% for entry in entries %}
+{% if entry.heading %}
+<h3>{{ entry.heading }}</h3>
+{% endif %}
+{% if entry.dates %}
+<p class="dates">{{ entry.dates }}</p>
+{% endif %}
+{% if entry.bullets %}
+<ul>
+{% for bullet in entry.bullets %}
+  <li>{{ bullet }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+{% for section, lines in [("Education", resume.education), ("Certifications", resume.credentials)] %}
+{% if lines %}
+<h2>{{ section }}</h2>
+{% for line in lines %}
+<p>{{ line }}</p>
+{% endfor %}
+{% endif %}
+{% endfor %}
+</body>
+</html>

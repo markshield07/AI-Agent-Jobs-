@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<style>
+  /* Same page and fonts as the resume; no date, the caller decides that. */
+  @page { size: Letter; margin: 0.6in; }
+  body { font-family: Helvetica, Arial, sans-serif; font-size: 10.5pt; line-height: 1.4;
+         color: #111; margin: 0; }
+  h1 { font-size: 18pt; margin: 0; }
+  p { margin: 0 0 9pt; }
+  .contact { color: #333; margin-bottom: 18pt; }
+  .reference { font-weight: bold; }
+</style>
+</head>
+<body>
+{% if name %}
+<h1>{{ name }}</h1>
+{% endif %}
+{% if contact_line %}
+<p class="contact">{{ contact_line }}</p>
+{% endif %}
+{% if reference %}
+<p class="reference">{{ reference }}</p>
+{% endif %}
+{% for paragraph in paragraphs %}
+<p>{{ paragraph }}</p>
+{% endfor %}
+</body>
+</html>

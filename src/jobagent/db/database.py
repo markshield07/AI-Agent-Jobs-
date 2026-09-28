@@ -18,7 +18,25 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+# Statements that bring a database created at an earlier version up to date.
+# schema.sql creates every table in its newest shape, so a fresh database never
+# runs these; an existing one runs the versions above the one it recorded.
+_MIGRATIONS: dict[int, list[str]] = {
+    2: [
+        "ALTER TABLE resume_variants ADD COLUMN base_coverage REAL",
+        "ALTER TABLE resume_variants ADD COLUMN keywords TEXT",
+        "ALTER TABLE resume_variants ADD COLUMN keywords_missing TEXT",
+        "ALTER TABLE resume_variants ADD COLUMN content TEXT",
+        "ALTER TABLE resume_variants ADD COLUMN cover_letter TEXT",
+        "ALTER TABLE resume_variants ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'",
+        "ALTER TABLE resume_variants ADD COLUMN issues TEXT",
+        "ALTER TABLE resume_variants ADD COLUMN tokens_in INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE resume_variants ADD COLUMN tokens_out INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE resume_variants ADD COLUMN attempts INTEGER NOT NULL DEFAULT 1",
+    ],
+}
 _SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 
 
@@ -48,6 +66,21 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute(
             "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
             (SCHEMA_VERSION, utcnow()),
+        )
+        return
+    for version in sorted(_MIGRATIONS):
+        if version <= current:
+            continue
+        for statement in _MIGRATIONS[version]:
+            try:
+                conn.execute(statement)
+            except sqlite3.OperationalError as exc:
+                # Re-running after a partial migration: the column is already there.
+                if "duplicate column" not in str(exc):
+                    raise
+        conn.execute(
+            "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+            (version, utcnow()),
         )
 
 

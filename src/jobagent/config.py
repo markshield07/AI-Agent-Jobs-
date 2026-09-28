@@ -33,8 +33,13 @@ class Settings(BaseSettings):
     def upload_dir(self) -> Path:
         return self.data_dir / "resumes"
 
+    @property
+    def variants_dir(self) -> Path:
+        return self.data_dir / "variants"
+
     def ensure_dirs(self) -> None:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
+        self.variants_dir.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache

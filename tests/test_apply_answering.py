@@ -322,14 +322,21 @@ def test_eeo_declines_unless_the_answer_bank_says_otherwise(packet):
     assert fills(plan) == {"vet": "I am not a veteran"} and sources(plan)["vet"] == "answer_bank"
 
 
-def test_consent_boxes_are_ticked_and_marketing_boxes_are_not(packet):
+def test_terms_are_agreed_to_only_once_the_person_has_said_so(packet):
     fields = [
         F("privacy", "I have read and agree to the privacy policy", kind="checkbox", required=True),
         F("news", "Keep me updated about future opportunities", kind="checkbox"),
         F("certify", "I certify that the information above is accurate", kind="checkbox"),
     ]
     plan = plan_fills(fields, packet)
+    assert fills(plan) == {"news": False}, "no box agreed to on the person's behalf"
+    assert [(n.key, n.answer_key, n.reason) for n in plan.needed] == [
+        ("privacy", answering.CONSENT_KEY, answering.NEVER_GUESSED)
+    ]
+    packet.answers[answering.CONSENT_KEY] = "Yes"
+    plan = plan_fills(fields, packet)
     assert fills(plan) == {"privacy": True, "news": False, "certify": True}
+    assert sources(plan)["privacy"] == "answer_bank"
     packet.answers = {question_key("Keep me updated about future opportunities"): "yes"}
     assert fills(plan_fills(fields[1:2], packet)) == {"news": True}
 
@@ -486,7 +493,7 @@ def test_why_this_company_is_answered_from_the_cover_letter(packet, label, from_
     field = FormField(key="why", label=label, kind="textarea")
     plan = plan_fills([field], packet)
     if from_letter:
-        assert fills(plan) == {"why": packet.cover_letter}
+        assert fills(plan) == {"why": "I led the billing rewrite at Acme."}
         assert sources(plan) == {"why": "cover_letter"}
     else:
         assert "why" not in fills(plan)
@@ -548,3 +555,37 @@ def test_an_attestation_answered_once_is_kept(packet):
     packet.answers[answering.question_key(label)] = "No"
     field = FormField(key="k", label=label, kind="select", required=True, options=["Yes", "No"])
     assert fills(plan_fills([field], packet)) == {"k": "No"}
+
+
+def test_an_accommodation_request_is_not_the_disability_self_id(packet):
+    from jobagent.apply.answering import answer_key_for
+
+    label = (
+        "Do you need a reasonable accommodation due to a disability or medical need for "
+        "applying, interviewing, or otherwise participating in the application process?"
+    )
+    field = F("k", label, kind="select")
+    field.options = ["Yes", "No"]
+    assert answer_key_for(field).startswith("q:")
+    assert answer_key_for(F("k", "Disability status", kind="select")) == "disability"
+    packet.answers["disability"] = "No"
+    plan = plan_fills([field], packet)
+    assert fills(plan) == {}, "the self-ID answer is not an accommodation request"
+    assert [n.reason for n in plan.needed] == [answering.NEVER_GUESSED]
+
+
+@pytest.mark.parametrize(
+    ("letter", "body"),
+    [
+        (
+            "Dear CrowdStrike Hiring Team,\n\nI run networks.\n\nI led teams.\n\n"
+            "Sincerely,\nMark Shield",
+            "I run networks.\n\nI led teams.",
+        ),
+        ("I run networks.\n\nBest regards,\n\nMark Shield", "I run networks."),
+        ("Dear Hiring Manager:\n\nI run networks.\n\nThank you,\nMark", "I run networks."),
+        ("I run networks. Thank you for your time.", "I run networks. Thank you for your time."),
+    ],
+)
+def test_a_form_answer_takes_the_letter_without_greeting_or_sign_off(letter, body):
+    assert answering.letter_body(letter) == body

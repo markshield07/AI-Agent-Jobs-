@@ -260,7 +260,10 @@ kept**: the company's Workday cookies are, in
 
 **A Workday sign-in does not last.** The company's site ends it after a while
 (about an hour on CrowdStrike's) while its cookies still look valid, so the
-cookies cannot tell you whether it works. `--status` opens each company's
+cookies cannot tell you whether it works. Right after you press Enter the
+agent opens the posting to check the sign-in took, and says **NOT SIGNED IN**
+if the page still asks you to sign in (press Enter only once the page shows
+you signed in; the window waits up to 15 minutes). `--status` opens each company's
 posting, presses Apply and Apply Manually, and reports what comes up: still
 signed in, or the sign-in page (add `--no-check` to skip that). Each site
 gets 90 seconds (`--check-timeout` to change it); one that shows neither in
@@ -283,6 +286,10 @@ search box, dates in three boxes) and fills them the way you would. "How did
 you hear about us?" gets the board the job was found on; phone device type is
 Mobile; the self-identify form is signed with your name and today's date; the
 demographic questions are declined unless your answer bank says otherwise.
+A box agreeing to a company's terms or privacy policy is never ticked for you:
+the first form that has one stops and asks, and your answer (`consent_terms`)
+is used on every form after. "Why are you interested in working for us?" gets
+your cover letter without its greeting and sign-off.
 
 Workday saves a draft at every "Save and Continue". A dry run therefore leaves
 the application in that company's account, filled in and unsent, at the

@@ -201,7 +201,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     login.add_argument("--forget", action="store_true", help="Delete the saved sign-in.")
     login.add_argument(
-        "--timeout", type=int, default=300, help="Seconds to wait for you to sign in."
+        "--timeout",
+        type=int,
+        default=None,
+        help="Seconds to wait for you to sign in (5 minutes; 15 for Workday, whose new "
+        "accounts need an email check).",
     )
 
     cycle = sub.add_parser(
@@ -619,7 +623,7 @@ def _cmd_login(args: argparse.Namespace) -> int:
             lambda cookies: sessions.signed_in(
                 sessions.site_cookies({"cookies": cookies}, site.name), site.name
             ),
-            timeout_s=args.timeout,
+            timeout_s=args.timeout or 300,
         )
         path = sessions.save_session(settings, site.name, state)
     except (BrowserUnavailable, TimeoutError, ValueError) as exc:
@@ -687,14 +691,32 @@ def _login_workday(args: argparse.Namespace, settings: Settings) -> int:
             settings,
             args.url,
             lambda cookies: False,
-            timeout_s=args.timeout,
+            timeout_s=args.timeout or 900,
             confirmed=pressed.is_set,
         )
         path = sessions.save_workday_session(settings, host, state, url=args.url)
     except (BrowserUnavailable, TimeoutError, ValueError) as exc:
-        print(exc, file=sys.stderr)
+        print(
+            f"NOT SAVED: nothing was kept for {host} ({exc}). Run the same command again, "
+            "sign in, and press Enter here once the page shows you signed in.",
+            file=sys.stderr,
+        )
         return 2
     print(f"Saved the Workday sign-in for {host} to {path}.")
+    if not args.no_check:
+        # Enter pressed before the sign-in finished saves cookies that do not work.
+        print("Checking that the sign-in works...")
+        checked = _check_workday(settings, [host], url=args.url, timeout_s=args.check_timeout)
+        if checked.get(host) == "signed_out":
+            print(
+                f"NOT SIGNED IN: {host} still shows its sign-in page, so the sign-in did not "
+                "finish. Run the same command again and press Enter only once the page shows "
+                "you signed in.",
+                file=sys.stderr,
+            )
+            return 2
+        if checked.get(host) == "signed_in":
+            print(f"Signed in to {host}: it works.")
     waiting = sessions.workday_waiting(settings, host)
     if waiting and args.no_retry:
         print(
@@ -703,8 +725,11 @@ def _login_workday(args: argparse.Namespace, settings: Settings) -> int:
         )
     elif waiting:
         # Straight away: the sign-in only lasts so long (about an hour on CrowdStrike's).
-        print(f"Running the {len(waiting)} application(s) that were waiting on it now.")
-        return _run_waiting(settings, waiting)
+        print(
+            f"Running the {len(waiting)} application(s) that were waiting on it now. "
+            "Leave this window open until they finish."
+        )
+        return _run_waiting(settings, waiting, host=host)
     return 0
 
 
@@ -726,12 +751,14 @@ def _workday_line(status: dict[str, object]) -> str:
 
 def _check_workday(
     settings: Settings, hosts: list[str], url: str | None = None, *, timeout_s: float = 90
-) -> None:
-    """Open each company's posting with the saved sign-in and record what shows."""
+) -> dict[str, str]:
+    """Open each company's posting with the saved sign-in and record what shows;
+    return what each host showed."""
     from jobagent.apply import sessions
     from jobagent.apply.browser.session import BrowserUnavailable, open_browser
     from jobagent.apply.handlers.workday import WorkdayHandler
 
+    found: dict[str, str] = {}
     try:
         with open_browser(settings) as browser:
             for host in hosts:
@@ -744,6 +771,7 @@ def _check_workday(
                 with browser.new_page() as page:
                     state = handler.check_session(page, where, timeout_s=timeout_s)
                 took = time.monotonic() - began
+                found[host] = state
                 stages = ", ".join(f"{name} {secs:.0f}s" for name, secs in handler.timings)
                 if state == "timed_out":
                     print(
@@ -760,9 +788,11 @@ def _check_workday(
                 sessions.record_workday_check(settings, host, state)
     except BrowserUnavailable as exc:
         print(f"Could not open a browser to check: {exc}", file=sys.stderr)
+    return found
 
 
-def _run_waiting(settings: Settings, job_ids: list[str]) -> int:
+def _run_waiting(settings: Settings, job_ids: list[str], *, host: str | None = None) -> int:
+    from jobagent.apply import sessions
     from jobagent.apply.pipeline import ApplyError, run_apply
 
     db = open_database(settings.db_path)
@@ -773,6 +803,10 @@ def _run_waiting(settings: Settings, job_ids: list[str]) -> int:
         return 2
     finally:
         db.close()
+    if host:
+        # Waiting no longer: every job that did not stop at the sign-in page again.
+        done = [str(r["job_id"]) for r in report.results if not r.get("sign_in")]
+        sessions.clear_workday_waiting(settings, host, done)
     print(report.summary())
     for record in report.results:
         print(_describe_result(record))

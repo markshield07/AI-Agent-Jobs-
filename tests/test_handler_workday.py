@@ -58,6 +58,7 @@ def packet(tmp_path) -> Packet:
         resume_path=str(resume),
         cover_letter="I run networks.",
         answers={
+            "consent_terms": "Yes",
             "work_authorization": "Yes",
             "visa_sponsorship": "No",
             "previously_employed": "No",
@@ -340,6 +341,16 @@ def test_the_next_step_is_awaited_while_the_bar_has_moved_over_the_old_page(page
         "selfid",
         "review",
     ]
+
+
+@pytest.mark.usefixtures("page")
+def test_the_terms_box_waits_for_the_persons_own_yes(page, packet):
+    """Live, the Terms and Conditions box on Voluntary Disclosures was ticked by default."""
+    del packet.answers["consent_terms"]
+    result = run(page, packet)
+    assert result.outcome == "needs_input"
+    assert js(page, "__steps")[-1] == "disclosures"
+    assert [n.answer_key for n in result.needed if n.required] == ["consent_terms"]
 
 
 @pytest.mark.usefixtures("page")

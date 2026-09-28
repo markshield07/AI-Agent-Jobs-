@@ -128,6 +128,9 @@ _QUESTION_ORDER = tuple(
     + [(key, pattern) for key, pattern in _COMPILED if key not in SENSITIVE]
 )
 NEVER_GUESSED = "never guessed: answer it once and it is kept"
+# One answer for every form's terms or privacy-policy box: whether to agree
+# to a company's application terms when its form asks. Never assumed.
+CONSENT_KEY = "consent_terms"
 NOT_ON_FILE = "no answer on file"
 NOT_GROUNDED = "the model could not answer it from the facts on file"
 NO_MODEL = "no model to draft an answer"
@@ -147,6 +150,10 @@ _EEO_KEYS: tuple[tuple[str, str], ...] = (
     ("disability", r"\bdisabilit"),
 )
 _EEO_COMPILED = tuple((key, re.compile(p, re.IGNORECASE)) for key, p in _EEO_KEYS)
+# "Do you need an accommodation due to a disability?" asks for a request, not
+# the voluntary disability self-identification, and the answers are not
+# interchangeable: it is a question of its own, and never guessed.
+_ACCOMMODATION = re.compile(r"\baccommodat", re.IGNORECASE)
 _DECLINE = re.compile(
     r"decline|prefer not|don'?t wish|do not wish|rather not|not to (?:answer|say|disclose)"
     r"|choose not|i don'?t want|(?:do not|don'?t) want to (?:answer|disclose|say)",
@@ -227,12 +234,43 @@ def _lead(text: str) -> str:
     return text[: end + 1 if end >= 0 else 200][:200]
 
 
+_SALUTATION = re.compile(
+    r"^\s*(?:(?:dear|hello|hi|greetings)\b[^,:\n]{0,80}|to\s+whom\s+it\s+may\s+concern)[,:]?\s*",
+    re.IGNORECASE,
+)
+_CLOSING = re.compile(
+    r"\n\s*(?:(?:yours\s+)?sincerely|(?:best|kind|warm)(?:est)?\s+regards|regards|best|"
+    r"respectfully(?:\s+yours)?|yours\s+(?:truly|faithfully)|with\s+thanks|thank\s+you)"
+    r"\s*,[^\n]*(?:\n[^\n]{0,60}){0,3}\s*$",
+    re.IGNORECASE,
+)
+
+
+def letter_body(letter: str) -> str:
+    """The cover letter as a form answer: no "Dear ... Team," and no sign-off."""
+    text = _SALUTATION.sub("", letter.strip(), count=1) if _SALUTATION.match(letter) else letter
+    return _CLOSING.sub("", "\n" + text.strip()).strip()
+
+
+def _is_terms_box(field: FormField) -> bool:
+    """A box agreeing to terms or a privacy policy, not one asking for updates."""
+    return (
+        field.kind == "checkbox"
+        and not field.options
+        and field.section in ("consent", "other", "questions", "eeo")
+        and bool(_CONSENT.search(field.label))
+        and not _MARKETING.search(field.label)
+    )
+
+
 def answer_key_for(field: FormField) -> str:
     """Where an answer to `field` lives, or would live, in the answer bank."""
+    if _is_terms_box(field):
+        return CONSENT_KEY
     if field.section == "experience":
         # "Location" in a job held is not where the person lives.
         return question_key(field.label)
-    if _EEO.search(field.label):
+    if _EEO.search(field.label) and not _ACCOMMODATION.search(field.label):
         for key, pattern in _EEO_COMPILED:
             if pattern.search(field.label):
                 return key
@@ -265,7 +303,7 @@ def _section(field: FormField) -> str:
     if field.kind == "checkbox" and not field.options:
         if _CONSENT.search(field.label) or _MARKETING.search(field.label):
             return "consent"
-    if _EEO.search(field.label):
+    if _EEO.search(field.label) and not _ACCOMMODATION.search(field.label):
         return "eeo"
     if field.kind == "checkbox" and not field.options:
         # A lone box ("I have a preferred name") holds no contact detail.
@@ -467,14 +505,19 @@ class _Planner:
             if not self._apply_value(field, banked, "answer_bank"):
                 self._need(field, NO_OPTION)
             return
-        if key in SENSITIVE or _ATTESTATION.search(field.label):
+        if (
+            key in SENSITIVE
+            or _ATTESTATION.search(field.label)
+            or _ACCOMMODATION.search(field.label)
+        ):
             self._need(field, NEVER_GUESSED)
             return
         if key == "heard_about":
             self._plan_heard_about(field)
             return
-        if field.kind == "textarea" and self.packet.cover_letter and _WHY_US.search(field.label):
-            self._fill(field, self.packet.cover_letter, "cover_letter")
+        body = letter_body(self.packet.cover_letter or "")
+        if field.kind == "textarea" and body and _WHY_US.search(field.label):
+            self._fill(field, body, "cover_letter")
             return
         self._plan_open(field)
 
@@ -513,7 +556,14 @@ class _Planner:
         if _MARKETING.search(field.label) and not field.required:
             self._fill(field, False, "default")
             return
-        self._fill(field, True, "default")
+        # Agreeing to terms is the person's to say, once for every form.
+        blanket = self._bank(CONSENT_KEY)
+        if blanket is not None and _as_bool(blanket) is not None:
+            self._fill(field, _as_bool(blanket), "answer_bank")
+        elif field.required:
+            self._need(field, NEVER_GUESSED)
+        else:
+            self._skip(field, "left unticked: agreeing to terms is yours to say once")
 
     def _plan_eeo(self, field: FormField) -> None:
         banked = self._bank(answer_key_for(field), question_key(field.label))

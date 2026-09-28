@@ -511,7 +511,7 @@ def test_login_workday_waits_for_enter_and_saves_that_company(
 
     monkeypatch.setattr("sys.stdin", io.StringIO("\n"))
     monkeypatch.setattr("jobagent.apply.browser.session.interactive_login", fake_login)
-    main.run(["login", "workday", posting, "--timeout", "90"])
+    main.run(["login", "workday", posting, "--timeout", "90", "--no-check"])
     out = capsys.readouterr().out
     assert seen == {"url": posting, "timeout": 90}
     assert "press Enter" in out and "password goes to Workday only" in out
@@ -625,18 +625,101 @@ def test_login_workday_runs_the_applications_waiting_on_it(
         ran.update(job_ids=job_ids, limit=limit)
         return ApplyReport(run_id=1, mode="dry_run", considered=2)
 
+    checks = []
     monkeypatch.setattr("sys.stdin", io.StringIO("\n"))
     monkeypatch.setattr("jobagent.apply.browser.session.interactive_login", fake_login)
     monkeypatch.setattr("jobagent.apply.pipeline.run_apply", fake_run_apply)
+    monkeypatch.setattr(
+        main, "_check_workday", lambda s, hosts, **kw: checks.append(hosts) or {host: "signed_in"}
+    )
     main.run(["login", "workday", posting])
     out = capsys.readouterr().out
+    assert checks == [[host]], "the new sign-in is tried before anything runs on it"
+    assert f"Signed in to {host}: it works." in out
     assert ran == {"job_ids": ["j1", "j2"], "limit": 2}
     assert "Running the 2 application(s) that were waiting on it now." in out
+    assert "Leave this window open" in out
 
     ran.clear()
     main.run(["login", "workday", posting, "--no-retry"])
     assert ran == {}
     assert "jobagent apply j1 j2" in capsys.readouterr().out
+
+
+def test_a_workday_sign_in_that_did_not_finish_says_so_and_runs_nothing(
+    cli_settings, settings, monkeypatch, capsys
+):
+    import io
+
+    from jobagent.apply import sessions
+
+    host = "acme.wd5.myworkdayjobs.com"
+    posting = f"https://{host}/careers/job/Remote/Engineer_R1"
+    sessions.mark_workday_signed_out(settings, host, job_id="j1", url=posting)
+
+    def early_enter(settings_, url, is_done, *, timeout_s, confirmed):
+        return {"cookies": [{"name": "PLAY_SESSION", "value": "x", "domain": host}]}
+
+    ran = []
+    monkeypatch.setattr("sys.stdin", io.StringIO("\n"))
+    monkeypatch.setattr("jobagent.apply.browser.session.interactive_login", early_enter)
+    monkeypatch.setattr("jobagent.apply.pipeline.run_apply", lambda *a, **k: ran.append(a))
+    monkeypatch.setattr(main, "_check_workday", lambda s, hosts, **kw: {host: "signed_out"})
+    with pytest.raises(SystemExit) as exc:
+        main.run(["login", "workday", posting])
+    assert exc.value.code == 2
+    assert "NOT SIGNED IN" in capsys.readouterr().err
+    assert ran == []
+    assert sessions.workday_waiting(settings, host) == ["j1"]
+
+
+def test_a_workday_sign_in_that_ran_out_of_time_says_nothing_was_saved(
+    cli_settings, settings, monkeypatch, capsys
+):
+    import io
+
+    from jobagent.apply import sessions
+
+    host = "acme.wd5.myworkdayjobs.com"
+    posting = f"https://{host}/careers/job/Remote/Engineer_R1"
+    given = []
+
+    def too_slow(settings_, url, is_done, *, timeout_s, confirmed):
+        given.append(timeout_s)
+        raise TimeoutError(f"not signed in after {timeout_s} seconds")
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    monkeypatch.setattr("jobagent.apply.browser.session.interactive_login", too_slow)
+    with pytest.raises(SystemExit) as exc:
+        main.run(["login", "workday", posting])
+    assert exc.value.code == 2
+    assert given == [900], "a new Workday account's email check takes a while"
+    err = capsys.readouterr().err
+    assert f"NOT SAVED: nothing was kept for {host}" in err
+    assert not sessions.workday_status(settings, host)["saved"]
+
+
+def test_jobs_run_after_a_workday_sign_in_stop_waiting_unless_it_ended_again(
+    settings, monkeypatch, capsys
+):
+    from jobagent.apply import sessions
+    from jobagent.apply.pipeline import ApplyReport
+
+    host = "acme.wd5.myworkdayjobs.com"
+    for job in ("j1", "j2", "j3"):
+        sessions.mark_workday_signed_out(settings, host, job_id=job)
+
+    def fake_run_apply(conn, settings_, *, job_ids, limit):
+        report = ApplyReport(run_id=1, mode="dry_run", considered=2)
+        report.results = [
+            {"job_id": "j1", "outcome": "dry_run", "application_id": 1, "filled": 28},
+            {"job_id": "j2", "outcome": "skipped", "reason": "waiting", "sign_in": host},
+        ]
+        return report
+
+    monkeypatch.setattr("jobagent.apply.pipeline.run_apply", fake_run_apply)
+    main._run_waiting(settings, ["j1", "j2"], host=host)
+    assert sessions.workday_waiting(settings, host) == ["j2", "j3"]
 
 
 def test_login_workday_needs_a_workday_posting(cli_settings, capsys):

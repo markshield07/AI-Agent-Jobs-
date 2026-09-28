@@ -53,6 +53,9 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     # get the same answer four times, and each answer is kept apart.
     ("postal_code", r"\bpostal|\bzip\b|\bpost\s*code\b"),
     ("address_line_2", r"\baddress\s+line\s*2\b|\bapartment\b|\bapt\b|\bsuite\b"),
+    # Where a job was, not where the person lives (a work-history entry's
+    # "Employer Location"): never the home address.
+    ("employer_location", r"\b(?:employer|company|job|work|office)\s+(?:location|city|address)\b"),
     ("address", r"\b(?:street\s+)?address\b"),
     ("city", r"^\W*(?:city|town|city\s*/\s*town|town\s*/\s*city)\W*$"),
     ("state", r"^\W*(?:state|province|region|state\s*/\s*province)\W*$"),

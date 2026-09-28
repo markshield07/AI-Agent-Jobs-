@@ -978,3 +978,29 @@ def test_the_listing_place_a_board_found_near_a_wanted_place_is_wanted_too(conn,
     assert wanted_places(conn) == ["remote", "orange county"]
     _wanted(conn, "Remote")
     assert wanted_places(conn, job) == ["remote"], "only while that place is still wanted"
+
+
+def test_a_careers_page_that_leads_to_workday_goes_to_the_workday_handler():
+    from jobagent.apply.handlers import default_handlers
+    from jobagent.apply.models import HandlerResult
+    from jobagent.apply.pipeline import _company_site_handler
+
+    handlers = default_handlers()
+    generic = next(h for h in handlers if h.ats == "generic")
+    to_workday = HandlerResult(
+        outcome="blocked",
+        error="the company's Apply leads to its workday site",
+        external_url="https://acme.wd5.myworkdayjobs.com/en-US/careers/job/Remote/Engineer_R1",
+    )
+    assert _company_site_handler(to_workday, generic, handlers).ats == "workday"
+    elsewhere = HandlerResult(
+        outcome="blocked", error="x", external_url="https://careers.example.com/1"
+    )
+    assert _company_site_handler(elsewhere, generic, handlers) is None, "never back to itself"
+    linkedin = next(h for h in handlers if h.ats == "linkedin")
+    assert _company_site_handler(elsewhere, linkedin, handlers).ats == "generic"
+    via_indeed = HandlerResult(
+        outcome="blocked", error="x", external_url="https://www.indeed.com/viewjob?jk=1"
+    )
+    assert _company_site_handler(via_indeed, generic, handlers).ats == "indeed"
+    assert _company_site_handler(via_indeed, linkedin, handlers).ats == "generic"

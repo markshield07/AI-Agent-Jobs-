@@ -292,14 +292,9 @@ def apply_to_job(
             "sign_in": waiting_on,
         }
     submit = mode == "auto"
-    if submit and handler.ats in SITES:
-        sent = store.submitted_last_day(conn, ats=handler.ats)
-        if sent >= settings.easy_apply_daily_cap:
-            return _skipped(
-                job_id,
-                f"{SITES[handler.ats].label} cap of {settings.easy_apply_daily_cap} "
-                "applications a day reached; it goes out tomorrow",
-            )
+    capped = _site_cap_reached(conn, settings, handler) if submit else None
+    if capped:
+        return _skipped(job_id, capped)
 
     notes: list[str] = []
     completer = _resolve_completer(settings, completer, notes)
@@ -340,12 +335,15 @@ def apply_to_job(
                 waiting_on = (
                     _workday_signed_out(settings, onward_url) if handler.ats == "workday" else None
                 )
+                capped = _site_cap_reached(conn, settings, handler) if submit else None
                 if waiting_on:
                     result = HandlerResult(
                         outcome="blocked",
                         error=_workday_wait_note(settings, waiting_on),
                         sign_in=waiting_on,
                     )
+                elif capped:
+                    result = HandlerResult(outcome="blocked", error=capped)
                 else:
                     result = handler.apply(
                         page, packet, answerer, submit=submit, screenshot_path=str(screenshot)
@@ -460,16 +458,38 @@ def _note_workday_sign_in(settings: Settings, job_id: str, url: str, result: Han
         sessions.clear_workday_waiting(settings, host, [job_id])
 
 
+def _site_cap_reached(conn: sqlite3.Connection, settings: Settings, handler: Handler) -> str | None:
+    """Why LinkedIn's or Indeed's own daily cap stops this application, if it does."""
+    if handler.ats not in SITES:
+        return None
+    if store.submitted_last_day(conn, ats=handler.ats) < settings.easy_apply_daily_cap:
+        return None
+    return (
+        f"{SITES[handler.ats].label} cap of {settings.easy_apply_daily_cap} "
+        "applications a day reached; it goes out tomorrow"
+    )
+
+
 def _company_site_handler(
     result: HandlerResult, handler: Handler, handlers: Sequence[Handler]
 ) -> Handler | None:
     """The handler for the company's own form, when a LinkedIn or Indeed posting
-    sends the applicant there; None when there is nowhere to go or nothing
-    that fills that site's form."""
+    sends the applicant there, or a company's careers page sends the generic
+    handler on to Workday, Greenhouse, Lever or Ashby; None when there is
+    nowhere to go or nothing that fills that site's form."""
     url = result.external_url
-    if result.outcome != "blocked" or not url or handler.ats not in SITES:
+    if result.outcome != "blocked" or not url:
         return None
-    others = [h for h in handlers if h.ats not in SITES]
+    if handler.ats not in SITES and handler.ats != "generic":
+        return None
+    # Never back to the handler that sent it: the generic handler hands over
+    # only to a site with a handler of its own, Indeed's included (a company
+    # page that applies through Indeed Apply).
+    others = [
+        h
+        for h in handlers
+        if h.ats != handler.ats and (handler.ats == "generic" or h.ats not in SITES)
+    ]
     return handler_for(url, detect_ats(url), others)
 
 

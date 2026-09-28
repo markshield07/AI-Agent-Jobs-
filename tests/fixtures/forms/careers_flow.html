@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Northwind Careers</title>
+<!--
+  A company careers site where the form is some presses from the posting, the way the
+  live failures were (Phenom, Paycor, ADP): a talent-community email box and an
+  "Apply with LinkedIn" button beside the real Apply, and a sign-in that may offer to
+  apply as a guest. Pages, chosen with ?step=...: posting (default), choice, login, form.
+
+  Variants on the posting, with ?variant=...:
+    link    Apply Now is a link to the form page
+    newtab  "Apply for this job" opens the form in a new tab
+    choice  Apply leads to a choice: LinkedIn, Indeed, or Apply manually
+    guest   Apply leads to a sign-in that offers "Continue as guest"
+    wall    Apply leads to a sign-in with no way round it
+    reveal  "Apply" shows the form further down the same page
+    consent Apply opens a privacy notice in a dialog; "Consent & Continue" shows the form
+    filter  a search filter's own "Apply" button comes before the job's Apply Now
+    onetrust a OneTrust preference centre covers the page and takes every click
+    indeedapply  no Apply at all; the page only preloads Indeed Apply
+-->
+<style>
+  body { font-family: sans-serif; margin: 0; }
+  .wrap { max-width: 700px; margin: 0 auto; padding: 20px; }
+  .hidden { display: none; }
+  label { display: block; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav><a href="#">Home</a> <a href="#">Search jobs</a> <a href="#" id="nav-signin">Sign In</a></nav>
+  <main id="main"></main>
+</div>
+<script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  var step = params.get('step') || 'posting';
+  var variant = params.get('variant') || 'link';
+  var main = document.getElementById('main');
+  var here = location.pathname.split('/').pop();
+  var go = function (s) { return here + '?step=' + s + '&variant=' + variant; };
+  window.__opened = window.__opened || [];
+
+  var form = '' +
+    '<h2>Apply: Network Operations Manager</h2>' +
+    '<form id="application">' +
+    '<label for="fname">First name</label><input id="fname" name="first_name" required>' +
+    '<label for="lname">Last name</label><input id="lname" name="last_name" required>' +
+    '<label for="mail">Email</label><input id="mail" type="email" name="email" required>' +
+    '<label for="tel">Phone</label><input id="tel" type="tel" name="phone">' +
+    '<label for="resume">Resume</label><input id="resume" type="file" name="resume" required>' +
+    '<button type="submit">Submit application</button>' +
+    '</form><div id="thanks" class="hidden"><h2>Thank you for applying</h2></div>';
+
+  var community = '' +
+    '<aside><h3>Join our talent community</h3>' +
+    '<form id="community"><label for="alert-email">Email</label>' +
+    '<input id="alert-email" type="email" name="alert_email">' +
+    '<button type="submit">Subscribe</button></form></aside>';
+
+  if (step === 'posting') {
+    var apply;
+    if (variant === 'newtab') {
+      apply = '<button type="button" id="apply" onclick="window.open(\'' + go('form') + '\')">Apply for this job</button>';
+    } else if (variant === 'consent') {
+      apply = '<button type="button" id="apply">Apply</button>' +
+        '<div id="notice" role="dialog" class="hidden"><p>Certain jurisdictions require notice of ' +
+        'how we use your personal information.</p><button type="button" id="decline">Decline &amp; Close</button>' +
+        '<button type="button" id="consent">Consent &amp; Continue</button>' +
+        '<div id="inline" class="hidden">' + form + '</div></div>';
+    } else if (variant === 'filter') {
+      apply = '<div id="filters"><label for="dept">Department</label><select id="dept"><option>All</option></select>' +
+        '<button type="button" id="filter-apply" onclick="window.__filtered = true">Apply</button></div>' +
+        '<a id="apply" href="' + go('form') + '">Apply Now</a>';
+    } else if (variant === 'indeedapply') {
+      apply = '<iframe id="SA_PRELOAD" src="about:blank?smartapply.indeed.com/beta/indeedapply" hidden></iframe>';
+    } else if (variant === 'onetrust') {
+      apply = '<button type="button" id="apply">Apply</button><div id="inline" class="hidden">' + form + '</div>' +
+        '<div id="onetrust-consent-sdk"><div class="onetrust-pc-dark-filter" ' +
+        'style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000"></div></div>';
+    } else if (variant === 'reveal') {
+      apply = '<button type="button" id="apply">Apply</button><div id="inline" class="hidden">' + form + '</div>';
+    } else {
+      var to = { link: 'form', choice: 'choice', guest: 'login', wall: 'login' }[variant] || 'form';
+      apply = '<a id="apply" href="' + go(to) + '">Apply Now</a>';
+    }
+    main.innerHTML = '<h1>Network Operations Manager</h1><p>Lead our NOC.</p>' +
+      '<button type="button" id="apply-linkedin" onclick="window.__opened.push(\'linkedin\')">Apply with LinkedIn</button> ' +
+      '<a href="#" id="share">Share this job</a> ' + apply + community;
+    if (variant === 'reveal' || variant === 'onetrust') {
+      document.getElementById('apply').addEventListener('click', function () {
+        document.getElementById('inline').classList.remove('hidden');
+      });
+    }
+    if (variant === 'consent') {
+      document.getElementById('apply').addEventListener('click', function () {
+        document.getElementById('notice').classList.remove('hidden');
+      });
+      document.getElementById('consent').addEventListener('click', function () {
+        window.__consented = true;
+        document.getElementById('inline').classList.remove('hidden');
+      });
+    }
+  } else if (step === 'choice') {
+    main.innerHTML = '<h1>How would you like to apply?</h1>' +
+      '<button type="button" onclick="window.__opened.push(\'linkedin\')">Apply with LinkedIn</button>' +
+      '<button type="button" onclick="window.__opened.push(\'indeed\')">Apply with Indeed</button>' +
+      '<a id="manual" href="' + go('form') + '">Apply manually</a>';
+  } else if (step === 'login') {
+    main.innerHTML = '<h1>Sign in to apply</h1><form id="signin">' +
+      '<label for="user">Email</label><input id="user" type="email">' +
+      '<label for="pass">Password</label><input id="pass" type="password">' +
+      '<button type="submit">Sign In</button></form>' +
+      '<a href="#">Create an account</a> ' +
+      (variant === 'guest' ? '<a id="guest" href="' + go('form') + '">Continue as guest</a>' : '');
+  } else {
+    main.innerHTML = form;
+  }
+
+  var app = document.getElementById('application');
+  if (app) {
+    app.addEventListener('submit', function (e) {
+      e.preventDefault();
+      window.__submitted = { first_name: document.getElementById('fname').value };
+      app.classList.add('hidden');
+      document.getElementById('thanks').classList.remove('hidden');
+    });
+  }
+  var c = document.getElementById('community');
+  if (c) c.addEventListener('submit', function (e) { e.preventDefault(); window.__subscribed = true; });
+})();
+</script>
+</body>
+</html>

@@ -225,6 +225,7 @@ _NO = frozenset({"no", "n", "false", "0", "i do not", "i am not", "i have not"})
 # site's widget (Apply with LinkedIn's hidden box) or a web address.
 _NOT_AN_OPTION = re.compile(r"api_key|AwliWidget|apply-with-linkedin|://", re.IGNORECASE)
 _BOARDS = frozenset({"linkedin", "indeed", "glassdoor", "ziprecruiter", "dice", "monster"})
+_BOARD_NAMES = {"linkedin": "LinkedIn", "ziprecruiter": "ZipRecruiter"}
 _ASKABLE = frozenset({"text", "textarea", "select", "multiselect", "radio", "number", "unknown"})
 _MAX_MODEL_QUESTIONS = 20
 _DESCRIPTION_CHARS = 2500
@@ -784,9 +785,10 @@ class _Planner:
         ("Indeed" in a Source list), then the kind of place that is. `which`
         is the list asking which board, where only the board or Other fits."""
         options = [o for o in field.options if not _NOT_AN_OPTION.search(o)]
+        board = str(self.packet.job.get("source") or "").strip().lower()
+        board = board if board in _BOARDS else ""
         if options:
-            board = str(self.packet.job.get("source") or "").strip().lower()
-            boards = [board] if board in _BOARDS else []
+            boards = [board] if board else []
             kinds = ["other"] if which else ["job board", "linkedin", "online", "internet", "other"]
             for wanted in (*boards, *kinds):
                 option = pick_option(wanted, options)
@@ -794,7 +796,12 @@ class _Planner:
                     self._fill(field, option, "default")
                     return
         if field.kind in ("text", "textarea"):
-            self._fill(field, "Job board", "default")
+            self._fill(field, board.title() if which and board else "Job board", "default")
+            return
+        if field.kind == "select" and which and board:
+            # Its choices had not come when the form was read: the board by
+            # name, which the page's own list is matched against when filled.
+            self._fill(field, _BOARD_NAMES.get(board, board.title()), "default")
             return
         if field.required:
             self._need(field, NOT_ON_FILE)

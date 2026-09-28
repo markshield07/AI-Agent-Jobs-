@@ -265,3 +265,51 @@ def test_misses_are_counted_by_kind():
     assert miss(title=0, salary=10, location=20, keywords=5) == "title not a match"
     assert miss(title=35, salary=10, location=0, keywords=5) == "location not a match"
     assert miss(title=20, salary=10, location=8, keywords=5) == "score under 60"
+
+
+def test_linkedin_pages_are_spaced_and_a_429_ends_that_sites_fetches(conn, monkeypatch):
+    from jobagent.discovery.enrich import RateLimited
+    from jobagent.discovery.pipeline import _enrich
+
+    def job(n: int, host: str, title: str) -> RawJob:
+        return RawJob(url=f"https://{host}/jobs/view/{n}/", title=title, company="C", source="x")
+
+    store.upsert_jobs(
+        conn,
+        [
+            job(1, "www.linkedin.com", "Barista"),
+            job(2, "www.linkedin.com", "Network Engineer"),
+            job(3, "www.linkedin.com", "Senior Network Engineer"),
+            job(4, "www.indeed.com", "Network Engineer"),
+            job(5, "www.linkedin.com", "Network Engineer II"),
+        ],
+    )
+    asked: list[str] = []
+
+    def fetch(url, **kwargs):
+        asked.append(url)
+        if url.rstrip("/").endswith("/3"):
+            raise RateLimited(url)
+        return "A long enough description. " * 30
+
+    waits: list[float] = []
+    monkeypatch.setattr("jobagent.discovery.pipeline.enrich_description", fetch)
+    report = RunReport(run_id=0)
+    _enrich(
+        conn,
+        report,
+        client=None,
+        completer=None,
+        criteria=SearchCriteria(titles=["Network Engineer"]),
+        sleep=waits.append,
+    )
+    # Matching titles first; LinkedIn's second page waited for; after its 429
+    # no more LinkedIn pages this run, other sites still read.
+    assert [u.split("/")[2] + u.rstrip("/").split("/")[-1] for u in asked] == [
+        "www.linkedin.com2",
+        "www.linkedin.com3",
+        "www.indeed.com4",
+    ]
+    assert len(waits) == 1 and waits[0] > 2
+    assert any("too many requests" in note for note in report.notes)
+    assert report.enriched == 2

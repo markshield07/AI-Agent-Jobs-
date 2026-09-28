@@ -110,8 +110,9 @@ def _calls(
     `on_site_only` searches LinkedIn and Indeed alone, for jobs that apply on
     their own forms: LinkedIn's Easy Apply filter goes with the others, and a
     place query asks Indeed for Indeed Apply jobs, again with no age. Indeed
-    cannot add that filter to its remote one, so a Remote query stays as it
-    was there and the posting itself shows how it applies."""
+    cannot add that filter to its remote one, so a Remote query asks it
+    twice: with the remote filter, and for Indeed Apply jobs in "Remote". The
+    title goes to Indeed in quotes, as a phrase."""
     sites = list(criteria.jobspy_sites)
     if on_site_only:
         sites = [site for site in sites if site in ("linkedin", "indeed")]
@@ -129,8 +130,18 @@ def _calls(
     if on_site_only:
         calls: list[tuple[dict[str, Any], bool]] = []
         if "indeed" in sites:
+            # In quotes, Indeed matches the title as a phrase: its Indeed Apply
+            # search otherwise pads the list with any job sharing one word.
             indeed = {"site_name": ["indeed"], **base, "hours_old": None}
-            calls.append((indeed, True) if remote else ({**indeed, "easy_apply": True}, False))
+            indeed["search_term"] = f'"{title.strip(chr(34))}"'
+            apply_here = {**indeed, "easy_apply": True}
+            if remote:
+                # The remote filter and the Indeed Apply one cannot go together:
+                # both searches, the second in the place Indeed calls "Remote".
+                calls.append((indeed, True))
+                calls.append(({**apply_here, "location": "Remote", "is_remote": False}, False))
+            else:
+                calls.append((apply_here, False))
         if "linkedin" in sites:
             calls.append(({"site_name": ["linkedin"], **base, "easy_apply": True}, remote))
         return calls

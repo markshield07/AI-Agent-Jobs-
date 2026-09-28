@@ -14,7 +14,8 @@
   a search box and a "Set alert for similar jobs" switch, which are not the application.
 
   Pages: contact info (name and phone prefilled from the profile, an email list, a city
-  typeahead), resume and questions, review. Variants with ?variant=...:
+  typeahead), resume (nothing saved on LinkedIn: an empty radio group and an "Upload
+  resume" button whose file box only exists once it is pressed), questions, review. Variants with ?variant=...:
     needs_input  a question nobody on file answers
     external     no Easy Apply: "Apply on company website" through /safety/go/
 -->
@@ -73,10 +74,17 @@
         '<div data-expanded="false"><div><input id="_r_k_" data-testid="typeahead-input" autocomplete="off" dir="auto"' +
         ' placeholder="Enter city or location" aria-autocomplete="list" value=""></div><div class="hits" id="hits"></div></div></div>';
     } },
-    { name: 'questions', title: 'Resume and questions', body: function () {
-      return '<div componentkey="easyApplyFieldFocus_ea.q::1::RESUME::value.validation"><label for="_r_p_"><div>Upload resume</div></label>' +
-        '<input type="file" id="_r_p_" accept=".pdf,.doc,.docx"></div>' +
-        field('_r_q_', 'UNKNOWN', 'Are you legally authorized to work in the United States?*', '', function () {
+    { name: 'resume', title: 'Resume', body: function () {
+      // As on Stand8's: no resume saved on LinkedIn, an empty radio group, and
+      // an "Upload resume" button with no file box in the window until pressed.
+      return '<div><div><p>Resume*</p><p>Select or upload a resume in DOC, DOCX, or PDF format that is less than 2MB</p></div>' +
+        '<div><fieldset aria-describedby="error-message-_r_11_" role="radiogroup"><div><div id="easyApplyUploadedResumeRef"' +
+        ' componentkey="easyApplyUploadedResumeRef">' + (window.__resume ? chosen(window.__resume) : '') + '</div></div></fieldset>' +
+        '<div><button type="button" componentkey="up-1"><span><span>Upload resume</span></span></button></div>' +
+        '<p id="resume-error"></p></div></div>';
+    } },
+    { name: 'questions', title: 'Additional questions', body: function () {
+      return field('_r_q_', 'UNKNOWN', 'Are you legally authorized to work in the United States?*', '', function () {
           return '<select id="_r_q_" required><option value="">Select an option</option><option>Yes</option><option>No</option></select>';
         }) +
         field('_r_s_', 'UNKNOWN', 'Will you now or in the future require sponsorship for employment visa status?*', '', function () {
@@ -90,6 +98,9 @@
       return '<p>Check your answers before you send them.</p>';
     } },
   ];
+  var chosen = function (name) {
+    return '<label><input type="radio" name="resume" checked> ' + name + '</label>';
+  };
   var at = 0;
   var dialog = null;
   var kept = {};
@@ -111,8 +122,25 @@
       var opt = hits.querySelector('[role="option"]');
       if (opt) opt.addEventListener('click', function () { loc.value = opt.textContent; hits.innerHTML = ''; });
     });
-    var file = document.getElementById('_r_p_');
-    if (file) file.addEventListener('change', function () { window.__resume = file.files[0] && file.files[0].name; });
+    Array.from(dialog.querySelectorAll('button')).filter(function (b) { return b.textContent.trim() === 'Upload resume'; })
+      .forEach(function (b) {
+        b.addEventListener('click', function () {
+          var box = document.createElement('input');
+          box.type = 'file';
+          box.accept = '.pdf,.doc,.docx';
+          box.style.display = 'none';
+          document.body.appendChild(box);
+          box.addEventListener('change', function () {
+            var name = box.files[0] && box.files[0].name;
+            setTimeout(function () {  // the upload takes a moment to show
+              window.__resume = name;
+              var ref = document.getElementById('easyApplyUploadedResumeRef');
+              if (ref) ref.innerHTML = chosen(name);
+            }, 600);
+          });
+          box.click();
+        });
+      });
     Array.from(dialog.querySelectorAll('footer button')).forEach(function (b) {
       b.addEventListener('click', function () { step(b.textContent.trim()); });
     });
@@ -127,6 +155,10 @@
     }
     var missing = Array.from(dialog.querySelectorAll('[required]')).filter(function (el) { return !el.value; });
     if (missing.length) return;  // a required box left empty: the step stays
+    if (pages[at].name === 'resume' && !window.__resume) {
+      document.getElementById('resume-error').textContent = 'A resume is required';
+      return;
+    }
     if (pages[at].name === 'contact') kept.contact = { first: val('_r_9_'), last: val('_r_b_'), phone: val('_r_e_'), email: val('_r_f_'), city: val('_r_k_') };
     if (pages[at].name === 'questions') kept.questions = { auth: val('_r_q_'), sponsor: val('_r_s_'), mist: val('_r_t_') };
     at += 1;

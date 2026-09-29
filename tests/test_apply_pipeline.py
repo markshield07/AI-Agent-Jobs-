@@ -594,6 +594,22 @@ def test_run_apply_with_ids_dedupes_and_tallies_skips(conn, settings, ready_job)
     assert jobs.list_runs(conn)[0]["failed"] == 1
 
 
+def test_a_second_apply_run_waits_for_none_and_tries_nothing(conn, settings, ready_job):
+    from jobagent.apply.pipeline import apply_lock
+
+    jid = ready_job()
+    handler = FakeHandler()
+    with apply_lock(settings) as holder:
+        assert holder is None, "the first run takes the lock"
+        report = run_apply(conn, settings, job_ids=[jid], handlers=[handler], browser=FakeBrowser())
+    assert report.busy and report.attempted == 0 and handler.calls == []
+    assert "another apply run is under way (pid" in report.notes[0]
+    assert "not run" in report.summary()
+
+    after = run_apply(conn, settings, job_ids=[jid], handlers=[handler], browser=FakeBrowser())
+    assert not after.busy and after.attempted == 1, "the lock goes with the run"
+
+
 def test_run_apply_with_nothing_to_do(conn, settings):
     report = run_apply(conn, settings, handlers=[FakeHandler()], completer=NeverCalled())
     assert report.considered == 0 and report.run_id is None

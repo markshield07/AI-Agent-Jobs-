@@ -15,11 +15,12 @@ changed, and a job is never submitted twice.
 from __future__ import annotations
 
 import logging
+import os
 import random
 import sqlite3
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from contextlib import nullcontext
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from pathlib import Path
@@ -89,6 +90,8 @@ class ApplyReport:
     failed: int = 0
     skipped: int = 0
     cap_hit: bool = False
+    # Another apply run held the lock, so this one tried nothing.
+    busy: bool = False
     # Sites and Workday companies whose sign-in a run met, with how many jobs wait on each.
     sign_ins: dict[str, int] = field(default_factory=dict)
     input_tokens: int = 0
@@ -115,6 +118,8 @@ class ApplyReport:
                 parts.append(f"{name.replace('_', ' ')} {count}")
         if self.skipped:
             parts.append(f"skipped {self.skipped}")
+        if self.busy:
+            parts.append("not run: another apply run is under way")
         if self.cap_hit:
             parts.append("daily cap reached")
         for where, count in self.sign_ins.items():
@@ -612,6 +617,79 @@ def run_apply(
         report.notes.append("nothing to apply to: no queued job has a ready resume")
         return report
 
+    with apply_lock(settings) as holder:
+        if holder is not None:
+            report.busy = True
+            report.notes.append(
+                f"another apply run is under way ({holder}); nothing was tried. "
+                "Run this again when it finishes"
+            )
+            return report
+        return _run_apply_locked(
+            conn,
+            settings,
+            report,
+            candidates,
+            mode=mode,
+            submit=submit,
+            delay=delay,
+            completer=completer,
+            browser=browser,
+            handlers=handlers,
+            allow_generic=allow_generic,
+            sleep=sleep,
+        )
+
+
+@contextmanager
+def apply_lock(settings: Settings) -> Iterator[str | None]:
+    """One apply run at a time across processes (the hourly loop, a batch from
+    the command line, the dashboard): two would drive the same signed-in
+    browser profile and count against the same daily cap. Yields None when
+    this run holds the lock, else who holds it. The lock goes with the
+    process, so a run that dies leaves nothing to clean up."""
+    try:
+        import fcntl
+    except ImportError:  # not on macOS or Linux: no lock to take
+        yield None
+        return
+    path = Path(settings.data_dir) / "apply.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+")  # noqa: SIM115 - held for the whole run
+    try:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            handle.seek(0)
+            yield handle.read().strip() or "another process"
+            return
+        handle.seek(0)
+        handle.truncate()
+        handle.write(f"pid {os.getpid()}, started {utcnow()}")
+        handle.flush()
+        try:
+            yield None
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+def _run_apply_locked(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    report: ApplyReport,
+    candidates: list[str],
+    *,
+    mode: str,
+    submit: bool,
+    delay: float,
+    completer: Completer | None,
+    browser: BrowserSession | None,
+    handlers: Sequence[Handler] | None,
+    allow_generic: bool,
+    sleep: Callable[[float], None],
+) -> ApplyReport:
     completer = _resolve_completer(settings, completer, report.notes)
     handlers = list(handlers) if handlers is not None else default_handlers(generic=allow_generic)
     report.run_id = jobs.start_run(conn)

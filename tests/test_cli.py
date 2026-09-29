@@ -229,6 +229,34 @@ def test_apply_exits_non_zero_when_a_job_failed(cli_settings, db, monkeypatch):
         main.run(["apply", "j1"])
 
 
+def test_apply_while_another_run_holds_the_lock_says_so_in_its_json(
+    cli_settings, db, monkeypatch, capsys
+):
+    from jobagent.apply.pipeline import ApplyReport
+
+    report = ApplyReport(run_id=None, mode="auto", considered=5, busy=True)
+    report.notes = ["another apply run is under way (pid 42, started now); nothing was tried."]
+    monkeypatch.setattr("jobagent.apply.pipeline.run_apply", lambda *a, **k: report)
+    with pytest.raises(SystemExit) as exit_:
+        main.run(["apply", "a", "b", "c", "d", "e", "--mode", "auto", "--json"])
+    assert exit_.value.code == 3
+    out = json.loads(capsys.readouterr().out)
+    assert out["busy"] is True and "another apply run" in out["notes"][0]
+
+
+def test_apply_that_breaks_prints_the_error_where_json_is_read(
+    cli_settings, db, monkeypatch, capsys
+):
+    def broken(*a, **k):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr("jobagent.apply.pipeline.run_apply", broken)
+    with pytest.raises(SystemExit):
+        main.run(["apply", "j1", "--json"])
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"error": "RuntimeError: database is locked"}
+
+
 def test_applications_lists_what_each_one_waits_on(cli_settings, db, capsys):
     from jobagent.apply import store
     from jobagent.apply.models import HandlerResult, NeededInput

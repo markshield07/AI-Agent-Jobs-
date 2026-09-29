@@ -267,6 +267,16 @@ def apply_to_job(
     if store.job_is_applied(conn, job_id):
         app = store.application_for_job(conn, job_id)
         return _skipped(job_id, "already applied", app["id"] if app else None)
+    twin = store.twin_application(conn, job_id)
+    if twin is not None:
+        # The same role posted twice (a repost under a new id): one application.
+        reason = (
+            f"duplicate: already applying to {job.get('title')} at {job.get('company')} "
+            f"(application {twin['id']})"
+        )
+        jobs.set_status(conn, job_id, "skipped", reason)
+        store.withdraw_unsent(conn, job_id, reason)
+        return _skipped(job_id, reason, twin["id"])
 
     url = job.get("apply_url") or job.get("url") or ""
     sites = settings.apply_site_list

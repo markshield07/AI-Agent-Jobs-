@@ -91,7 +91,7 @@ def ready_job(conn, tmp_path):
     def make(
         url: str = f"https://{FAKE_HOST}/acme/1",
         *,
-        title="Engineer",
+        title=None,
         company="Acme",
         status="queued",
         letter=True,
@@ -100,6 +100,9 @@ def ready_job(conn, tmp_path):
         apply_url=None,
         source="greenhouse",
     ) -> str:
+        # A title of its own per posting unless given: the same title twice at
+        # one company is one role, applied to once.
+        title = title or f"Engineer {url.rstrip('/').rsplit('/', 1)[-1]}"
         raw = RawJob(url=url, title=title, company=company, source=source, apply_url=apply_url)
         jid = jobs.upsert_jobs(conn, [raw]).new_ids[0]
         jobs.set_status(conn, jid, status)
@@ -422,6 +425,53 @@ def test_only_the_named_sites_on_site_postings_come_first():
     order = [j["id"] for j in in_apply_order(queued, ("linkedin", "indeed"))]
     assert order == ["linkedin", "indeed", "indeed-out"]
     assert [j["id"] for j in in_apply_order(queued, ())] == [j["id"] for j in queued]
+
+
+def test_the_same_role_reposted_gets_one_application(conn, settings, ready_job):
+    # Coinbase's, 2026-09-28: one title under two posting ids.
+    first = ready_job(
+        f"https://{FAKE_HOST}/coinbase/1", title="Network Engineer", company="Coinbase"
+    )
+    again = ready_job(
+        f"https://{FAKE_HOST}/coinbase/2", title="Network  Engineer ", company="coinbase"
+    )
+    other = ready_job(f"https://{FAKE_HOST}/coinbase/3", title="Data Engineer", company="Coinbase")
+    handler = FakeHandler()
+
+    kept = _apply(conn, first, settings, handler)
+    twin = _apply(conn, again, settings, handler)
+    assert kept["outcome"] == "dry_run"
+    assert twin["outcome"] == "skipped" and "duplicate" in twin["reason"]
+    assert twin["application_id"] == kept["application_id"]
+    assert jobs.get_job(conn, again)["status"] == "skipped"
+    assert store.application_for_job(conn, again) is None
+    assert _apply(conn, other, settings, handler)["outcome"] == "dry_run", "another role"
+    assert len(handler.calls) == 2
+
+
+def test_of_two_open_applications_to_one_role_the_earlier_goes_on(conn, settings, ready_job):
+    first = ready_job(
+        f"https://{FAKE_HOST}/coinbase/1", title="Network Engineer", company="Coinbase"
+    )
+    again = ready_job(
+        f"https://{FAKE_HOST}/coinbase/2", title="Network Engineer", company="Coinbase"
+    )
+    # Both parked before the rule: made directly, as the Mac's two were.
+    a = store.get_or_create_application(conn, first, mode="auto")
+    store.get_or_create_application(conn, again, mode="auto")
+    assert store.twin_application(conn, first) is None
+    assert store.twin_application(conn, again)["id"] == a
+
+
+def test_a_role_whose_earlier_application_failed_may_be_tried_again(conn, settings, ready_job):
+    first = ready_job(
+        f"https://{FAKE_HOST}/coinbase/1", title="Network Engineer", company="Coinbase"
+    )
+    again = ready_job(
+        f"https://{FAKE_HOST}/coinbase/2", title="Network Engineer", company="Coinbase"
+    )
+    _apply(conn, first, settings, FakeHandler(_result("failed", error="x")))
+    assert _apply(conn, again, settings, FakeHandler())["outcome"] == "dry_run"
 
 
 def test_a_company_site_with_no_handler_stays_blocked(conn, settings, ready_job):

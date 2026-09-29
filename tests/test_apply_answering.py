@@ -796,3 +796,39 @@ def test_a_source_list_read_before_its_choices_came_gets_the_board_by_name(packe
     assert fills(plan_fills([field], packet)) == {"src": "Indeed"}
     packet.job["source"] = "company site"
     assert plan_fills([field], packet).needed[0].key == "src"
+
+
+# ------------------------------------------ from the 2026-09-28 LinkedIn runs --
+
+
+def test_where_are_you_currently_located_is_the_home_location(packet):
+    field = F("loc", "Where are you currently located? (city, state)", required=True)
+    assert answering.canonical_key(field) == "location"
+    assert fills(plan_fills([field], packet)) == {"loc": packet.contact["location"]}
+
+
+def test_a_us_person_question_has_one_key_and_takes_an_answer_given_before(packet):
+    field = F(
+        "usp",
+        "Please indicate whether you are a 'U.S. person' (a U.S. citizen, permanent resident "
+        "or protected individual)?",
+        kind="radio",
+        options=["Yes", "No"],
+        required=True,
+    )
+    assert answering.canonical_key(field) == "us_person"
+    plan = plan_fills([field], packet)
+    assert plan.fills == [] and plan.needed[0].answer_key == "us_person"
+    # Answered on another company's form, under that form's wording.
+    packet.answers["q:are you a u s person as defined by export regulations"] = "Yes"
+    assert fills(plan_fills([field], packet)) == {"usp": "Yes"}
+    packet.answers["us_person"] = "No"
+    assert fills(plan_fills([field], packet)) == {"usp": "No"}, "its own key first"
+
+
+def test_a_required_box_to_process_personal_information_is_agreed_to_in_auto_mode(packet):
+    field = F(
+        "pi", "Allow us to process your personal information.", kind="checkbox", required=True
+    )
+    plan = answering.make_answerer(packet, completer=None, agree_to_terms=True)([field])
+    assert fills(plan) == {"pi": True}

@@ -64,7 +64,11 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     # commuting to this job's location?"): a question about the job, not the
     # person's own location, and its answer differs from job to job.
     ("commute_ok", r"\bcommut"),
-    ("location", r"\blocation\b|\bcity\b|\bwhere (?:are|do) you (?:based|located|live)\b"),
+    (
+        "location",
+        r"\blocation\b|\bcity\b"
+        r"|\bwhere (?:are|do) you (?:currently |now |presently )?(?:based|located|live|reside)\b",
+    ),
     ("linkedin", r"\blinkedin\b"),
     ("github", r"\bgithub\b"),
     ("website", r"\bwebsite\b|\bportfolio\b|\bpersonal\s+site\b|\bhomepage\b"),
@@ -108,6 +112,9 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
         r"|\bwork\s+authori[sz]ation\b|\bright\s+to\s+work\b|\beligible\s+to\s+work\b"
         r"|\bwork\s+permit\b",
     ),
+    # Export-control rules' "U.S. person" (a citizen, a permanent resident or
+    # a protected person): one answer for every company that asks.
+    ("us_person", r"\bu\.?\s?s\.?\s+persons?\b|\bunited\s+states\s+persons?\b"),
     ("citizenship", r"\bcitizen"),
     # The parts of a salary a form asks for apart from the amount: they follow
     # from salary_expectation, so they are tried before it.
@@ -148,6 +155,7 @@ SENSITIVE: frozenset[str] = frozenset(
         "work_authorization",
         "visa_sponsorship",
         "citizenship",
+        "us_person",
         "salary_expectation",
         "salary_currency",
         "salary_period",
@@ -204,6 +212,7 @@ _CONSENT = re.compile(
     r"\bprivacy\b|\bterms\b|\bconsent\b|\bagree\b|\backnowledge\b|\bcertify\b|\bauthori[sz]e\b"
     r"|\bconfirm\b|\baccept\b|\bpolicy\b|\bgdpr\b|\bdata\s+(?:processing|retention)\b"
     r"|\bi\s+understand\b|\bi\s+have\s+read\b"
+    r"|\bprocess(?:ing)?\b[^.]{0,40}\bpersonal\s+(?:information|data)\b"
     r"|\bby\s+(?:continuing|submitting|clicking|checking|applying|proceeding)\b",
     re.IGNORECASE,
 )
@@ -262,22 +271,34 @@ def canonical_key(field: FormField) -> str | None:
     mentions a start date in its fine print is not asking for one.
     """
     for text in (field.label, field.name or "", field.key):
-        if not text:
+        key = _key_of_text(text, upload=field.kind == "file")
+        if key is not None:
+            return key
+    return None
+
+
+def _key_of_text(text: str, *, upload: bool = False) -> str | None:
+    if not text:
+        return None
+    haystack = _lead(text).replace("_", " ").replace("-", " ")
+    question = _is_question(text)
+    order = _QUESTION_ORDER if question else _COMPILED
+    for key, pattern in order:
+        # "Do you have Team Lead experience listed in your resume?" asks
+        # about the resume; only an upload asks for it.
+        if question and key in _UPLOADS and not upload:
             continue
-        haystack = _lead(text).replace("_", " ").replace("-", " ")
-        question = _is_question(text)
-        order = _QUESTION_ORDER if question else _COMPILED
-        for key, pattern in order:
-            # "Do you have Team Lead experience listed in your resume?" asks
-            # about the resume; only an upload asks for it.
-            if question and key in _UPLOADS and field.kind != "file":
-                continue
-            if pattern.search(haystack):
-                return key
+        if pattern.search(haystack):
+            return key
     return None
 
 
 _UPLOADS = frozenset({"resume", "cover_letter"})
+# Questions whose answer is the same whatever the form's wording, so an answer
+# given to one company's wording before the key existed serves the next. Not
+# work authorization or sponsorship: "authorized to work in Canada?" is
+# another question.
+_SAME_EVERYWHERE = frozenset({"us_person"})
 
 
 def _is_question(text: str) -> bool:
@@ -507,6 +528,21 @@ class _Planner:
     def _skip(self, field: FormField, note: str) -> None:
         self.plan.notes.append(f"skipped {field.label!r}: {note}")
 
+    def _bank_by_meaning(self, key: str) -> str | None:
+        """An answer kept under another form's wording of the same question
+        ("q:please indicate whether you are a u s person ..." for us_person),
+        from before the question had a key of its own. Only when every such
+        answer agrees."""
+        found = {
+            str(value).strip()
+            for name, value in self.packet.answers.items()
+            if name.startswith("q:")
+            and value is not None
+            and str(value).strip()
+            and _key_of_text(name[2:] + "?") == key
+        }
+        return found.pop() if len(found) == 1 else None
+
     def _bank(self, *keys: str) -> str | None:
         for key in keys:
             value = self.packet.answers.get(key)
@@ -595,6 +631,8 @@ class _Planner:
         if key == "commute_ok":
             keys = (commute_key(self.packet.job), None)
         banked = self._bank(*(k for k in keys if k))
+        if banked is None and key in _SAME_EVERYWHERE:
+            banked = self._bank_by_meaning(key)
         if banked is not None:
             if not self._apply_value(field, banked, "answer_bank"):
                 self._need(field, NO_OPTION)

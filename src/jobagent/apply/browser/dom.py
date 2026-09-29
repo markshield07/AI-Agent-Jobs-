@@ -109,8 +109,11 @@ _STARS = r"[\s*\u2217\u2731\u273b\uff0a]*"
 _REQUIRED_MARK = re.compile(_STARS + r"(\(?required\)?)?" + _STARS + r"$", re.I)
 
 
+_REQUIRED_LEAD = re.compile(r"^\s*\(required\)\s*", re.I)
+
+
 def clean_label(label: str) -> str:
-    text = _REQUIRED_MARK.sub("", (label or "").strip())
+    text = _REQUIRED_MARK.sub("", _REQUIRED_LEAD.sub("", (label or "").strip()))
     return re.sub(r"\s+", " ", text).strip()
 
 

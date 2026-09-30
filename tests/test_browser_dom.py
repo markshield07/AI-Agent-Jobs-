@@ -45,6 +45,9 @@ def test_a_required_mark_is_not_part_of_the_question():
     assert clean_label("Full name (required)") == "Full name"
     assert clean_label("Full  name required ") == "Full name"
     assert clean_label("Rate us 1-5 *") == "Rate us 1-5"
+    assert clean_label("(Required) Allow us to process your personal information.") == (
+        "Allow us to process your personal information."
+    )
     assert clean_label("") == ""
 
 

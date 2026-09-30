@@ -191,7 +191,7 @@
   const REQUIRED_TEXT = /^(this field is required|this question is required|an answer is required|please (make a selection|select an option|enter a valid answer))\.?$/i;
   const isRequired = (el, label, legend) => {
     if (el.required || el.getAttribute('aria-required') === 'true') return true;
-    if (/\*/.test(label)) return true;
+    if (/\*/.test(label) || /\(required\)/i.test(label)) return true;
     const c = container(el);
     if (c && /\brequired\b/i.test((typeof c.className === 'string' ? c.className : '') + ' ' + (c.getAttribute('data-required') || ''))) return true;
     // A choice's own label is its option ("Yes"); the question it belongs

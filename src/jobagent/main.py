@@ -428,10 +428,21 @@ def _cmd_apply(args: argparse.Namespace) -> int:
             allow_generic=not args.no_generic,
         )
     except ApplyError as exc:
-        print(exc, file=sys.stderr)
-        return 2
+        return _apply_error(args, str(exc), 2)
+    except Exception as exc:  # said where the caller reads, not only in a traceback
+        logging.getLogger(__name__).exception("apply run failed")
+        return _apply_error(args, f"{type(exc).__name__}: {exc}", 1)
     finally:
         db.close()
+    if report.busy:
+        # Nothing tried: said on stdout too, so a --json reader sees why.
+        if args.json:
+            print(json.dumps(report.as_dict(), indent=2))
+        else:
+            print(report.summary())
+            for note in report.notes:
+                print(f"  note: {note}")
+        return 3
     if args.json:
         print(json.dumps(report.as_dict(), indent=2))
     else:
@@ -441,6 +452,13 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         for note in report.notes:
             print(f"  note: {note}")
     return 1 if report.failed else 0
+
+
+def _apply_error(args: argparse.Namespace, message: str, code: int) -> int:
+    if getattr(args, "json", False):
+        print(json.dumps({"error": message}, indent=2))
+    print(message, file=sys.stderr)
+    return code
 
 
 def _cmd_applications(args: argparse.Namespace) -> int:

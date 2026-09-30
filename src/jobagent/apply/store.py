@@ -10,6 +10,7 @@ and the status view derives the rest.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -345,6 +346,40 @@ def withdraw_unsent(conn: sqlite3.Connection, job_id: str, note: str) -> None:
         return
     if app.get("status") != "withdrawn":
         add_event(conn, app["id"], to_status="withdrawn", note=note, source="campaign")
+
+
+def _same_role(value: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+
+def twin_application(conn: sqlite3.Connection, job_id: str) -> dict[str, Any] | None:
+    """An earlier application to the same role at the same company (the same
+    title reposted under another posting id), sent or still under way; None
+    when there is none. The earlier one is the one kept, so of two twins exactly
+    one goes on."""
+    job = conn.execute("SELECT title, company FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if job is None or not _same_role(job["title"]) or not _same_role(job["company"]):
+        return None
+    own = conn.execute("SELECT id FROM applications WHERE job_id = ?", (job_id,)).fetchone()
+    rows = conn.execute(
+        """SELECT a.id, j.title, j.company FROM applications a JOIN jobs j ON j.id = a.job_id
+           WHERE a.job_id != ? ORDER BY a.id""",
+        (job_id,),
+    ).fetchall()
+    for row in rows:
+        if own is not None and row["id"] > own["id"]:
+            break
+        if (_same_role(row["title"]), _same_role(row["company"])) != (
+            _same_role(job["title"]),
+            _same_role(job["company"]),
+        ):
+            continue
+        app = get_application(conn, int(row["id"]))
+        # One that never got through (blocked, failed) or was stopped leaves
+        # the repost free to try.
+        if app and app.get("status") not in ("withdrawn", "failed", "blocked"):
+            return app
+    return None
 
 
 def job_is_applied(conn: sqlite3.Connection, job_id: str) -> bool:

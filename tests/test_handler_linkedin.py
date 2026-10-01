@@ -344,3 +344,14 @@ def test_a_resume_kept_on_linkedin_is_not_a_question_and_the_tailored_one_goes(p
     assert not any("d8763d2995d3d0ac" in (n.label + " ".join(n.options)) for n in result.needed)
     assert not any("d8763d2995d3d0ac" in f.label for f in result.fields)
     assert js(page, "__submitted")["resume"] == "mark-shield.pdf"
+
+
+@pytest.mark.usefixtures("page")
+def test_a_city_box_that_opens_holding_a_linkedin_id_is_picked_again_from_the_list(page, packet):
+    """LinkedIn refills the box from an earlier application; a saved id is not an answer."""
+    result = run_new(page, packet, submit=True, variant="urnprefill")
+    assert result.outcome == "submitted", (result.error, result.needed)
+    sent = js(page, "__submitted")
+    assert sent["contact"]["city"] == "Menifee, California, United States"
+    sources = {f.key: f.source for f in result.filled}
+    assert sources["_r_k_"] != "prefilled"

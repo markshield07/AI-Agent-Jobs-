@@ -70,6 +70,8 @@ _RESUME_STATE_JS = r"""([root, name]) => {
 class LinkedInHandler(WizardHandler):
     ats = "linkedin"
     site = "linkedin"
+    # Fields on the step on screen that LinkedIn opened holding a raw place id.
+    _raw_ids: frozenset[str] | set[str] = frozenset()
     hosts = ("linkedin.com",)
     own_hosts = ("linkedin.com",)
     easy_apply_selectors = (
@@ -202,16 +204,30 @@ class LinkedInHandler(WizardHandler):
         return fields
 
     def prefilled(self, page: Any, fields: list[FormField]) -> dict[str, str]:
-        return super().prefilled(page, [f for f in fields if f.key != UPLOAD_KEY])
+        """What LinkedIn put in the step's fields, less any raw place id.
+
+        LinkedIn fills a city box from an earlier application, and where that
+        one saved the id ("urn:li:geo:103033862") the box opens holding it.
+        Kept, it goes out as the answer; left out here, the box is filled like
+        an empty one, by picking the place from LinkedIn's list.
+        """
+        values = super().prefilled(page, [f for f in fields if f.key != UPLOAD_KEY])
+        raw = {key for key, value in values.items() if _RAW_ID.match(value.strip())}
+        self._raw_ids = raw
+        return {key: value for key, value in values.items() if key not in raw}
 
     def fill(self, page: Any, fields: list[FormField], plan: Any) -> tuple[list, list, list]:
         return fill_plan(page, fields, plan, fill_one=self._fill_one)
 
     def _fill_one(self, page: Any, field: FormField, fill: Fill) -> str | None:
-        if field.kind == "select" and not field.options and isinstance(fill.value, str):
+        typeahead = field.kind == "select" and not field.options
+        if isinstance(fill.value, str) and (typeahead or field.key in self._raw_ids):
             return _typeahead(page, field, fill.value)
         if field.key != UPLOAD_KEY:
-            return fill_field(page, field, fill)
+            error = fill_field(page, field, fill)
+            if error is None and isinstance(fill.value, str) and _holds_raw_id(page, field):
+                return _typeahead(page, field, fill.value)
+            return error
         if not fill.file_path:
             return "no resume file to upload"
         name = Path(fill.file_path).name
@@ -274,6 +290,18 @@ def _resume_choice(field: FormField) -> bool:
     if named and all(_FILE_NAME.search(o) for o in named):
         return True
     return bool(_FILE_NAME.search(field.label or "")) and not field.options
+
+
+_RAW_ID = re.compile(r"urn:li:[a-z_]+:", re.IGNORECASE)
+
+
+def _holds_raw_id(page: Any, field: FormField) -> bool:
+    """True when the field's box now holds a LinkedIn id rather than a name."""
+    try:
+        value = page.locator(field.selector).first.input_value(timeout=1000)
+    except Exception:
+        return False
+    return bool(_RAW_ID.match((value or "").strip()))
 
 
 def _typeahead(page: Any, field: FormField, value: str) -> str | None:

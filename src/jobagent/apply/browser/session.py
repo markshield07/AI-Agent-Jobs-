@@ -104,6 +104,7 @@ def open_browser(settings: Settings) -> Iterator[BrowserSession]:
             try:
                 yield PlaywrightSession(context)
             finally:
+                _keep_sessions(context, settings)
                 context.close()
         finally:
             browser.close()
@@ -120,6 +121,17 @@ def _load_sessions(context: Any, settings: Settings) -> None:
         context.add_cookies(cookies)
     except Exception as exc:  # a stale or malformed file must not stop the run
         log.warning("could not load saved sign-ins: %s", exc)
+
+
+def _keep_sessions(context: Any, settings: Settings) -> None:
+    """Save sign-ins the run renewed (Dice's hourly token) for the next run."""
+    from jobagent.apply.sessions import keep_renewed
+
+    try:
+        for name in keep_renewed(settings, context.storage_state()):
+            log.info("kept the renewed %s sign-in", name)
+    except Exception as exc:  # saving must never fail the run
+        log.warning("could not keep renewed sign-ins: %s", exc)
 
 
 def interactive_login(

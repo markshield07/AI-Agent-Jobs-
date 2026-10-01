@@ -29,13 +29,18 @@ itself, at the pace the daily cap sets.
 
 from __future__ import annotations
 
+import logging
 import re
+import time
 from pathlib import Path
 from typing import Any
 
 from jobagent.apply.browser.fill import click_first_visible, fill_field, fill_plan, wait_settled
 from jobagent.apply.handlers.wizard import ROOT, WizardHandler
 from jobagent.apply.models import Fill, FormField
+from jobagent.apply.sessions import jwt_expiry
+
+log = logging.getLogger(__name__)
 
 # The resume card with no file box: its "Replace" (or "Upload resume")
 # button, which opens the file chooser or draws the box, stands in for one.
@@ -150,10 +155,13 @@ class DiceHandler(WizardHandler):
     # Assumption: the wizard draws its steps inside `main`; the site header
     # with its search box is outside it.
     root_selectors = ("[data-testid*='wizard' i]", "main form", "main")
+    # After the resume is replaced, step 1's button reads "Update" (the PC,
+    # 2026-10-01); pressing it goes on as Next does.
     next_selectors = (
         "button:has-text('Next')",
         "button[aria-label*='Next']",
         "button:has-text('Continue')",
+        "button:text-is('Update')",
     )
     submit_selectors = (
         "button:has-text('Submit Application')",
@@ -193,11 +201,20 @@ class DiceHandler(WizardHandler):
             return f"https://www.dice.com/job-detail/{found.group(1)}"
         return url
 
+    def apply(self, page: Any, packet: Any, answerer: Any, **kwargs: Any) -> Any:
+        url = self.application_url(packet.job.get("apply_url") or packet.job.get("url") or "")
+        if url.startswith("https://www.dice.com/"):
+            refresh_sign_in(page)
+        return super().apply(page, packet, answerer, **kwargs)
+
     def open_flow(self, page: Any) -> Any:
-        click_first_visible(page, COOKIE_REJECT)
+        reject_cookies(page)
         return super().open_flow(page)
 
     def step_marker(self, page: Any) -> str:
+        # Called just before Next is pressed: the cookie banner, which can
+        # arrive late and covers Next, goes first.
+        reject_cookies(page)
         return self._signature(page, self._mark_root(page))
 
     def wait_for_step(self, page: Any, before: str) -> None:
@@ -222,7 +239,7 @@ class DiceHandler(WizardHandler):
         return [e for e in super()._step_errors(page, root) if re.search(r"[A-Za-z]{3}", e)]
 
     def discover_step(self, page: Any, root: str | None) -> list[FormField]:
-        click_first_visible(page, COOKIE_REJECT)
+        reject_cookies(page)
         return self._discover_step(page, root)
 
     def _discover_step(self, page: Any, root: str | None) -> list[FormField]:
@@ -264,6 +281,10 @@ class DiceHandler(WizardHandler):
         if not fill.file_path:
             return "no resume file to upload"
         name = Path(fill.file_path).name
+        if name.lower() in self._root_text(page).lower():
+            # Replaced already: the card names the tailored file. Going round
+            # the menu again finds no Replace, and there is nothing to do.
+            return None
         control = page.locator(field.selector).first
         try:
             in_menu = control.get_attribute(UPLOAD_ATTR, timeout=2000) == "resume-menu"
@@ -308,3 +329,71 @@ class DiceHandler(WizardHandler):
             return str(page.evaluate(_ROOT_TEXT, ROOT) or "")
         except Exception:
             return ""
+
+
+_REJECT_TEXT = re.compile(r"^\s*reject all\s*$", re.IGNORECASE)
+
+
+def reject_cookies(page: Any) -> bool:
+    """Press Reject all on Dice's cookie banner, in the page or any frame it
+    is drawn in. True when one was pressed."""
+    if click_first_visible(page, COOKIE_REJECT):
+        return True
+    try:
+        frames = list(page.frames)
+    except Exception:
+        frames = []
+    for frame in frames:
+        try:
+            button = frame.get_by_role("button", name=_REJECT_TEXT).first
+            if button.count() and button.is_visible():
+                button.click(timeout=3000)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+# Dice signs a member in with an `access` cookie holding a token that lasts an
+# hour, though the cookie itself is kept 30 days, and a `refreshToken` cookie
+# good for 30 days. A visit to a member page while the token is stale makes
+# Dice issue a new one (the PC, 2026-10-01: /home-feed, about 8 seconds).
+REFRESH_URL = "https://www.dice.com/home-feed"
+REFRESH_WAIT_MS = 15_000
+FRESH_FOR_S = 300
+
+
+def refresh_sign_in(page: Any, *, now: float | None = None) -> bool:
+    """Make sure the browser's Dice sign-in token has a few minutes left,
+    visiting Dice's home feed to have it renewed when it has not. True when
+    the token is fresh afterwards. The run's browser state, saved when it
+    closes, keeps the new token for the next run."""
+    context = getattr(page, "context", None)
+    if context is None or _access_fresh(context, now=now):
+        return True
+    try:
+        page.goto(REFRESH_URL, wait_until="domcontentloaded", timeout=30_000)
+    except Exception as exc:
+        log.info("dice: could not open %s to renew the sign-in: %s", REFRESH_URL, exc)
+        return False
+    waited = 0
+    while waited < REFRESH_WAIT_MS:
+        page.wait_for_timeout(500)
+        waited += 500
+        if _access_fresh(context, now=now):
+            return True
+    log.info("dice: the sign-in token was not renewed; signing in again may be needed")
+    return False
+
+
+def _access_fresh(context: Any, *, now: float | None = None) -> bool:
+    try:
+        cookies = context.cookies("https://www.dice.com")
+    except Exception:
+        return False
+    now = time.time() if now is None else now
+    for cookie in cookies:
+        if cookie.get("name") == "access":
+            expires = jwt_expiry(str(cookie.get("value") or ""))
+            return expires is not None and expires > now + FRESH_FOR_S
+    return False

@@ -25,6 +25,11 @@
     replace_button  the card shows a plain Replace button, as the Dice bots described it
     replace_box  that Replace button draws a file box instead of opening the file chooser
     invalid      the questions step rejects its answers with an error
+    cookie_frame the cookie banner is drawn in a frame, a moment after the wizard opens
+
+  After the resume is replaced, the first Next draws step 1 again as the PC saw it on its
+  second dry run (2026-10-01): the card names the new file, "Uploaded to application on
+  10/1/2026", its menu has no Replace, and the button reads "Update". Update goes on.
 -->
 <style>
   body { font-family: Helvetica, Arial, sans-serif; margin: 0; color: #222; }
@@ -55,7 +60,7 @@
 <div id="posting">
   <h1 data-testid="job-detail-header">Senior Network Engineer</h1>
   <div>Acme Networks · Remote · Full-time</div>
-  <div data-variant=",needs_input,signed_out,replace_button,replace_box,invalid">
+  <div data-variant=",needs_input,signed_out,replace_button,replace_box,invalid,cookie_frame">
     <button data-testid="apply-button" id="easy">Easy Apply</button>
   </div>
   <div data-variant="external">
@@ -69,7 +74,7 @@
 
 <main hidden></main>
 
-<div id="cookies">
+<div id="cookies" data-variant=",needs_input,signed_out,external,applied,replace_button,replace_box,invalid">
   <p>We use cookies to improve your experience.</p>
   <button type="button" id="reject-all">Reject all</button>
   <button type="button" id="accept-all">Accept all</button>
@@ -81,7 +86,7 @@
   <h3>Resume *</h3>
   <div class="resume-card">
     <span id="resume-name">Mark+Shield+CCNP.docx</span>
-    <span>Uploaded 8/31/2026</span>
+    <span id="resume-when">Uploaded 8/31/2026</span>
     <button type="button" id="replace" data-only="replace_button,replace_box">Replace</button>
     <button type="button" id="kebab" aria-haspopup="menu" data-not="replace_button,replace_box">
       <svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="3" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="8" cy="13" r="1.5"/></svg>
@@ -89,14 +94,14 @@
     <div role="menu" id="card-menu" hidden>
       <div role="menuitem" id="m-download">Download</div>
       <div role="menuitem" id="m-delete">Delete</div>
-      <div role="menuitem" id="m-replace">Replace</div>
+      <div role="menuitem" id="m-replace" data-replace>Replace</div>
     </div>
   </div>
   <h3>Cover Letter</h3>
   <label class="dashed">Upload your cover letter
     <input type="file" id="cover-file" accept=".pdf,.doc,.docx" style="display:none">
   </label>
-  <button type="button" data-next="questions">Next</button>
+  <button type="button" data-next="resume">Next</button>
 </template>
 
 <template id="step-questions">
@@ -147,11 +152,20 @@
 
   function record(key, value) { window[key] = value; }
   function push(name) { record('__steps', (window.__steps || []).concat([name])); }
-  document.getElementById('reject-all').addEventListener('click', function () {
-    record('__cookies', 'rejected'); document.getElementById('cookies').remove();
-  });
-  document.getElementById('accept-all').addEventListener('click', function () {
-    record('__cookies', 'accepted'); document.getElementById('cookies').remove();
+  var banner = document.getElementById('cookies');
+  if (banner) {
+    document.getElementById('reject-all').addEventListener('click', function () {
+      record('__cookies', 'rejected'); banner.remove();
+    });
+    document.getElementById('accept-all').addEventListener('click', function () {
+      record('__cookies', 'accepted'); banner.remove();
+    });
+  }
+  window.addEventListener('message', function (e) {
+    if (e.data !== 'rejected' && e.data !== 'accepted') return;
+    record('__cookies', e.data);
+    var frame = document.getElementById('cookie-frame');
+    if (frame) frame.remove();
   });
 
   var easy = document.getElementById('easy');
@@ -167,6 +181,16 @@
   box.hidden = false;
   record('__steps', []);
   var resume = 'Mark_Shield_2025.pdf';
+  var replaced = false;
+  if (variant === 'cookie_frame') setTimeout(function () {
+    var f = document.createElement('iframe');
+    f.id = 'cookie-frame';
+    f.style.cssText = 'position:fixed;left:0;right:0;bottom:0;width:100%;height:60vh;border:0;z-index:10';
+    f.srcdoc = '<p>We use cookies.</p>' +
+      '<button onclick="parent.postMessage(\'rejected\', \'*\')">Reject all</button>' +
+      '<button onclick="parent.postMessage(\'accepted\', \'*\')">Accept all</button>';
+    document.body.appendChild(f);
+  }, 800);
 
   function value(id) { var el = document.getElementById(id); return el ? el.value : ''; }
 
@@ -174,6 +198,7 @@
     input.addEventListener('change', function () {
       if (!input.files.length) return;
       resume = input.files[0].name;
+      replaced = true;
       document.getElementById('resume-name').textContent = resume;
       record('__resume', resume);
       input.parentNode.removeChild(input);
@@ -189,6 +214,17 @@
     Array.prototype.forEach.call(box.querySelectorAll('[data-not]'), function (el) {
       if (el.getAttribute('data-not').split(',').indexOf(variant) >= 0) el.parentNode.removeChild(el);
     });
+    if (name === 'resume' && replaced) {
+      // Step 1 again, after Replace: the new file, no Replace, and "Update".
+      box.querySelector('#resume-name').textContent = resume;
+      box.querySelector('#resume-when').textContent = 'Uploaded to application on 10/1/2026';
+      Array.prototype.forEach.call(box.querySelectorAll('[data-replace], #replace'), function (el) {
+        el.parentNode.removeChild(el);
+      });
+      var update = box.querySelector('[data-next]');
+      update.textContent = 'Update';
+      update.setAttribute('data-next', 'questions');
+    }
     var cover = box.querySelector('#cover-file');
     if (cover) cover.addEventListener('change', function () { record('__cover', cover.files[0].name); });
     var kebab = box.querySelector('#kebab');
@@ -235,6 +271,7 @@
   }
 
   function advance(from, to) {
+    if (from === 'resume' && to === 'resume' && !replaced) to = 'questions';
     if (from === 'questions') {
       var checked = document.querySelector('input[name="auth"]:checked');
       record('__questions', { auth: checked ? checked.value : null, sponsor: value('sponsor'),

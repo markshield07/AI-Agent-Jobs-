@@ -19,6 +19,9 @@
     needs_input  a question nobody on file answers
     external     no Easy Apply: "Apply on company website" through /safety/go/
     urnreview    Review shows the city as LinkedIn's id, urn:li:geo:103033862
+    urnprefill   the city box opens already holding LinkedIn's id, urn:li:geo:103033862,
+                 as it does when an earlier application left that id saved (Robert Half,
+                 2026-10-01)
     radios       Luxoft's two Yes/No questions as the Mac captured them on 2026-09-28
                  (capture-linkedin-radios-luxoft.html): the question is a <p> before a
                  <fieldset role="radiogroup">, each choice a <div role="radio"> whose
@@ -97,7 +100,8 @@
         '<option value="">Select an option</option><option selected>mark@example.com</option></select></div></div>' +
         '<div componentkey="easyApplyFieldFocus_ea.q::36542843762::UNKNOWN::value.validation"><p>Location (city)</p>' +
         '<div data-expanded="false"><div><input id="_r_k_" data-testid="typeahead-input" autocomplete="off" dir="auto"' +
-        ' placeholder="Enter city or location" aria-autocomplete="list" value=""></div><div class="hits" id="hits"></div></div></div>';
+        ' placeholder="Enter city or location" aria-autocomplete="list" value="' +
+        (variant === 'urnprefill' ? 'urn:li:geo:103033862' : '') + '"></div><div class="hits" id="hits"></div></div></div>';
     } },
     { name: 'resume', title: 'Resume', body: function () {
       // As on Stand8's: no resume saved on LinkedIn, an empty radio group, and

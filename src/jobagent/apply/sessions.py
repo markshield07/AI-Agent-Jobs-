@@ -27,6 +27,7 @@ Nothing here imports Playwright; the visible browser is opened by
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -138,6 +139,56 @@ def save_session(settings: Settings, name: str, state: dict[str, Any]) -> Path:
         json.dump(payload, handle)
     os.chmod(path, 0o600)
     return path
+
+
+# Sites whose sign-in token is renewed during a run and must be written back,
+# or the next run starts with the stale one. Dice's `access` cookie holds a
+# token that lasts an hour, renewed by any visit to a member page.
+REFRESHED_TOKENS = {"dice": "access"}
+
+
+def keep_renewed(
+    settings: Settings, state: dict[str, Any], *, now: float | None = None
+) -> list[str]:
+    """Write a run's renewed sign-in back to the saved session, for the sites
+    in REFRESHED_TOKENS that already have one. Only a token that is still
+    good and newer than the saved one replaces it, so a run that got signed
+    out never overwrites a working session. Returns the sites saved."""
+    now = datetime.now(UTC).timestamp() if now is None else now
+    saved: list[str] = []
+    for name, token in REFRESHED_TOKENS.items():
+        if not session_path(settings, name).is_file():
+            continue
+        fresh = _token_expiry(site_cookies(state, name), token)
+        old = _token_expiry(load_session(settings, name), token)
+        if fresh is None or fresh <= now or (old is not None and fresh <= old):
+            continue
+        try:
+            save_session(settings, name, state)
+        except (OSError, ValueError):
+            continue
+        saved.append(name)
+    return saved
+
+
+def _token_expiry(cookies: list[dict[str, Any]], token: str) -> float | None:
+    for cookie in cookies:
+        if cookie.get("name") == token:
+            return jwt_expiry(str(cookie.get("value") or ""))
+    return None
+
+
+def jwt_expiry(token: str) -> float | None:
+    """The `exp` time of a JSON web token, or None when it carries none."""
+    parts = token.split(".")
+    if len(parts) < 2:
+        return None
+    try:
+        padded = parts[1] + "=" * (-len(parts[1]) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(padded))
+        return float(claims["exp"])
+    except (ValueError, KeyError, TypeError):
+        return None
 
 
 def load_session(settings: Settings, name: str) -> list[dict[str, Any]]:

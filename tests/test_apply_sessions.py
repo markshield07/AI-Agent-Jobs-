@@ -206,3 +206,43 @@ def test_a_job_can_wait_on_a_company_never_signed_in_to(settings):
     sessions.record_workday_check(settings, host, "signed_in")  # nothing saved: ignored
     assert sessions.workday_status(settings, host)["state"] == "not_signed_in"
     assert oct(sessions.workday_session_path(settings, host).stat().st_mode)[-3:] == "600"
+
+
+def _jwt(exp):
+    import base64
+    import json
+
+    body = base64.urlsafe_b64encode(json.dumps({"exp": exp}).encode()).decode().rstrip("=")
+    return f"h.{body}.s"
+
+
+def test_a_run_keeps_dices_renewed_sign_in_for_the_next(settings):
+    now = time.time()
+    old = _state(
+        _cookie("access", ".dice.com", _jwt(now - 60)), _cookie("refreshToken", ".dice.com")
+    )
+    sessions.save_session(settings, "dice", old)
+
+    new = _state(
+        _cookie("access", ".dice.com", _jwt(now + 3600)), _cookie("refreshToken", ".dice.com")
+    )
+    assert sessions.keep_renewed(settings, new, now=now) == ["dice"]
+    kept = {c["name"]: c["value"] for c in sessions.load_session(settings, "dice")}
+    assert sessions.jwt_expiry(kept["access"]) == pytest.approx(now + 3600, abs=1)
+
+
+def test_a_run_that_lost_or_never_had_the_dice_sign_in_overwrites_nothing(settings):
+    now = time.time()
+    # No saved Dice session: nothing is created.
+    good = _state(_cookie("access", ".dice.com", _jwt(now + 3600)))
+    assert sessions.keep_renewed(settings, good, now=now) == []
+    assert not sessions.session_path(settings, "dice").exists()
+
+    sessions.save_session(settings, "dice", good)
+    signed_out = _state(_cookie("visitor", ".dice.com"))
+    stale = _state(_cookie("access", ".dice.com", _jwt(now - 60)))
+    older = _state(_cookie("access", ".dice.com", _jwt(now + 600)))
+    for state in (signed_out, stale, older):
+        assert sessions.keep_renewed(settings, state, now=now) == []
+    kept = sessions.load_session(settings, "dice")
+    assert sessions.jwt_expiry(kept[0]["value"]) == pytest.approx(now + 3600, abs=1)

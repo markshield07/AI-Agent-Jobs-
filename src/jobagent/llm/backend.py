@@ -188,6 +188,9 @@ class ClaudeCodeBackend:
                 input=prompt,
                 capture_output=True,
                 text=True,
+                # Windows would use the ANSI code page and fail on characters like ‑.
+                encoding="utf-8",
+                errors="replace",
                 timeout=self.timeout_seconds,
                 cwd=workdir,
                 env=env,

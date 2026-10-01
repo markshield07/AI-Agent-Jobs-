@@ -110,6 +110,8 @@ class WizardHandler(BaseHandler):
     # where that one is the account's old resume (LinkedIn); False where it
     # is the one this run uploaded a step earlier (Workday).
     refill_files: bool = True
+    # Why the last Next could not be pressed, when the site's handler knows.
+    next_problem: str | None = None
 
     # -- what subclasses may override --------------------------------------
 
@@ -149,6 +151,11 @@ class WizardHandler(BaseHandler):
         """Why the step with the Submit button must not be sent as it shows,
         or None. The default finds nothing."""
         return None
+
+    def click_next(self, page: Any, root: str | None) -> bool:
+        """Press the step's Next. A site may set `next_problem` to say why it
+        could not, for the error that stops the run."""
+        return click_first_visible(page, self._scoped(root, self.next_selectors))
 
     def wait_for_step(self, page: Any, before: str) -> None:
         """After Next, wait until the step after `before` is drawn. A site that
@@ -294,13 +301,16 @@ class WizardHandler(BaseHandler):
 
             before = self._signature(page, root)
             marker = self.step_marker(page)
-            if not click_first_visible(page, self._scoped(root, self.next_selectors)):
+            self.next_problem = None
+            if not self.click_next(page, root):
                 captcha = detect_captcha(page)
                 error = (
                     f"{captcha} stands in the way at step {step}"
                     if captcha
                     else f"step {step} has neither a Next nor a Submit button"
                 )
+                if not captcha and self.next_problem:
+                    error += f" ({self.next_problem})"
                 return self._stop(page, "blocked", screenshot_path, error=error, **common())
             wait_settled(page, self.settle_ms)
             self.wait_for_step(page, marker)

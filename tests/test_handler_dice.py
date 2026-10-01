@@ -266,3 +266,21 @@ def test_a_stale_sign_in_is_renewed_on_the_home_feed():
 def test_a_sign_in_dice_will_not_renew_is_reported():
     page = FakePage(FakeContext(exp=900), renews_to=None)
     assert not refresh_sign_in(page, now=1_000)
+
+
+@pytest.mark.usefixtures("page")
+def test_the_wizards_plain_form_is_the_root_not_the_header_search(page):
+    """The live wizard has no <main> and no data-testid (the PC's probe,
+    2026-10-01): its steps are a bare <form>, which is what is read."""
+    page.goto(FIXTURE.as_uri() + "?flow=1")
+    handler = DiceHandler()
+    assert handler._mark_root(page)
+    assert page.locator("[data-jobagent-root='1']").get_attribute("id") == "steps"
+
+
+@pytest.mark.usefixtures("page")
+def test_a_next_that_cannot_be_pressed_says_why(page, packet):
+    result = run(page, packet, variant="covered")
+    assert result.outcome == "blocked", result.error
+    assert "step 2 has neither a Next nor a Submit button" in result.error
+    assert "could not be pressed" in result.error

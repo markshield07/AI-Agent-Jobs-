@@ -8,7 +8,8 @@
   bots consulted describe them (DiceAutoApply, auto-apply-dice-jobs, September 2026). Without
   ?flow=1 this is the posting: a search form in the header and the
   data-testid="apply-button" control reading "Easy Apply". With ?flow=1 it is the wizard
-  (dice.com/job-applications/<guid>/wizard): steps drawn one at a time inside <main>, moved
+  (dice.com/job-applications/<guid>/wizard): steps drawn one at a time inside a plain <form> (no <main>, no
+  data-testid, as a probe of the live wizard found on the PC, 2026-10-01), moved
   with "Next" and finished with "Submit", then the data-testid="job-application-success-card"
   reading "Application submitted". Step 1, "Resume & Cover Letter", is drawn as the live
   wizard showed it on Mark's PC (2026-10-01): the profile's resume card with only a
@@ -25,6 +26,7 @@
     replace_button  the card shows a plain Replace button, as the Dice bots described it
     replace_box  that Replace button draws a file box instead of opening the file chooser
     invalid      the questions step rejects its answers with an error
+    covered      after Replace, a see-through layer over the wizard takes every click
     cookie_frame the cookie banner is drawn in a frame, a moment after the wizard opens
 
   After the resume is replaced, the first Next draws step 1 again as the PC saw it on its
@@ -34,7 +36,7 @@
 <style>
   body { font-family: Helvetica, Arial, sans-serif; margin: 0; color: #222; }
   header { display: flex; gap: 8px; padding: 8px 24px; border-bottom: 1px solid #ddd; }
-  #posting, main { padding: 16px 24px; max-width: 640px; }
+  #posting, #wizard { padding: 16px 24px; max-width: 640px; }
   [data-testid="apply-button"] { background: #0c2577; color: #fff; border: 0; padding: 10px 16px; }
   .q { margin: 10px 0; }
   .q label, .q legend { display: block; font-weight: 600; }
@@ -60,7 +62,7 @@
 <div id="posting">
   <h1 data-testid="job-detail-header">Senior Network Engineer</h1>
   <div>Acme Networks · Remote · Full-time</div>
-  <div data-variant=",needs_input,signed_out,replace_button,replace_box,invalid,cookie_frame">
+  <div data-variant=",needs_input,signed_out,replace_button,replace_box,invalid,cookie_frame,covered">
     <button data-testid="apply-button" id="easy">Easy Apply</button>
   </div>
   <div data-variant="external">
@@ -72,7 +74,7 @@
   <p>Run the BGP and data center fabric for a growing network.</p>
 </div>
 
-<main hidden></main>
+<div id="wizard" hidden><div><div><form id="steps"></form></div></div></div>
 
 <div id="cookies" data-variant=",needs_input,signed_out,external,applied,replace_button,replace_box,invalid">
   <p>We use cookies to improve your experience.</p>
@@ -177,8 +179,8 @@
 
   if (!flow) return;
   document.getElementById('posting').hidden = true;
-  var box = document.querySelector('main');
-  box.hidden = false;
+  document.getElementById('wizard').hidden = false;
+  var box = document.getElementById('steps');
   record('__steps', []);
   var resume = 'Mark_Shield_2025.pdf';
   var replaced = false;
@@ -221,6 +223,11 @@
       Array.prototype.forEach.call(box.querySelectorAll('[data-replace], #replace'), function (el) {
         el.parentNode.removeChild(el);
       });
+      if (variant === 'covered') {
+        var layer = document.createElement('div');
+        layer.style.cssText = 'position:fixed;inset:0;z-index:50';
+        document.body.appendChild(layer);
+      }
       var update = box.querySelector('[data-next]');
       update.textContent = 'Update';
       update.setAttribute('data-next', 'questions');

@@ -9,6 +9,9 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# The job boards whose own application forms the agent fills.
+BOARD_SITES = frozenset({"linkedin", "indeed", "dice"})
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="JOBAGENT_", extra="ignore")
@@ -33,8 +36,10 @@ class Settings(BaseSettings):
     # LinkedIn and Indeed each get their own, lower cap on top of the daily
     # one: both watch for accounts that apply faster than a person would.
     easy_apply_daily_cap: int = 10
+    # Dice starts lower still, to be raised once its applications go through.
+    dice_daily_cap: int = 3
     apply_delay_seconds: float = 45.0  # between submissions, with jitter
-    # Where applications go, e.g. "linkedin,indeed": only jobs that apply on
+    # Where applications go, e.g. "linkedin,dice": only jobs that apply on
     # those sites' own forms. A job that sends the applicant to a company's
     # site is set aside (skipped, with the reason), not tried. Empty: every site.
     apply_sites: str = ""
@@ -64,10 +69,10 @@ class Settings(BaseSettings):
 
     @property
     def board_apply_only(self) -> bool:
-        """Only LinkedIn's and Indeed's own forms: discovery then asks those
-        boards for jobs that apply there (Easy Apply, Indeed Apply)."""
+        """Only the boards' own forms (LinkedIn, Indeed, Dice): discovery then
+        asks those boards for jobs that apply there (Easy Apply, Indeed Apply)."""
         sites = self.apply_site_list
-        return bool(sites) and set(sites) <= {"linkedin", "indeed"}
+        return bool(sites) and set(sites) <= BOARD_SITES
 
     @property
     def db_path(self) -> Path:

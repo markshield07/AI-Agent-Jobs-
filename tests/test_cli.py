@@ -516,6 +516,35 @@ def test_login_saves_the_session_from_a_visible_browser(
     assert "not signed in. Run: jobagent login linkedin" in capsys.readouterr().out
 
 
+def test_login_dice_waits_for_enter_and_keeps_dices_cookies(
+    cli_settings, settings, monkeypatch, capsys
+):
+    import io
+
+    from jobagent.apply import sessions
+
+    seen = {}
+
+    def fake_login(settings_, url, is_done, *, timeout_s, confirmed):
+        seen["url"] = url
+        cookies = [{"name": "anything", "value": "x", "domain": ".dice.com", "expires": -1}]
+        assert not is_done(cookies), "Dice has no known sign-in cookie"
+        for _ in range(200):
+            if confirmed():
+                break
+            time.sleep(0.01)
+        assert confirmed(), "Enter in the terminal ends the wait"
+        return {"cookies": cookies, "origins": []}
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("\n"))
+    monkeypatch.setattr("jobagent.apply.browser.session.interactive_login", fake_login)
+    main.run(["login", "dice"])
+    out = capsys.readouterr().out
+    assert seen == {"url": "https://www.dice.com/dashboard/login"}
+    assert "press Enter" in out and "Signed in to Dice" in out
+    assert sessions.session_status(settings, "dice")["signed_in"]
+
+
 def test_login_workday_waits_for_enter_and_saves_that_company(
     cli_settings, settings, monkeypatch, capsys
 ):

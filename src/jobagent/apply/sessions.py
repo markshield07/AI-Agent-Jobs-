@@ -46,7 +46,10 @@ class Site:
     label: str
     login_url: str
     domain: str  # cookies for this domain and its subdomains are kept
-    auth_cookies: tuple[str, ...]  # any one of these present means signed in
+    # Any one of these present means signed in. Empty for a site whose
+    # sign-in cookie has no known name (Dice): the person says when they are
+    # signed in, and any of the site's cookies left unexpired counts.
+    auth_cookies: tuple[str, ...]
 
 
 SITES: dict[str, Site] = {
@@ -63,6 +66,13 @@ SITES: dict[str, Site] = {
         login_url="https://secure.indeed.com/auth",
         domain="indeed.com",
         auth_cookies=("PPID", "SOCK", "SHOE"),
+    ),
+    "dice": Site(
+        name="dice",
+        label="Dice",
+        login_url="https://www.dice.com/dashboard/login",
+        domain="dice.com",
+        auth_cookies=(),
     ),
 }
 
@@ -102,7 +112,8 @@ def signed_in(cookies: list[dict[str, Any]], name: str, *, now: float | None = N
     s = site(name)
     now = datetime.now(UTC).timestamp() if now is None else now
     for cookie in cookies:
-        if cookie.get("name") in s.auth_cookies and cookie.get("value"):
+        named = cookie.get("name") in s.auth_cookies if s.auth_cookies else _belongs(cookie, s)
+        if named and cookie.get("value"):
             expires = cookie.get("expires")
             if expires in (None, -1) or float(expires) > now:
                 return True

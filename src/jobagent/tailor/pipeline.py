@@ -10,12 +10,20 @@ tailored resume that mentions clearly fewer of the posting's keywords than the
 uploaded one did is not an improvement, so it is sent back too. "Clearly" is
 `COVERAGE_TOLERANCE`: a one-page selection leaves some facts out on purpose,
 and a point or two of coverage is not worth a rejected resume.
+
+A rejected job is not tailored again on a schedule until something it was
+tailored from changes: the posting, the facts, the never-claim list, the
+uploaded resume, the search keywords, or these rules (`TAILOR_RULES`).
+`inputs_fingerprint` is that list, hashed, and `jobs_to_tailor` compares it.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 
 from jobagent.answers import list_answers
@@ -37,11 +45,24 @@ log = logging.getLogger(__name__)
 # How far under the uploaded resume's keyword coverage a tailored one may fall.
 COVERAGE_TOLERANCE = 0.05
 
+# Bump when keyword extraction, the prompt or the gates change, so jobs rejected
+# under the old rules get one more try under the new ones.
+TAILOR_RULES = 2
+
 CONTACT_KEYS = ("full_name", "email", "phone", "location")
 
 
 class TailorError(RuntimeError):
     """The job cannot be tailored for as things stand: no such job, or no facts."""
+
+
+def _renderable_text(facts: Sequence[Fact]) -> str:
+    """What the facts can put on a page: their text, titles and employers. Tags never show."""
+    lines: list[str] = []
+    for fact in facts:
+        detail = fact.detail if isinstance(fact.detail, dict) else {}
+        lines += [fact.text, str(detail.get("title") or ""), str(detail.get("employer") or "")]
+    return "\n".join(line for line in lines if line.strip())
 
 
 def _uploaded_resume(conn: sqlite3.Connection) -> dict | None:
@@ -50,6 +71,64 @@ def _uploaded_resume(conn: sqlite3.Connection) -> dict | None:
         "SELECT id, parsed_text FROM resume_base ORDER BY id DESC LIMIT 1"
     ).fetchone()
     return {"id": row["id"], "parsed_text": row["parsed_text"]} if row else None
+
+
+def inputs_fingerprint(
+    job: dict,
+    facts: Sequence[Fact],
+    never: Sequence[str],
+    base_id: int | None,
+    criteria_keywords: Sequence[str],
+) -> str:
+    """A hash of everything a tailoring of `job` depends on, `TAILOR_RULES` included."""
+    payload = {
+        "rules": TAILOR_RULES,
+        "job": [job.get(k) for k in ("title", "company", "location", "description")],
+        "facts": [
+            [f.id, f.kind, f.text, sorted(f.tags or []), f.detail] for f in facts if f.active
+        ],
+        "never": sorted(t.lower() for t in never),
+        "base": base_id,
+        "keywords": sorted(k.lower() for k in criteria_keywords),
+    }
+    blob = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode()).hexdigest()
+
+
+def jobs_to_tailor(
+    conn: sqlite3.Connection, settings: Settings, limit: int
+) -> tuple[list[str], int]:
+    """(job ids to tailor, how many were passed over), in apply order.
+
+    A queued job is wanted when it has no ready resume, unless its newest
+    attempt was rejected and nothing it was tailored from has changed since:
+    the same inputs would be rejected again, and every hour spent on them is
+    an hour the jobs behind them wait.
+    """
+    from jobagent.apply.pipeline import in_apply_order
+
+    facts = [f for f in list_facts(conn) if f.active]
+    never = [row["term"] for row in list_never_claim(conn)]
+    base = _uploaded_resume(conn)
+    criteria = load_criteria(conn)
+    wanted: list[str] = []
+    passed_over = 0
+    queued = jobs.list_jobs(conn, status="queued", limit=500)
+    for job in in_apply_order(queued, settings.apply_site_list):
+        if len(wanted) >= limit:
+            break
+        if store.latest_ready_variant(conn, job["id"]) is not None:
+            continue
+        latest = store.latest_variant(conn, job["id"])
+        if latest is not None and latest.status == "rejected" and latest.inputs_sha:
+            now = inputs_fingerprint(
+                job, facts, never, base["id"] if base else None, criteria.keywords
+            )
+            if latest.inputs_sha == now:
+                passed_over += 1
+                continue
+        wanted.append(job["id"])
+    return wanted, passed_over
 
 
 def tailor_job(
@@ -81,13 +160,22 @@ def tailor_job(
         job.get("description"),
         job.get("title"),
         extra=criteria.keywords,
-        exclude=[company, *company.split()],
+        exclude=[company, job.get("location") or ""],
     )
     supported, missing = split_by_support(keywords, fact_pool_text(active))
 
     base = _uploaded_resume(conn)
     base_text = base["parsed_text"] if base else ""
-    base_cov = coverage(base_text, keywords) if base else None
+    # The baseline counts only keywords a fact puts on the page. One the
+    # uploaded resume has only in its address or headings ("CA", "United
+    # States") is one no tailored resume can bring back, so holding a plan to
+    # it rejects good plans for words that were never skills.
+    reachable = _renderable_text(active)
+    base_cov = (
+        coverage(base_text, [k for k in keywords if contains_term(reachable, k)], of=keywords)
+        if base
+        else None
+    )
 
     completer = completer or resolve_backend(settings)
     variant = Variant(
@@ -97,6 +185,9 @@ def tailor_job(
         keywords=keywords,
         keywords_missing=missing,
         base_coverage=base_cov,
+        inputs_sha=inputs_fingerprint(
+            job, active, never, base["id"] if base else None, criteria.keywords
+        ),
     )
 
     issues: list[Issue] = []
@@ -122,7 +213,11 @@ def tailor_job(
             if base_cov is None or variant.keyword_coverage >= base_cov - COVERAGE_TOLERANCE:
                 break
             dropped = [
-                k for k in supported if contains_term(base_text, k) and not contains_term(text, k)
+                k
+                for k in keywords
+                if contains_term(reachable, k)
+                and contains_term(base_text, k)
+                and not contains_term(text, k)
             ]
             issues = [
                 Issue(

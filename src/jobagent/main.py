@@ -326,10 +326,8 @@ def _cmd_criteria(args: argparse.Namespace) -> int:
 
 
 def _cmd_tailor(args: argparse.Namespace) -> int:
-    from jobagent.discovery import store as jobs
     from jobagent.llm.backend import LLMError
-    from jobagent.tailor import store as variants
-    from jobagent.tailor.pipeline import TailorError, tailor_job
+    from jobagent.tailor.pipeline import TailorError, jobs_to_tailor, tailor_job
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     settings = get_settings()
@@ -339,14 +337,13 @@ def _cmd_tailor(args: argparse.Namespace) -> int:
         conn = db.connection()
         ids = list(args.job_ids)
         if args.queued:
-            from jobagent.apply.pipeline import in_apply_order
-
-            queued = jobs.list_jobs(conn, status="queued", limit=500)
-            for job in in_apply_order(queued, settings.apply_site_list):
-                if variants.latest_ready_variant(conn, job["id"]) is None:
-                    ids.append(job["id"])
-                if len(ids) >= args.limit:
-                    break
+            wanted, passed_over = jobs_to_tailor(conn, settings, max(args.limit - len(ids), 0))
+            ids += wanted
+            if passed_over:
+                print(
+                    f"{passed_over} queued jobs were rejected before and nothing they were "
+                    "tailored from has changed; name one to tailor it again."
+                )
         if not ids:
             print("Nothing to tailor: pass job ids or use --queued.", file=sys.stderr)
             return 2

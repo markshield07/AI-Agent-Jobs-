@@ -3,15 +3,19 @@
 Company ATS boards are public JSON with full descriptions and no login, so
 they come first (job-agent, AIApplyJobs). JobSpy covers the aggregators
 (Indeed, LinkedIn and the rest) by scraping, which is slower and rate-limited,
-so it only runs when the criteria name a site and a title to search for.
+so it only runs when the criteria name a site and a title to search for. Dice,
+which JobSpy does not cover, has a search of its own, run when
+JOBAGENT_APPLY_SITES names it.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from jobagent.config import BOARD_SITES
 from jobagent.discovery.criteria import SearchCriteria
 from jobagent.discovery.sources.ashby import AshbySource
+from jobagent.discovery.sources.dice import DiceSource
 from jobagent.discovery.sources.greenhouse import GreenhouseSource
 from jobagent.discovery.sources.jobspy_source import JobSpySource
 from jobagent.discovery.sources.lever import LeverSource
@@ -30,10 +34,10 @@ def all_sources(
     apply_sites: tuple[str, ...] = (),
 ) -> list[Source]:
     """Every source that has something to search, given these criteria. With
-    JOBAGENT_APPLY_SITES naming only LinkedIn and Indeed, those boards alone,
-    asked for the jobs that apply on their own forms."""
+    JOBAGENT_APPLY_SITES naming only boards (LinkedIn, Indeed, Dice), those
+    boards alone, asked for the jobs that apply on their own forms."""
     wanted = {board.ats for board in criteria.boards}
-    on_site_only = bool(apply_sites) and set(apply_sites) <= {"linkedin", "indeed"}
+    on_site_only = bool(apply_sites) and set(apply_sites) <= BOARD_SITES
     if apply_sites:
         wanted &= set(apply_sites)
     sources: list[Source] = []
@@ -45,4 +49,6 @@ def all_sources(
         sources.append(AshbySource(client))
     if criteria.jobspy_sites and criteria.titles:
         sources.append(JobSpySource(on_site_only=on_site_only))
+    if "dice" in apply_sites and criteria.titles:
+        sources.append(DiceSource(client))
     return sources

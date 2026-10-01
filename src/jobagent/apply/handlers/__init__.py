@@ -24,6 +24,7 @@ _KNOWN: tuple[tuple[str, str, str], ...] = (
     ("workday", "jobagent.apply.handlers.workday", "WorkdayHandler"),
     ("linkedin", "jobagent.apply.handlers.linkedin", "LinkedInHandler"),
     ("indeed", "jobagent.apply.handlers.indeed", "IndeedHandler"),
+    ("dice", "jobagent.apply.handlers.dice", "DiceHandler"),
 )
 _GENERIC = ("generic", "jobagent.apply.handlers.generic", "GenericHandler")
 

@@ -247,7 +247,7 @@ def _enrich(
 
 # Seconds between page loads on a site that limits them, before jitter, and
 # how many of its pages one run reads at most (LinkedIn answered 429 at 4s).
-ENRICH_GAPS = {"linkedin.com": 8.0}
+ENRICH_GAPS = {"linkedin.com": 8.0, "dice.com": 4.0}
 ENRICH_CAPS = {"linkedin.com": 25}
 
 

@@ -873,6 +873,19 @@ def test_linkedin_and_indeed_each_have_their_own_lower_cap(conn, settings, ready
     assert store.submitted_last_day(conn) == 2
 
 
+def test_dice_has_a_cap_of_its_own_starting_low(conn, settings, ready_job):
+    assert settings.dice_daily_cap == 3
+    capped = settings.model_copy(update={"dice_daily_cap": 1, "easy_apply_daily_cap": 5})
+    dice = FakeHandler(_result("submitted", confirmation="sent"), ats="dice")
+    first = ready_job(f"https://{FAKE_HOST}/acme/first")
+    second = ready_job(f"https://{FAKE_HOST}/acme/second")
+
+    assert _apply(conn, first, capped, dice, mode="auto")["outcome"] == "submitted"
+    record = _apply(conn, second, capped, dice, mode="auto")
+    assert record["outcome"] == "skipped"
+    assert record["reason"] == "Dice cap of 1 applications a day reached; it goes out tomorrow"
+
+
 def test_a_linkedin_posting_that_sends_you_to_workday_gets_the_workday_handler():
     from jobagent.apply.handlers import default_handlers
     from jobagent.apply.pipeline import _company_site_handler

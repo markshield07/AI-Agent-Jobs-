@@ -265,3 +265,58 @@ def test_split_by_support_preserves_order():
 def test_split_by_support_with_nothing_to_split_or_no_pool():
     assert split_by_support([], "Python") == ([], [])
     assert split_by_support(["python"], "") == ([], ["python"])
+
+
+# ---------------------------------------------------------- network postings --
+
+NETWORK_POSTING = """Senior Network Engineer
+Kelly Services is seeking a Senior Network Engineer for Data Center operations in Irvine, CA.
+Design and maintain LAN/WAN infrastructure including Cisco routers and switches.
+Configure BGP, OSPF and MPLS. Manage Palo Alto and Fortinet firewalls.
+Support F5 load balancers. Join our Change Management board; change management matters.
+Apply Now at www.kellyservices.com. Hours: Monday to Friday, 8am to 5pm.
+Benefits: Medical, Dental and Vision, PTO.
+Kelly is an Equal Opportunity Employer: M/F/Disability/Veterans. United States only.
+"""
+
+
+def test_network_terms_come_whole():
+    found = set(posting_keywords(NETWORK_POSTING, exclude=["Kelly Services"]))
+    assert {"data center", "palo alto", "routers", "switches", "firewalls"} <= found
+    assert {"load balancers", "cisco", "bgp", "ospf", "mpls", "lan/wan", "fortinet"} <= found
+    assert not {"center", "palo", "alto"} & found
+
+
+def test_boilerplate_names_nothing_a_resume_shows():
+    found = set(posting_keywords(NETWORK_POSTING, exclude=["Kelly Services"]))
+    noise = {
+        "equal", "opportunity", "employer", "m/f/disability/veterans", "united", "states",
+        "apply", "now", "www.kellyservices.com", "monday", "friday", "8am", "5pm", "hours",
+        "benefits", "medical", "dental", "vision", "pto", "ca",
+    }  # fmt: skip
+    assert not noise & found, noise & found
+
+
+def test_a_capitalised_word_the_posting_also_writes_in_lower_case_is_ordinary():
+    found = posting_keywords("Lead the Board. The board meets weekly. It runs on Zorbcloud.")
+    assert "board" not in found
+    assert "zorbcloud" in found
+
+
+def test_boilerplate_never_drops_the_users_own_keywords():
+    found = posting_keywords("Remote role. Work in Vision Pro.", extra=["vision"])
+    assert "vision" in found
+
+
+def test_exclude_splits_a_location_on_commas_and_brackets():
+    text = "Based in Irvine. Uses Cisco and Meraki daily, Hybrid schedule."
+    found = posting_keywords(text, exclude=["Irvine, CA (Hybrid)"])
+    assert "irvine" not in found
+    assert "hybrid" not in found
+    assert {"cisco", "meraki"} <= set(found)
+
+
+def test_coverage_can_be_taken_of_a_longer_list():
+    assert coverage("python and aws", ["python"], of=["python", "aws", "go"]) == 0.333
+    assert coverage("python", [], of=["python"]) == 0.0
+    assert coverage("python", ["python"], of=[]) == 0.0

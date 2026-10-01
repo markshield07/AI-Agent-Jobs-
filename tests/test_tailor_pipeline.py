@@ -219,3 +219,101 @@ def test_errors_before_any_model_call(conn, settings, world):
     with pytest.raises(TailorError, match="No facts"):
         tailor_job(conn, world["job_id"], settings, completer=completer)
     assert completer.calls == []
+
+
+# ------------------------------------------------ baseline and re-tailoring --
+
+
+def test_baseline_ignores_keywords_only_the_uploaded_resume_has(conn, settings, world):
+    """Words in the uploaded resume's header that no fact states can't sink a plan."""
+    conn.execute(
+        "UPDATE resume_base SET parsed_text = 'Menifee CA, Zorbcloud Quuxnet. ' || parsed_text"
+    )
+    jobs.set_description(
+        conn,
+        world["job_id"],
+        "We need Python, AWS and Terraform for billing, with Zorbcloud and Quuxnet tooling.",
+    )
+    completer = FakeCompleter([good_plan(world)], [LETTER])
+
+    variant = tailor_job(conn, world["job_id"], settings, completer=completer)
+
+    assert variant.status == "ready", variant.issues
+    assert {"zorbcloud", "quuxnet"} <= set(variant.keywords)
+    # Before, the baseline counted them too and stood a full two keywords higher.
+    assert variant.base_coverage <= variant.keyword_coverage
+
+
+def _queue(conn, jid):
+    jobs.set_status(conn, jid, "queued")
+
+
+def test_a_rejected_job_is_not_tailored_again_until_something_changes(conn, settings, world):
+    from jobagent.tailor.pipeline import jobs_to_tailor
+
+    _queue(conn, world["job_id"])
+    assert jobs_to_tailor(conn, settings, 10) == ([world["job_id"]], 0)
+
+    tailor_job(conn, world["job_id"], settings, completer=FakeCompleter([bad_plan(world)] * 3))
+    assert jobs_to_tailor(conn, settings, 10) == ([], 1), "same inputs, same rejection"
+
+    fact_store.add_keywords(conn, ["Billing systems"])
+    assert jobs_to_tailor(conn, settings, 10) == ([world["job_id"]], 0), "a new fact"
+
+
+def test_a_changed_posting_or_never_claim_list_brings_a_job_back(conn, settings, world):
+    from jobagent.tailor.pipeline import jobs_to_tailor
+
+    _queue(conn, world["job_id"])
+    tailor_job(conn, world["job_id"], settings, completer=FakeCompleter([bad_plan(world)] * 3))
+    assert jobs_to_tailor(conn, settings, 10)[0] == []
+
+    fact_store.add_never_claim(conn, "cobol")
+    assert jobs_to_tailor(conn, settings, 10)[0] == [world["job_id"]]
+
+    tailor_job(conn, world["job_id"], settings, completer=FakeCompleter([bad_plan(world)] * 3))
+    jobs.set_description(conn, world["job_id"], DESCRIPTION + " Billing at scale.")
+    assert jobs_to_tailor(conn, settings, 10)[0] == [world["job_id"]]
+
+
+def test_a_rejection_from_before_fingerprints_is_tried_once_more(conn, settings, world):
+    from jobagent.tailor.pipeline import jobs_to_tailor
+
+    _queue(conn, world["job_id"])
+    tailor_job(conn, world["job_id"], settings, completer=FakeCompleter([bad_plan(world)] * 3))
+    conn.execute("UPDATE resume_variants SET inputs_sha = NULL")
+    assert jobs_to_tailor(conn, settings, 10)[0] == [world["job_id"]]
+
+
+def test_a_job_with_a_ready_resume_is_not_wanted_and_the_limit_holds(conn, settings, world):
+    from jobagent.tailor.pipeline import jobs_to_tailor
+
+    _queue(conn, world["job_id"])
+    raw = RawJob(
+        url="https://boards.greenhouse.io/beta/jobs/2",
+        title="Billing Engineer",
+        company="Beta",
+        source="greenhouse",
+        description=DESCRIPTION,
+    )
+    second = jobs.upsert_jobs(conn, [raw]).new_ids[0]
+    _queue(conn, second)
+    assert len(jobs_to_tailor(conn, settings, 1)[0]) == 1
+
+    tailor_job(
+        conn, world["job_id"], settings, completer=FakeCompleter([good_plan(world)], [LETTER])
+    )
+    assert jobs_to_tailor(conn, settings, 10) == ([second], 0)
+
+
+def test_the_cycle_says_how_many_rejected_jobs_it_passed_over(conn, settings, world):
+    from jobagent.cycle import _tailor
+
+    _queue(conn, world["job_id"])
+    tailor_job(conn, world["job_id"], settings, completer=FakeCompleter([bad_plan(world)] * 3))
+
+    result = _tailor(conn, settings, {"tailor": 5})
+
+    assert result.ok
+    assert result.detail["passed_over"] == 1
+    assert "1 rejected before and unchanged, not retried" in result.summary

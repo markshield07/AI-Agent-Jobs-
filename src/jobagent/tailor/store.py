@@ -20,8 +20,8 @@ def save_variant(conn: sqlite3.Connection, variant: Variant) -> int:
             """INSERT INTO resume_variants
                    (job_id, base_id, facts_used, keyword_coverage, base_coverage, keywords,
                     keywords_missing, content, cover_letter, status, issues, pdf_path,
-                    tokens_in, tokens_out, attempts, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    tokens_in, tokens_out, attempts, inputs_sha, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 variant.job_id,
                 variant.base_id,
@@ -38,6 +38,7 @@ def save_variant(conn: sqlite3.Connection, variant: Variant) -> int:
                 variant.tokens_in,
                 variant.tokens_out,
                 variant.attempts,
+                variant.inputs_sha,
                 utcnow(),
             ),
         )
@@ -70,6 +71,7 @@ def _from_row(row: sqlite3.Row) -> Variant:
         tokens_in=row["tokens_in"] or 0,
         tokens_out=row["tokens_out"] or 0,
         attempts=row["attempts"] or 1,
+        inputs_sha=row["inputs_sha"],
         created_at=row["created_at"],
     )
 
@@ -92,6 +94,14 @@ def list_variants(
             (job_id, limit),
         ).fetchall()
     return [_from_row(r) for r in rows]
+
+
+def latest_variant(conn: sqlite3.Connection, job_id: str) -> Variant | None:
+    """The newest attempt for `job_id`, ready or rejected."""
+    row = conn.execute(
+        "SELECT * FROM resume_variants WHERE job_id = ? ORDER BY id DESC LIMIT 1", (job_id,)
+    ).fetchone()
+    return _from_row(row) if row else None
 
 
 def latest_ready_variant(conn: sqlite3.Connection, job_id: str) -> Variant | None:

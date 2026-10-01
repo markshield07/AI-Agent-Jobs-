@@ -80,8 +80,56 @@ TECH_LEXICON: frozenset[str] = frozenset(
         "logistics", "lean", "six sigma", "pmp", "okrs", "kpis", "customer success",
         "customer service", "business development", "sales", "marketing", "content marketing",
         "social media", "coaching", "mentoring", "accounting",
+        # networking, data centers and IT operations
+        "network engineering", "network operations", "network administration",
+        "network infrastructure", "network design", "network monitoring", "network automation",
+        "network architecture", "routing", "switching", "routing and switching", "routers",
+        "switches", "firewall", "firewalls", "load balancer", "load balancers", "lan", "wan",
+        "lan/wan", "sd-wan", "wlan", "wireless", "wi-fi", "vlan", "vlans", "vxlan", "bgp",
+        "ospf", "eigrp", "mpls", "stp", "hsrp", "vrrp", "qos", "dhcp", "ipv4", "ipv6", "ipsec",
+        "snmp", "netflow", "sase", "zero trust", "cisco", "cisco ios", "nx-os", "nexus",
+        "catalyst", "meraki", "juniper", "junos", "arista", "palo alto", "fortinet", "fortigate",
+        "check point", "f5", "aruba", "infoblox", "zscaler", "solarwinds", "wireshark", "netbox",
+        "prtg", "nagios", "zabbix", "logicmonitor", "ccna", "ccnp", "ccie", "jncia", "jncip",
+        "network+", "comptia", "itil", "noc", "incident management", "problem management",
+        "root cause analysis", "troubleshooting", "disaster recovery", "business continuity",
+        "capacity planning", "data center", "data centers", "datacenter", "colocation",
+        "structured cabling", "fiber", "vmware", "vsphere", "hyper-v", "active directory",
+        "windows server", "microsoft 365", "office 365", "slas", "sla", "change control",
+        "it operations", "operations management", "people management", "field engineering",
+        "field operations",
     )
 )  # fmt: skip
+
+# Words a posting capitalises that name nothing a resume could show: equal-
+# opportunity and benefits boilerplate, how to apply, the parts of a job ad,
+# places, days and months. They only drop `keyword_like` tokens; a lexicon
+# term or the user's own keyword is never dropped here.
+BOILERPLATE: frozenset[str] = frozenset(
+    """
+    equal opportunity opportunities employer employers eeo eoe eeoc affirmative action race
+    color colour religion creed sex sexual gender orientation identity expression national
+    origin ancestry age disability disabilities veteran veterans protected genetic marital
+    pregnancy citizenship status benefits benefit medical dental vision insurance pto 401k
+    holidays holiday vacation wellness bonus compensation salary pay paid perks hsa fsa eap
+    apply applicant applicants candidate candidates legally authorized authorization
+    sponsorship visa terms privacy notice policy consent accommodation accommodations
+    reasonable e-verify background drug click submit resume cv now please about title
+    qualifications qualification preferred required minimum summary description duties
+    overview position positions job jobs opening schedule shift hours time full-time
+    part-time contract contract-to-hire temporary permanent w2 w-2 c2c 1099 hybrid onsite
+    on-site remote local area location locations travel need needs basis world global
+    international environment united states usa u.s u.s.a america american north south east
+    west city county metro valley bay monday tuesday wednesday thursday friday saturday
+    sunday january february march april june july august september october november
+    december inc llc ltd corp corporation al ak az ar ca co ct de fl ga hi id il ia ks ky la
+    md ma mi mn ms mo mt ne nv nh nj nm ny nc nd oh ok or pa ri sc sd tn tx ut vt va wa wv wi
+    wy dc
+    """.split()
+)
+
+_CLOCK = re.compile(r"^\d{1,2}(?::\d\d)?(?:am|pm)$")
+_WEB = re.compile(r"(?:^www\.|\.(?:com|net|org|io|gov|edu|us)$|@)")
 
 # Symbol-carrying tokens `keyword_like` keeps that name nothing.
 _NOISE: frozenset[str] = frozenset({"e.g", "i.e"})
@@ -130,7 +178,7 @@ def posting_keywords(
 
     lexicon_hits = [t for t in sorted(TECH_LEXICON) if usable(t) and contains_term(text, t)]
     extra_hits = [t for t in _clean(extra) if usable(t) and contains_term(text, t)]
-    names = [t for t in _names_in(text) if usable(t)]
+    names = [t for t in _names_in(text) if usable(t) and not _boilerplate(t, text)]
 
     # A name that is only a piece of a longer term the posting asks for says
     # nothing on its own; a name that only glues present terms together says
@@ -147,13 +195,18 @@ def posting_keywords(
     return ranked[:limit]
 
 
-def coverage(text: str, keywords: Sequence[str]) -> float:
-    """The share of `keywords` present in `text`, 0.0 when there are none."""
+def coverage(text: str, keywords: Sequence[str], *, of: Sequence[str] | None = None) -> float:
+    """The share of `keywords` present in `text`, 0.0 when there are none.
+
+    `of` is the list the share is taken of, when it differs from the list
+    counted: the hits among `keywords`, divided by the size of `of`.
+    """
     wanted = [keyword for keyword in keywords if keyword and keyword.strip()]
-    if not wanted:
+    total = len([k for k in of if k and k.strip()]) if of is not None else len(wanted)
+    if not total:
         return 0.0
     hits = sum(1 for keyword in wanted if contains_term(text, keyword))
-    return round(hits / len(wanted), 3)
+    return round(hits / total, 3)
 
 
 def split_by_support(keywords: Sequence[str], fact_pool: str) -> tuple[list[str], list[str]]:
@@ -179,12 +232,37 @@ def _clean(values: Iterable[str]) -> list[str]:
 
 
 def _exclusions(exclude: Iterable[str]) -> set[str]:
-    """Each excluded term and each of its words, so "Acme Robotics" drops "acme" too."""
+    """Each excluded term and each of its words, so "Acme Robotics" drops "acme" too.
+
+    Commas and brackets split words as spaces do, so a location such as
+    "Irvine, CA (Hybrid)" drops "irvine", "ca" and "hybrid".
+    """
     excluded: set[str] = set()
     for term in _clean(exclude):
+        term = term.strip(" ,;()")
+        if not term:
+            continue
         excluded.add(term)
-        excluded.update(term.split())
+        excluded.update(word for word in re.split(r"[\s,;()]+", term) if word)
     return excluded
+
+
+def _boilerplate(token: str, text: str) -> bool:
+    """True for a `keyword_like` token that names nothing a resume could show.
+
+    That is a `BOILERPLATE` word, or a compound made only of them
+    ("m/f/disability/veterans"), a clock time, a web address, or a plain
+    capitalised word the posting also uses in lower case, which makes it an
+    ordinary word in a heading ("Management" beside "change management").
+    """
+    if token in BOILERPLATE or _CLOCK.match(token) or _WEB.search(token):
+        return True
+    parts = [p for p in _COMPOUND_JOIN.split(token) if p]
+    if len(parts) > 1 and all(p in BOILERPLATE or p in STOPWORDS or len(p) < 2 for p in parts):
+        return True
+    if not token.isalpha():
+        return False
+    return re.search(rf"(?<![\w+#]){re.escape(token)}(?![\w+#])", text) is not None
 
 
 def _names_in(text: str) -> list[str]:

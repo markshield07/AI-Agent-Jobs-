@@ -104,6 +104,28 @@ def test_a_dry_run_walks_every_step_and_stops_at_submit(page, packet, tmp_path):
 
 
 @pytest.mark.usefixtures("page")
+def test_the_resume_is_replaced_through_the_cards_three_dot_menu(page, packet):
+    """The live wizard's step 1 (Mark's PC, 2026-10-01): only a three-dot menu
+    on the resume card, a cookie banner over Next, the route announcer as an
+    alert, and Next spinning before the questions show."""
+    result = run(page, packet)
+    assert result.outcome == "dry_run", result.error
+    assert js(page, "__resume") == "mark-shield-acme.pdf"
+    assert js(page, "__deleted") is None, "Delete in the same menu is never pressed"
+    assert js(page, "__cover") is None, "the cover letter's box is left empty"
+    assert js(page, "__cookies") == "rejected"
+    resume = next(f for f in result.filled if f.label == "Resume")
+    assert resume.file_path == packet.resume_path
+
+
+@pytest.mark.usefixtures("page")
+def test_a_plain_replace_button_still_takes_the_resume(page, packet):
+    result = run(page, packet, variant="replace_button")
+    assert result.outcome == "dry_run", result.error
+    assert js(page, "__resume") == "mark-shield-acme.pdf"
+
+
+@pytest.mark.usefixtures("page")
 def test_the_header_search_form_is_never_touched(page, packet):
     result = run(page, packet)
     assert result.outcome == "dry_run", result.error

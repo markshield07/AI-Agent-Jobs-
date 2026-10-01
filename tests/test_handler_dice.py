@@ -10,14 +10,17 @@ that rejects its answers.
 
 from __future__ import annotations
 
+import base64
+import json
 from pathlib import Path
 
 import pytest
 
 from jobagent.apply.answering import make_answerer
 from jobagent.apply.handlers import default_handlers, handler_for
-from jobagent.apply.handlers.dice import DiceHandler
+from jobagent.apply.handlers.dice import REFRESH_URL, DiceHandler, refresh_sign_in
 from jobagent.apply.models import Packet
+from jobagent.apply.sessions import jwt_expiry
 from jobagent.discovery.ats import detect_ats
 
 FIXTURE = Path(__file__).parent / "fixtures" / "forms" / "dice.html"
@@ -96,7 +99,7 @@ def test_a_dry_run_walks_every_step_and_stops_at_submit(page, packet, tmp_path):
     result = run(page, packet, shot=str(shot))
 
     assert result.outcome == "dry_run", result.error
-    assert js(page, "__steps") == ["resume", "questions", "review"]
+    assert js(page, "__steps") == ["resume", "resume", "questions", "review"]
     assert js(page, "__submitted") is None, "a dry run never presses Submit"
     assert shot.is_file()
     assert js(page, "__resume") == "mark-shield-acme.pdf", "the tailored resume replaces the old"
@@ -116,6 +119,24 @@ def test_the_resume_is_replaced_through_the_cards_three_dot_menu(page, packet):
     assert js(page, "__cookies") == "rejected"
     resume = next(f for f in result.filled if f.label == "Resume")
     assert resume.file_path == packet.resume_path
+
+
+@pytest.mark.usefixtures("page")
+def test_step_one_drawn_again_with_the_new_file_is_left_alone_and_updated(page, packet):
+    """The PC's second dry run (2026-10-01): after Replace, step 1 came back
+    naming the tailored file, with no Replace in the menu and "Update" for
+    Next. The resume is done; Update goes on to the questions."""
+    result = run(page, packet)
+    assert result.outcome == "dry_run", result.error
+    assert js(page, "__steps")[:3] == ["resume", "resume", "questions"]
+    assert not [n for n in result.needed if n.required]
+
+
+@pytest.mark.usefixtures("page")
+def test_a_cookie_banner_drawn_late_in_a_frame_is_rejected(page, packet):
+    result = run(page, packet, variant="cookie_frame")
+    assert result.outcome == "dry_run", result.error
+    assert js(page, "__cookies") == "rejected"
 
 
 @pytest.mark.usefixtures("page")
@@ -187,3 +208,61 @@ def test_a_step_that_rejects_its_answers_stops_with_the_message(page, packet):
     assert result.outcome == "blocked"
     assert "Please answer this question" in result.error
     assert js(page, "__submitted") is None
+
+
+# -------------------------------------------------------------- sign-in --
+
+
+def token(exp: float) -> str:
+    def part(data: dict) -> str:
+        raw = json.dumps(data).encode()
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+    return f"{part({'alg': 'HS256'})}.{part({'sub': 'mark', 'exp': exp})}.sig"
+
+
+def test_the_token_expiry_is_read_from_the_access_cookie():
+    assert jwt_expiry(token(1_800_000_000)) == 1_800_000_000
+    assert jwt_expiry("not-a-token") is None
+    assert jwt_expiry("a.!!!.c") is None
+
+
+class FakeContext:
+    def __init__(self, exp: float | None):
+        self.exp = exp
+
+    def cookies(self, url=None):
+        if self.exp is None:
+            return []
+        return [{"name": "access", "value": token(self.exp), "domain": ".dice.com"}]
+
+
+class FakePage:
+    def __init__(self, context: FakeContext, renews_to: float | None):
+        self.context = context
+        self.renews_to = renews_to
+        self.visited: list[str] = []
+
+    def goto(self, url, **kw):
+        self.visited.append(url)
+
+    def wait_for_timeout(self, ms):
+        if self.visited and self.renews_to is not None:
+            self.context.exp = self.renews_to
+
+
+def test_a_fresh_sign_in_is_left_alone():
+    page = FakePage(FakeContext(exp=10_000), renews_to=None)
+    assert refresh_sign_in(page, now=1_000)
+    assert page.visited == []
+
+
+def test_a_stale_sign_in_is_renewed_on_the_home_feed():
+    page = FakePage(FakeContext(exp=900), renews_to=10_000)
+    assert refresh_sign_in(page, now=1_000)
+    assert page.visited == [REFRESH_URL]
+
+
+def test_a_sign_in_dice_will_not_renew_is_reported():
+    page = FakePage(FakeContext(exp=900), renews_to=None)
+    assert not refresh_sign_in(page, now=1_000)

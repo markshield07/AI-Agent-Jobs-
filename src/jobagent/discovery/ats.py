@@ -26,6 +26,7 @@ ATS_FINGERPRINTS: tuple[tuple[str, str], ...] = (
     ("bamboohr.com", "bamboohr"),
     ("linkedin.com", "linkedin"),
     ("indeed.com", "indeed"),
+    ("dice.com", "dice"),
 )
 
 

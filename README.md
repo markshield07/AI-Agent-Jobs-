@@ -63,7 +63,8 @@ behind it, picked by `JOBAGENT_LLM_BACKEND` in `.env`:
 | `JOBAGENT_APPLY_MODE` | `dry_run` | `dry_run` fills and stops, `review` parks it for approval, `auto` submits |
 | `JOBAGENT_DAILY_APPLY_CAP` | `20` | Submissions in any trailing 24 hours, in `auto` mode |
 | `JOBAGENT_EASY_APPLY_DAILY_CAP` | `10` | LinkedIn's and Indeed's own caps, each, inside the daily one |
-| `JOBAGENT_APPLY_SITES` | (every site) | e.g. `linkedin,indeed`: apply only through those sites' own forms. Discovery then asks LinkedIn for Easy Apply jobs and Indeed for Indeed Apply jobs, and a job that sends you to a company's site is skipped with a reason starting "set aside" |
+| `JOBAGENT_DICE_DAILY_CAP` | `3` | Dice's own cap, inside the daily one; starts low, raise it once Dice applications go through |
+| `JOBAGENT_APPLY_SITES` | (every site) | e.g. `linkedin,indeed` or `linkedin,dice`: apply only through those sites' own forms. Discovery then asks LinkedIn for Easy Apply jobs, Indeed for Indeed Apply jobs and Dice (searched only when named here) for Easy Apply, full-time jobs, and a job that sends you to a company's site is skipped with a reason starting "set aside" |
 | `JOBAGENT_APPLY_DELAY_SECONDS` | `45` | The pause between submissions, jittered |
 | `JOBAGENT_APPLY_MODEL_ANSWERS` | `true` | Let the model draft answers to open questions, from the fact base |
 | `JOBAGENT_HEADLESS` | `true` | `false`, or `--headed`, shows the browser window |
@@ -246,14 +247,15 @@ again. A captcha, a login wall or a "we emailed you a code" prompt is `blocked`,
 with what to do about it. Every attempt is kept, so you can read a dry run
 before changing the mode.
 
-### LinkedIn and Indeed
+### LinkedIn, Indeed and Dice
 
-Easy Apply and Indeed's application only exist for someone signed in, so sign
-in once, on your own machine:
+Easy Apply (LinkedIn's and Dice's) and Indeed's application only exist for
+someone signed in, so sign in once, on your own machine:
 
 ```bash
 jobagent login linkedin          # a browser window opens at LinkedIn's sign-in page
 jobagent login indeed
+jobagent login dice              # sign in, then press Enter in the terminal
 jobagent login linkedin --status # still good?
 jobagent login linkedin --forget # delete it
 ```
@@ -264,8 +266,8 @@ never seen or kept.** What is kept is the site's cookies, in
 git). Every apply run loads them. Signing out of the site, or changing the
 password, ends it; run `login` again.
 
-Both sites apply in steps: contact details, resume, the employer's questions,
-review. The agent reads one step at a time, leaves what the site filled in from
+Each site applies in steps: contact details, resume, the employer's questions,
+review (Dice: resume, questions, review). The agent reads one step at a time, leaves what the site filled in from
 your profile as it is, uploads the resume tailored for the job, answers the
 rest the same way as any other form, and moves on until the Submit button. It
 stops, and closes the form unsent (LinkedIn: Dismiss, then Discard, so no draft

@@ -10,7 +10,7 @@ jobagent applications    list applications and what they wait on
 jobagent answer          answer questions a form asked, then try again
 jobagent approve         submit an application left at the button
 jobagent inbox           read replies from the mailbox and record what they say
-jobagent login           sign in to LinkedIn, Indeed or a company's Workday, once
+jobagent login           sign in to LinkedIn, Indeed, Dice or a company's Workday, once
 jobagent run             one full cycle: discover, tailor, apply, read replies
 """
 
@@ -171,10 +171,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     login = sub.add_parser(
         "login",
-        help="Sign in to LinkedIn, Indeed or a company's Workday once, in a visible browser; "
+        help="Sign in to LinkedIn, Indeed, Dice or a company's Workday once, in a visible browser; "
         "the password is not kept.",
     )
-    login.add_argument("site", choices=("linkedin", "indeed", "workday"))
+    login.add_argument("site", choices=("linkedin", "indeed", "dice", "workday"))
     login.add_argument(
         "url",
         nargs="?",
@@ -649,14 +649,33 @@ def _cmd_login(args: argparse.Namespace) -> int:
         f"{site.label} only; what is kept is the site's cookies, in "
         f"{sessions.session_path(settings, site.name)} (readable by you only)."
     )
+    wait: dict[str, Any] = {}
+    if not site.auth_cookies:
+        # No sign-in cookie with a known name to watch for: the person says.
+        print("When the page shows you signed in, come back here and press Enter.")
+        pressed = threading.Event()
+
+        def wait_for_enter() -> None:
+            try:
+                sys.stdin.readline()
+            except (OSError, ValueError):
+                return
+            pressed.set()
+
+        threading.Thread(target=wait_for_enter, daemon=True).start()
+        wait["confirmed"] = pressed.is_set
     try:
         state = interactive_login(
             settings,
             site.login_url,
-            lambda cookies: sessions.signed_in(
-                sessions.site_cookies({"cookies": cookies}, site.name), site.name
+            lambda cookies: (
+                bool(site.auth_cookies)
+                and sessions.signed_in(
+                    sessions.site_cookies({"cookies": cookies}, site.name), site.name
+                )
             ),
             timeout_s=args.timeout or 300,
+            **wait,
         )
         path = sessions.save_session(settings, site.name, state)
     except (BrowserUnavailable, TimeoutError, ValueError) as exc:

@@ -21,8 +21,8 @@ def _cookie(name, domain, value="v", expires=LATER):
     return {"name": name, "value": value, "domain": domain, "path": "/", "expires": expires}
 
 
-def test_sites_are_linkedin_and_indeed():
-    assert set(sessions.SITES) == {"linkedin", "indeed"}
+def test_sites_are_linkedin_indeed_and_dice():
+    assert set(sessions.SITES) == {"linkedin", "indeed", "dice"}
     assert sessions.site(" LinkedIn ").name == "linkedin"
     with pytest.raises(sessions.UnknownSite):
         sessions.site("monster")
@@ -35,6 +35,25 @@ def test_signed_in_needs_an_unexpired_sign_in_cookie():
     assert not sessions.signed_in([_cookie("li_at", ".linkedin.com", value="")], "linkedin")
     assert not sessions.signed_in([_cookie("bcookie", ".linkedin.com")], "linkedin")
     assert sessions.signed_in([_cookie("SHOE", ".indeed.com")], "indeed")
+
+
+def test_dice_counts_any_of_its_own_unexpired_cookies_as_signed_in(settings):
+    # Dice's sign-in cookie has no known name: the person said they were
+    # signed in, and the cookies Dice left are what is kept.
+    assert sessions.site("dice").auth_cookies == ()
+    assert sessions.signed_in([_cookie("anything", ".dice.com")], "dice")
+    assert not sessions.signed_in([_cookie("anything", ".dice.com", expires=1.0)], "dice")
+    assert not sessions.signed_in([_cookie("li_at", ".linkedin.com")], "dice")
+    assert not sessions.signed_in([], "dice")
+
+    sessions.save_session(
+        settings, "dice", _state(_cookie("s", ".dice.com"), _cookie("li_at", ".linkedin.com"))
+    )
+    assert [c["name"] for c in sessions.load_session(settings, "dice")] == ["s"]
+    status = sessions.session_status(settings, "dice")
+    assert status["signed_in"] and status["expires_at"] is None
+    with pytest.raises(ValueError):
+        sessions.save_session(settings, "dice", _state(_cookie("li_at", ".linkedin.com")))
 
 
 def test_saving_keeps_the_sites_cookies_only_owner_readable(settings):

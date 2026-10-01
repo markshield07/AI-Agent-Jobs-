@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Senior Network Engineer - Acme Networks - Dice.com</title>
+<!--
+  A Dice posting (dice.com/job-detail/<guid>) and the Easy Apply wizard it opens, as the Dice
+  bots consulted describe them (DiceAutoApply, auto-apply-dice-jobs, September 2026). Without
+  ?flow=1 this is the posting: a search form in the header and the
+  data-testid="apply-button" control reading "Easy Apply". With ?flow=1 it is the wizard
+  (dice.com/job-applications/<guid>/wizard): steps drawn one at a time inside <main> (the
+  resume card with the profile's resume and "Replace", an optional cover letter, the
+  employer's questions, a review), moved with "Next" and finished with "Submit", then the
+  data-testid="job-application-success-card" reading "Application submitted".
+
+  Variants, chosen with ?variant=...:
+    needs_input  adds a required years-of-BGP question nothing on file answers
+    signed_out   a Login/Register link to dice.com/dashboard/login in the header
+    external     "Apply Now" linking to the company's site instead of Easy Apply
+    applied      a disabled "Applied" button: applied before
+    replace_box  Replace draws a file box on the card instead of opening the file chooser
+    invalid      the questions step rejects its answers with an error
+-->
+<style>
+  body { font-family: Helvetica, Arial, sans-serif; margin: 0; color: #222; }
+  header { display: flex; gap: 8px; padding: 8px 24px; border-bottom: 1px solid #ddd; }
+  #posting, main { padding: 16px 24px; max-width: 640px; }
+  [data-testid="apply-button"] { background: #0c2577; color: #fff; border: 0; padding: 10px 16px; }
+  .q { margin: 10px 0; }
+  .q label, .q legend { display: block; font-weight: 600; }
+  [data-testid$="error"] { color: #b00020; }
+</style>
+</head>
+<body>
+<header>
+  <form id="search" role="search">
+    <input name="q" type="text" aria-label="Job title, skill, company, keyword" placeholder="Job title">
+    <input name="location" type="text" aria-label="Location" placeholder="Location">
+    <button type="submit">Search</button>
+  </form>
+  <span data-variant="signed_out"><a href="https://www.dice.com/dashboard/login">Login/Register</a></span>
+</header>
+
+<div id="posting">
+  <h1 data-testid="job-detail-header">Senior Network Engineer</h1>
+  <div>Acme Networks · Remote · Full-time</div>
+  <div data-variant=",needs_input,signed_out,replace_box,invalid">
+    <button data-testid="apply-button" id="easy">Easy Apply</button>
+  </div>
+  <div data-variant="external">
+    <a data-testid="apply-button" id="external" href="https://careers.acme.example/apply/77">Apply Now</a>
+  </div>
+  <div data-variant="applied">
+    <button data-testid="apply-button" disabled>Applied</button>
+  </div>
+  <p>Run the BGP and data center fabric for a growing network.</p>
+</div>
+
+<main hidden></main>
+
+<template id="step-resume">
+  <h2>Resume</h2>
+  <div class="resume-card">
+    <span id="resume-name">Mark_Shield_2025.pdf</span>
+    <button type="button" id="replace">Replace</button>
+  </div>
+  <h2>Cover letter (optional)</h2>
+  <p>No cover letter added.</p>
+  <button type="button" data-next="questions">Next</button>
+</template>
+
+<template id="step-questions">
+  <h2>Questions from the employer</h2>
+  <fieldset class="q">
+    <legend>Are you authorized to work in the United States?</legend>
+    <input type="radio" id="auth-yes" name="auth" value="Yes" required><label for="auth-yes">Yes</label>
+    <input type="radio" id="auth-no" name="auth" value="No" required><label for="auth-no">No</label>
+  </fieldset>
+  <div class="q">
+    <label for="sponsor">Will you now or in the future require visa sponsorship?</label>
+    <select id="sponsor" required>
+      <option value="">Select</option>
+      <option value="Yes">Yes</option>
+      <option value="No">No</option>
+    </select>
+  </div>
+  <div class="q" data-only="needs_input">
+    <label for="bgp">How many years of BGP experience do you have?</label>
+    <input id="bgp" type="text" required>
+  </div>
+  <div data-testid="questions-error" id="q-error" hidden></div>
+  <button type="button" data-next="review">Next</button>
+</template>
+
+<template id="step-review">
+  <h2>Review your application</h2>
+  <p>Resume: <span id="review-resume"></span></p>
+  <button type="button" id="submit">Submit</button>
+</template>
+
+<template id="step-sent">
+  <div data-testid="job-application-success-card">
+    <h2>Application submitted</h2>
+    <p>We sent your application to Acme Networks.</p>
+  </div>
+</template>
+
+<script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  var variant = params.get('variant') || '';
+  var flow = params.get('flow') === '1';
+  Array.prototype.forEach.call(document.querySelectorAll('[data-variant]'), function (el) {
+    var wanted = el.getAttribute('data-variant').split(',');
+    if (wanted.indexOf(variant) < 0) el.parentNode.removeChild(el);
+  });
+
+  function record(key, value) { window[key] = value; }
+  function push(name) { record('__steps', (window.__steps || []).concat([name])); }
+
+  var easy = document.getElementById('easy');
+  if (easy) easy.addEventListener('click', function () {
+    location.href = location.href.split('?')[0] + '?variant=' + variant + '&flow=1';
+  });
+  var ext = document.getElementById('external');
+  if (ext) ext.addEventListener('click', function (e) { e.preventDefault(); record('__left', true); });
+
+  if (!flow) return;
+  document.getElementById('posting').hidden = true;
+  var box = document.querySelector('main');
+  box.hidden = false;
+  record('__steps', []);
+  var resume = 'Mark_Shield_2025.pdf';
+
+  function value(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+
+  function takeFile(input) {
+    input.addEventListener('change', function () {
+      if (!input.files.length) return;
+      resume = input.files[0].name;
+      document.getElementById('resume-name').textContent = resume;
+      record('__resume', resume);
+      input.parentNode.removeChild(input);
+    });
+  }
+
+  function show(name) {
+    push(name);
+    box.innerHTML = document.getElementById('step-' + name).innerHTML;
+    Array.prototype.forEach.call(box.querySelectorAll('[data-only]'), function (el) {
+      if (el.getAttribute('data-only') !== variant) el.parentNode.removeChild(el);
+    });
+    var replace = box.querySelector('#replace');
+    if (replace) replace.addEventListener('click', function () {
+      var input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.pdf,.doc,.docx';
+      takeFile(input);
+      if (variant === 'replace_box') {
+        input.setAttribute('aria-label', 'Upload resume');
+        replace.parentNode.appendChild(input);
+      } else {
+        input.style.display = 'none';
+        document.body.appendChild(input);
+        input.click();
+      }
+    });
+    var rv = box.querySelector('#review-resume');
+    if (rv) rv.textContent = resume;
+    var next = box.querySelector('[data-next]');
+    if (next) next.addEventListener('click', function () { advance(name, next.getAttribute('data-next')); });
+    var submit = box.querySelector('#submit');
+    if (submit) submit.addEventListener('click', function () { record('__submitted', true); show('sent'); });
+  }
+
+  function advance(from, to) {
+    if (from === 'questions') {
+      var checked = document.querySelector('input[name="auth"]:checked');
+      record('__questions', { auth: checked ? checked.value : null, sponsor: value('sponsor'),
+        bgp: value('bgp') });
+      if (variant === 'invalid') {
+        var err = document.getElementById('q-error');
+        err.textContent = 'Please answer this question';
+        err.hidden = false;
+        return;
+      }
+      if (variant === 'needs_input' && !value('bgp')) return;
+    }
+    show(to);
+  }
+
+  show('resume');
+})();
+</script>
+</body>
+</html>

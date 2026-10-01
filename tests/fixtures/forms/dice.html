@@ -8,17 +8,22 @@
   bots consulted describe them (DiceAutoApply, auto-apply-dice-jobs, September 2026). Without
   ?flow=1 this is the posting: a search form in the header and the
   data-testid="apply-button" control reading "Easy Apply". With ?flow=1 it is the wizard
-  (dice.com/job-applications/<guid>/wizard): steps drawn one at a time inside <main> (the
-  resume card with the profile's resume and "Replace", an optional cover letter, the
-  employer's questions, a review), moved with "Next" and finished with "Submit", then the
-  data-testid="job-application-success-card" reading "Application submitted".
+  (dice.com/job-applications/<guid>/wizard): steps drawn one at a time inside <main>, moved
+  with "Next" and finished with "Submit", then the data-testid="job-application-success-card"
+  reading "Application submitted". Step 1, "Resume & Cover Letter", is drawn as the live
+  wizard showed it on Mark's PC (2026-10-01): the profile's resume card with only a
+  three-dot menu (Download, Delete, Replace), the cover letter's dashed "Upload your cover
+  letter" box (left empty), a cookie banner (Reject all / Accept all) over the bottom of the
+  page, Next.js's route announcer (role=alert), and Next spinning for a while before the
+  following step shows.
 
   Variants, chosen with ?variant=...:
     needs_input  adds a required years-of-BGP question nothing on file answers
     signed_out   a Login/Register link to dice.com/dashboard/login in the header
     external     "Apply Now" linking to the company's site instead of Easy Apply
     applied      a disabled "Applied" button: applied before
-    replace_box  Replace draws a file box on the card instead of opening the file chooser
+    replace_button  the card shows a plain Replace button, as the Dice bots described it
+    replace_box  that Replace button draws a file box instead of opening the file chooser
     invalid      the questions step rejects its answers with an error
 -->
 <style>
@@ -29,6 +34,12 @@
   .q { margin: 10px 0; }
   .q label, .q legend { display: block; font-weight: 600; }
   [data-testid$="error"] { color: #b00020; }
+  #cookies { position: fixed; left: 0; right: 0; bottom: 0; height: 60vh; background: #eee;
+    border-top: 1px solid #999; padding: 16px; z-index: 10; }
+  #__next-route-announcer__ { position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap; }
+  .dashed { border: 1px dashed #888; padding: 12px; }
+  [role="menu"] { border: 1px solid #ccc; display: inline-block; }
 </style>
 </head>
 <body>
@@ -44,7 +55,7 @@
 <div id="posting">
   <h1 data-testid="job-detail-header">Senior Network Engineer</h1>
   <div>Acme Networks · Remote · Full-time</div>
-  <div data-variant=",needs_input,signed_out,replace_box,invalid">
+  <div data-variant=",needs_input,signed_out,replace_button,replace_box,invalid">
     <button data-testid="apply-button" id="easy">Easy Apply</button>
   </div>
   <div data-variant="external">
@@ -58,14 +69,33 @@
 
 <main hidden></main>
 
+<div id="cookies">
+  <p>We use cookies to improve your experience.</p>
+  <button type="button" id="reject-all">Reject all</button>
+  <button type="button" id="accept-all">Accept all</button>
+</div>
+
 <template id="step-resume">
-  <h2>Resume</h2>
+  <h2>Resume &amp; Cover Letter</h2>
+  <p id="__next-route-announcer__" role="alert" aria-live="assertive">Apply to Senior Network Engineer</p>
+  <h3>Resume *</h3>
   <div class="resume-card">
-    <span id="resume-name">Mark_Shield_2025.pdf</span>
-    <button type="button" id="replace">Replace</button>
+    <span id="resume-name">Mark+Shield+CCNP.docx</span>
+    <span>Uploaded 8/31/2026</span>
+    <button type="button" id="replace" data-only="replace_button,replace_box">Replace</button>
+    <button type="button" id="kebab" aria-haspopup="menu" data-not="replace_button,replace_box">
+      <svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="3" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="8" cy="13" r="1.5"/></svg>
+    </button>
+    <div role="menu" id="card-menu" hidden>
+      <div role="menuitem" id="m-download">Download</div>
+      <div role="menuitem" id="m-delete">Delete</div>
+      <div role="menuitem" id="m-replace">Replace</div>
+    </div>
   </div>
-  <h2>Cover letter (optional)</h2>
-  <p>No cover letter added.</p>
+  <h3>Cover Letter</h3>
+  <label class="dashed">Upload your cover letter
+    <input type="file" id="cover-file" accept=".pdf,.doc,.docx" style="display:none">
+  </label>
   <button type="button" data-next="questions">Next</button>
 </template>
 
@@ -117,6 +147,12 @@
 
   function record(key, value) { window[key] = value; }
   function push(name) { record('__steps', (window.__steps || []).concat([name])); }
+  document.getElementById('reject-all').addEventListener('click', function () {
+    record('__cookies', 'rejected'); document.getElementById('cookies').remove();
+  });
+  document.getElementById('accept-all').addEventListener('click', function () {
+    record('__cookies', 'accepted'); document.getElementById('cookies').remove();
+  });
 
   var easy = document.getElementById('easy');
   if (easy) easy.addEventListener('click', function () {
@@ -148,7 +184,28 @@
     push(name);
     box.innerHTML = document.getElementById('step-' + name).innerHTML;
     Array.prototype.forEach.call(box.querySelectorAll('[data-only]'), function (el) {
-      if (el.getAttribute('data-only') !== variant) el.parentNode.removeChild(el);
+      if (el.getAttribute('data-only').split(',').indexOf(variant) < 0) el.parentNode.removeChild(el);
+    });
+    Array.prototype.forEach.call(box.querySelectorAll('[data-not]'), function (el) {
+      if (el.getAttribute('data-not').split(',').indexOf(variant) >= 0) el.parentNode.removeChild(el);
+    });
+    var cover = box.querySelector('#cover-file');
+    if (cover) cover.addEventListener('change', function () { record('__cover', cover.files[0].name); });
+    var kebab = box.querySelector('#kebab');
+    if (kebab) kebab.addEventListener('click', function () {
+      document.getElementById('card-menu').hidden = false;
+    });
+    var del = box.querySelector('#m-delete');
+    if (del) del.addEventListener('click', function () { record('__deleted', true); });
+    var mrep = box.querySelector('#m-replace');
+    if (mrep) mrep.addEventListener('click', function () {
+      document.getElementById('card-menu').hidden = true;
+      var input = document.createElement('input');
+      input.type = 'file';
+      input.style.display = 'none';
+      takeFile(input);
+      document.body.appendChild(input);
+      input.click();
     });
     var replace = box.querySelector('#replace');
     if (replace) replace.addEventListener('click', function () {
@@ -168,7 +225,11 @@
     var rv = box.querySelector('#review-resume');
     if (rv) rv.textContent = resume;
     var next = box.querySelector('[data-next]');
-    if (next) next.addEventListener('click', function () { advance(name, next.getAttribute('data-next')); });
+    if (next) next.addEventListener('click', function () {
+      // Dice spins on Next for a while before the following step shows.
+      next.innerHTML = '<span class="spinner" role="progressbar" aria-label="Loading">...</span>';
+      setTimeout(function () { advance(name, next.getAttribute('data-next')); }, 2500);
+    });
     var submit = box.querySelector('#submit');
     if (submit) submit.addEventListener('click', function () { record('__submitted', true); show('sent'); });
   }

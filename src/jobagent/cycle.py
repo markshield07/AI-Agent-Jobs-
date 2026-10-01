@@ -1,6 +1,7 @@
 """One full turn of the agent, for a schedule: find, tailor, apply, read replies.
 
-    discover -> tailor the queued jobs that have no resume yet
+    discover -> tailor the queued jobs that have no resume yet (a job
+                rejected before is retried only once its inputs change)
              -> apply to queued jobs with a resume (in the configured mode)
              -> read the mailbox, if one is set up
 
@@ -69,18 +70,10 @@ def _discover(conn: sqlite3.Connection, settings: Settings, limits: dict[str, in
 
 
 def _tailor(conn: sqlite3.Connection, settings: Settings, limits: dict[str, int]) -> StepResult:
-    from jobagent.apply.pipeline import in_apply_order
-    from jobagent.discovery import store as jobs
     from jobagent.llm.backend import LLMError
-    from jobagent.tailor import store as variants
-    from jobagent.tailor.pipeline import TailorError, tailor_job
+    from jobagent.tailor.pipeline import TailorError, jobs_to_tailor, tailor_job
 
-    queued = jobs.list_jobs(conn, status="queued", limit=500)
-    wanted = [
-        job["id"]
-        for job in in_apply_order(queued, settings.apply_site_list)
-        if variants.latest_ready_variant(conn, job["id"]) is None
-    ][: limits["tailor"]]
+    wanted, passed_over = jobs_to_tailor(conn, settings, limits["tailor"])
     ready = rejected = 0
     errors: list[str] = []
     for jid in wanted:
@@ -94,7 +87,9 @@ def _tailor(conn: sqlite3.Connection, settings: Settings, limits: dict[str, int]
         else:
             rejected += 1
     summary = f"{ready} ready, {rejected} rejected by the fact check, {len(errors)} failed"
-    detail = {"ready": ready, "rejected": rejected, "errors": errors}
+    if passed_over:
+        summary += f", {passed_over} rejected before and unchanged, not retried"
+    detail = {"ready": ready, "rejected": rejected, "errors": errors, "passed_over": passed_over}
     # One failed job is that job's problem; every one failing is the step's.
     return StepResult("tailor", not (errors and ready + rejected == 0), summary, detail)
 

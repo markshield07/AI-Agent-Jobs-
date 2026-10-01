@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS resume_variants (
     tokens_in        INTEGER NOT NULL DEFAULT 0,
     tokens_out       INTEGER NOT NULL DEFAULT 0,
     attempts         INTEGER NOT NULL DEFAULT 1,
+    inputs_sha       TEXT,                   -- what it was tailored from, hashed
     created_at       TEXT NOT NULL
 );
 

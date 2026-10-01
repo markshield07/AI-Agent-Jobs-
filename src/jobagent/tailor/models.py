@@ -118,6 +118,7 @@ class Variant:
     tokens_in: int = 0
     tokens_out: int = 0
     attempts: int = 1
+    inputs_sha: str | None = None  # `pipeline.inputs_fingerprint` when it was made
     id: int | None = None
     created_at: str | None = None
 

@@ -33,27 +33,89 @@ import re
 from pathlib import Path
 from typing import Any
 
-from jobagent.apply.browser.fill import fill_field, fill_plan
+from jobagent.apply.browser.fill import click_first_visible, fill_field, fill_plan, wait_settled
 from jobagent.apply.handlers.wizard import ROOT, WizardHandler
 from jobagent.apply.models import Fill, FormField
 
 # The resume card with no file box: its "Replace" (or "Upload resume")
 # button, which opens the file chooser or draws the box, stands in for one.
+# On the live wizard (Mark's PC, 2026-10-01) the card shows only a three-dot
+# menu at its right, and Replace is inside it: then the menu button is
+# marked "resume-menu", and Replace is pressed once the menu is open.
 UPLOAD_KEY = "dice-resume-upload"
 UPLOAD_ATTR = "data-jobagent-upload"
 _MARK_UPLOAD_JS = r"""([root, attr]) => {
   document.querySelectorAll('[' + attr + ']').forEach((el) => el.removeAttribute(attr));
   const scope = document.querySelector(root) || document;
-  if (scope.querySelector('input[type="file"]')) return false;
-  const button = Array.from(scope.querySelectorAll('button, [role="button"]')).find((b) => {
-    const r = b.getBoundingClientRect();
-    const text = (b.innerText || b.getAttribute('aria-label') || '').trim();
-    return r.width > 0 && /^(replace( resume)?|upload( a)? (new )?resume)$/i.test(text);
+  const shown = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+  const text = (el) => (el.innerText || el.getAttribute('aria-label') || '').trim();
+  const label = (el) => (el.getAttribute('aria-label') || el.title || '').trim();
+  const buttons = Array.from(scope.querySelectorAll('button, [role="button"]')).filter(shown);
+  const replace = buttons.find((b) =>
+    /^(replace( resume)?|upload( a)? (new )?resume)$/i.test(text(b)));
+  if (replace) { replace.setAttribute(attr, 'resume'); return true; }
+  // The three-dot menu on the card that names a resume file (not the cover
+  // letter's): dots for text, or labelled as a menu. Never a delete button.
+  const menu = buttons.find((b) => {
+    if (/delete|remove/i.test(label(b) + ' ' + (b.innerText || ''))) return false;
+    const dots = /^\s*[\u22ee\u22ef\u2026.]{1,3}\s*$/.test(b.innerText || '')
+      || /more|option|menu|action/i.test(label(b))
+      || /^(menu|true)$/.test(b.getAttribute('aria-haspopup') || '')
+      || (!(b.innerText || '').trim() && !!b.querySelector('svg'));
+    if (!dots) return false;
+    let card = b.parentElement;
+    for (let i = 0; i < 5 && card && card !== scope; i++, card = card.parentElement) {
+      const text = card.innerText || '';
+      if (/\.(pdf|docx?)\b/i.test(text)) return !/cover letter/i.test(text) || /resume/i.test(text);
+    }
+    return false;
   });
-  if (!button) return false;
-  button.setAttribute(attr, 'resume');
+  if (!menu) return false;
+  menu.setAttribute(attr, 'resume-menu');
   return true;
 }"""
+# A file box Replace drew: the first one not under the cover letter's heading.
+_MARK_RESUME_BOX_JS = r"""([root, attr]) => {
+  const scope = document.querySelector(root) || document;
+  for (const box of scope.querySelectorAll('input[type="file"]')) {
+    let near = box.parentElement, words = '';
+    for (let i = 0; i < 3 && near; i++, near = near.parentElement) {
+      words += ' ' + (near.innerText || '');
+    }
+    if (/cover letter/i.test(words) && !/resume/i.test(words)) continue;
+    box.setAttribute(attr, 'resume-box');
+    return true;
+  }
+  return false;
+}"""
+# Replace (or Upload) in the menu the three dots opened.
+REPLACE_IN_MENU = (
+    "[role='menu'] :text-matches('^\\s*replace', 'i')",
+    "[role='menuitem']:has-text('Replace')",
+    "[role='menuitem']:has-text('Upload')",
+    "li:has-text('Replace')",
+    "button:has-text('Replace')",
+    "a:has-text('Replace')",
+)
+# Dice's cookie banner covers the bottom of the page, Next included.
+COOKIE_REJECT = (
+    "#onetrust-reject-all-handler",
+    "button:has-text('Reject all')",
+    "button:has-text('Reject All')",
+)
+# Shown on or near Next while Dice loads the following step.
+BUSY = (
+    "[aria-busy='true']",
+    "[role='progressbar']",
+    "[class*='spinner' i]",
+    "[class*='animate-spin']",
+    "[data-testid*='spinner' i]",
+    "[data-testid*='loading' i]",
+)
+_COVER = re.compile(r"cover\s*letter", re.IGNORECASE)
 _ROOT_TEXT = "(sel) => (document.querySelector(sel) || document.body).innerText || ''"
 
 
@@ -100,10 +162,11 @@ class DiceHandler(WizardHandler):
     )
     # Assumption: field errors use role=alert or an "error" data-testid, as
     # the success card's data-testid suggests Dice names its parts.
+    # Not aria-live regions as such: Next.js's route announcer is one, always
+    # on the page, and it read as an error on the live wizard.
     step_error_selectors = (
         "[data-testid*='error' i]",
-        "[role='alert']",
-        "[aria-live='assertive']",
+        "[role='alert']:not(#__next-route-announcer__)",
     )
     success_signals = (
         "application submitted",
@@ -114,6 +177,8 @@ class DiceHandler(WizardHandler):
     success_url = re.compile(r"/success\b|/post-apply\b|/confirmation\b", re.IGNORECASE)
     max_steps = 8
     settle_ms = 6_000
+    # How long a step may take to follow Next (Dice spins on the button meanwhile).
+    step_wait_ms = 20_000
 
     def matches(self, url: str) -> bool:
         # Only postings and their wizard: a company profile is not an application.
@@ -128,12 +193,46 @@ class DiceHandler(WizardHandler):
             return f"https://www.dice.com/job-detail/{found.group(1)}"
         return url
 
+    def open_flow(self, page: Any) -> Any:
+        click_first_visible(page, COOKIE_REJECT)
+        return super().open_flow(page)
+
+    def step_marker(self, page: Any) -> str:
+        return self._signature(page, self._mark_root(page))
+
+    def wait_for_step(self, page: Any, before: str) -> None:
+        """After Next, wait while Dice shows it is loading (a spinner on Next)
+        and the step on screen is still the one left, up to `step_wait_ms`."""
+        waited = 0
+        while waited < self.step_wait_ms:
+            busy = self._busy(page)
+            if not busy and self._signature(page, self._mark_root(page)) != before:
+                wait_settled(page, 1_500)  # the new step's fields arrive just after
+                return
+            if not busy and waited >= 3_000:
+                return
+            page.wait_for_timeout(250)
+            waited += 250
+
+    def _busy(self, page: Any) -> bool:
+        return self._any_visible(page, BUSY)
+
+    def _step_errors(self, page: Any, root: str | None) -> list[str]:
+        """The step's error messages; an alert with no words is not one."""
+        return [e for e in super()._step_errors(page, root) if re.search(r"[A-Za-z]{3}", e)]
+
     def discover_step(self, page: Any, root: str | None) -> list[FormField]:
+        click_first_visible(page, COOKIE_REJECT)
+        return self._discover_step(page, root)
+
+    def _discover_step(self, page: Any, root: str | None) -> list[FormField]:
         """The step's fields; on the resume step with no file box, the resume
         card's "Replace" button as the resume's upload, so the tailored
         resume goes instead of the one on the profile."""
         fields = super().discover_step(page, root)
-        if any(f.kind == "file" for f in fields):
+        # A file box for the resume is used as it is; the cover letter's
+        # dashed box (left empty) is not the resume's.
+        if any(f.kind == "file" and not _COVER.search(f.label or "") for f in fields):
             return fields
         try:
             found = page.evaluate(_MARK_UPLOAD_JS, [root or "body", UPLOAD_ATTR])
@@ -147,7 +246,7 @@ class DiceHandler(WizardHandler):
                     kind="file",
                     required=True,
                     section="resume",
-                    selector=f'[{UPLOAD_ATTR}="resume"]',
+                    selector=f"[{UPLOAD_ATTR}^='resume']",
                     accept=".pdf,.doc,.docx",
                 )
             )
@@ -165,17 +264,38 @@ class DiceHandler(WizardHandler):
         if not fill.file_path:
             return "no resume file to upload"
         name = Path(fill.file_path).name
+        control = page.locator(field.selector).first
         try:
-            with page.expect_file_chooser(timeout=5000) as chooser:
-                page.locator(field.selector).first.click(timeout=5000)
-            chooser.value.set_files(fill.file_path)
+            in_menu = control.get_attribute(UPLOAD_ATTR, timeout=2000) == "resume-menu"
         except Exception:
-            # Replace may draw a file box instead of opening the chooser.
-            box = page.locator(f"{ROOT} input[type='file'], input[type='file']").first
+            in_menu = False
+        try:
+            if in_menu:
+                control.click(timeout=5000)
+                page.wait_for_timeout(500)
+                with page.expect_file_chooser(timeout=5000) as chooser:
+                    if not click_first_visible(page, REPLACE_IN_MENU):
+                        page.keyboard.press("Escape")
+                        raise LookupError("no Replace in the resume's menu")
+            else:
+                with page.expect_file_chooser(timeout=5000) as chooser:
+                    control.click(timeout=5000)
+            chooser.value.set_files(fill.file_path)
+        except LookupError as exc:
+            return str(exc)
+        except Exception:
+            # Replace may draw a file box instead of opening the chooser:
+            # the one for the resume, never the cover letter's.
             try:
-                box.set_input_files(fill.file_path, timeout=5000)
+                found = page.evaluate(_MARK_RESUME_BOX_JS, [ROOT, UPLOAD_ATTR])
+                if not found:
+                    raise LookupError("no resume file box")
+                page.locator(f"[{UPLOAD_ATTR}='resume-box']").first.set_input_files(
+                    fill.file_path, timeout=5000
+                )
             except Exception as exc:
-                return f"Replace gave neither a file chooser nor a file box: {type(exc).__name__}"
+                where = "the resume's menu" if in_menu else "Replace"
+                return f"{where} gave neither a file chooser nor a file box: {type(exc).__name__}"
         for _ in range(20):  # the new file's name shows on the card within seconds
             page.wait_for_timeout(500)
             if name.lower() in self._root_text(page).lower():

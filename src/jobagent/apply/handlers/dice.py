@@ -152,9 +152,16 @@ class DiceHandler(WizardHandler):
         "button:has-text('Login to apply')",
         "a:has-text('Login to apply')",
     )
-    # Assumption: the wizard draws its steps inside `main`; the site header
-    # with its search box is outside it.
-    root_selectors = ("[data-testid*='wizard' i]", "main form", "main")
+    # The live wizard (the PC's probe, 2026-10-01) has no `main` and no
+    # data-testid: its steps are a plain <form> a few divs under <body>. The
+    # site header's search form is never the root.
+    root_selectors = (
+        "[data-testid*='wizard' i]",
+        "main form",
+        "main",
+        "form:has(input[type='file'])",
+        "form:not([role='search']):not(:has(input[name='q'])):has(button)",
+    )
     # After the resume is replaced, step 1's button reads "Update" (the PC,
     # 2026-10-01); pressing it goes on as Next does.
     next_selectors = (
@@ -216,6 +223,35 @@ class DiceHandler(WizardHandler):
         # arrive late and covers Next, goes first.
         reject_cookies(page)
         return self._signature(page, self._mark_root(page))
+
+    def click_next(self, page: Any, root: str | None) -> bool:
+        """Next inside the step's form, else any visible Next on the page.
+        When none can be pressed, `next_problem` says why (covered, disabled,
+        missing), for the error the run stops with."""
+        if super().click_next(page, root):
+            return True
+        problem = "no visible Next or Update button"
+        for selector in self.next_selectors:
+            try:
+                found = page.locator(selector)
+                for index in range(min(found.count(), 5)):
+                    button = found.nth(index)
+                    if not button.is_visible():
+                        continue
+                    if not button.is_enabled():
+                        problem = f"{selector} is disabled"
+                        continue
+                    try:
+                        button.scroll_into_view_if_needed(timeout=3000)
+                        button.click(timeout=5000)
+                        return True
+                    except Exception as exc:
+                        problem = f"{selector} could not be pressed: {str(exc).splitlines()[0]}"
+            except Exception as exc:
+                problem = f"{selector}: {str(exc).splitlines()[0]}"
+        self.next_problem = problem[:300]
+        log.warning("dice: %s", self.next_problem)
+        return False
 
     def wait_for_step(self, page: Any, before: str) -> None:
         """After Next, wait while Dice shows it is loading (a spinner on Next)

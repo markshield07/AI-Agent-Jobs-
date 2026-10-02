@@ -259,10 +259,15 @@ def apply_to_job(
     browser: BrowserSession | None = None,
     handlers: Sequence[Handler] | None = None,
     allow_generic: bool = True,
+    picked: bool = False,
 ) -> dict[str, Any]:
     """Take one job through its form. Returns a record of what happened; raises
     ApplyError only when there is no such job, the mode is unknown, or the
-    browser cannot start."""
+    browser cannot start.
+
+    `picked` is a job the person chose by hand: the search rules (places,
+    JOBAGENT_APPLY_SITES) are for what the agent finds on its own, so they
+    neither skip it nor set it aside."""
     job = jobs.get_job(conn, job_id)
     if job is None:
         raise ApplyError(f"No job {job_id}.")
@@ -284,14 +289,14 @@ def apply_to_job(
         return _skipped(job_id, reason, twin["id"])
 
     url = job.get("apply_url") or job.get("url") or ""
-    sites = settings.apply_site_list
+    sites = () if picked else settings.apply_site_list
     if sites and not _allowed(url, sites) and _allowed(job.get("url") or "", sites):
         # Found on LinkedIn or Indeed with a link to the company's site: the
         # board's own posting decides whether it applies there after all.
         url = job.get("url") or ""
     # Queued before the rules knew better, or the criteria changed since:
     # today's hard rules (place, excluded words, companies, pay floor) again.
-    ruled_out = _ruled_out(job, load_criteria(conn))
+    ruled_out = None if picked else _ruled_out(job, load_criteria(conn))
     if ruled_out:
         return _wrong_place(conn, settings, job_id, url, ruled_out)
 
@@ -602,8 +607,13 @@ def run_apply(
     allow_generic: bool = True,
     delay: float | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    picked: bool = False,
 ) -> ApplyReport:
-    """Apply to `job_ids`, or to queued jobs with a ready resume, `limit` at most."""
+    """Apply to `job_ids`, or to queued jobs with a ready resume, `limit` at most.
+
+    `picked` marks `job_ids` as chosen by hand (see `apply_to_job`)."""
+    if picked and not job_ids:
+        raise ApplyError("picked needs the job ids that were picked")
     mode = mode or settings.apply_mode
     if mode not in MODES:
         raise ApplyError(f"unknown mode {mode!r}")
@@ -642,6 +652,7 @@ def run_apply(
             handlers=handlers,
             allow_generic=allow_generic,
             sleep=sleep,
+            picked=picked,
         )
 
 
@@ -727,6 +738,7 @@ def _run_apply_locked(
     handlers: Sequence[Handler] | None,
     allow_generic: bool,
     sleep: Callable[[float], None],
+    picked: bool = False,
 ) -> ApplyReport:
     completer = _resolve_completer(settings, completer, report.notes)
     handlers = list(handlers) if handlers is not None else default_handlers(generic=allow_generic)
@@ -753,6 +765,7 @@ def _run_apply_locked(
                     completer=completer,
                     browser=session,
                     handlers=handlers,
+                    picked=picked,
                 )
                 _tally(report, record)
                 tried = record["outcome"] != "skipped"

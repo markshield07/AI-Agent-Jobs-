@@ -1242,3 +1242,34 @@ def test_a_queued_job_whose_application_deadline_has_passed_is_skipped(conn, set
     assert record["outcome"] == "skipped" and record["wrong_place"] is True
     assert "application deadline (2020-09-27) has passed" in record["reason"]
     assert handler.calls == []
+
+
+def test_a_job_picked_by_hand_is_not_turned_away_by_the_search_rules(conn, settings, ready_job):
+    _wanted(conn, "Remote")
+    settings.apply_sites = "linkedin,dice"
+    jid = ready_job()
+    conn.execute(
+        "UPDATE jobs SET remote = 0, location = 'San Francisco, CA', description = ? WHERE id = ?",
+        ("Work onsite in San Francisco, 25% in office.", jid),
+    )
+    conn.commit()
+    handler = FakeHandler(_result("dry_run"))
+    record = apply_to_job(
+        conn,
+        jid,
+        settings,
+        handlers=[handler],
+        completer=NeverCalled(),
+        browser=FakeBrowser(),
+        picked=True,
+    )
+    assert record["outcome"] == "dry_run"
+    assert len(handler.calls) == 1, "the form is opened"
+    assert jobs.get_job(conn, jid)["status"] != "skipped"
+
+
+def test_picked_without_job_ids_is_refused(conn, settings):
+    from jobagent.apply.pipeline import ApplyError, run_apply
+
+    with pytest.raises(ApplyError):
+        run_apply(conn, settings, picked=True)

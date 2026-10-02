@@ -28,6 +28,7 @@ from pathlib import Path
 
 from jobagent.answers import list_answers
 from jobagent.config import Settings
+from jobagent.db.database import transaction
 from jobagent.discovery import store as jobs
 from jobagent.discovery.criteria import SearchCriteria, load_criteria
 from jobagent.llm.backend import Completer, resolve_backend
@@ -250,7 +251,17 @@ def tailor_job(
     assert variant.id is not None
     pdf_path = settings.variants_dir / f"{job_id}-{variant.id}.pdf"
     html = resume_html(variant.content, by_id, contact, target_title=job.get("title"))
-    write_pdf(html, Path(pdf_path))
+    try:
+        write_pdf(html, Path(pdf_path))
+    except Exception as exc:
+        # A "ready" resume with no PDF would be tailored never again and
+        # applied with never: set it aside so the next run tries again.
+        with transaction(conn):
+            conn.execute(
+                "UPDATE resume_variants SET status = 'rejected', inputs_sha = NULL WHERE id = ?",
+                (variant.id,),
+            )
+        raise TailorError(f"the PDF could not be written: {exc}") from exc
     store.set_pdf_path(conn, variant.id, str(pdf_path))
     variant.pdf_path = str(pdf_path)
     return variant

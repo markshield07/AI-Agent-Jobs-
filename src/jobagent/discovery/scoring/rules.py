@@ -132,11 +132,40 @@ def _disqualify(job: Mapping[str, Any], criteria: SearchCriteria, haystack: str)
             if wanted in company or company in wanted:
                 return f"blacklisted company: {entry}"
 
+    abroad = _abroad(_text(job, "location"))
+    if abroad and not any(
+        _contains(want, abroad) for want in criteria.normalised(criteria.locations)
+    ):
+        # A remote job in another country hires there: LinkedIn's Remote
+        # search, given no country, returned roles in England.
+        return f"outside the United States ({_text(job, 'location').strip()})"
+
     floor = criteria.salary_min
     salary_max = _int(job.get("salary_max"))
     if floor is not None and salary_max is not None and salary_max < floor:
         return f"salary {salary_max} below minimum {floor}"
     return None
+
+
+def _abroad(location: str) -> str | None:
+    """The country a location ends with ("Windsor, England, United Kingdom"),
+    when it is not the US; only the last part counts, so "Peru, IN" and
+    "New Mexico" are at home."""
+    last = location.rsplit(",", 1)[-1].strip()
+    return last.lower() if last and _ABROAD.fullmatch(last) else None
+
+
+# Countries and regions other than the US, as a location's last part.
+_ABROAD = re.compile(
+    r"\b(?:united\s+kingdom|england|scotland|wales|northern\s+ireland|ireland|canada|mexico"
+    r"|india|philippines|pakistan|germany|france|spain|portugal|italy|netherlands|belgium"
+    r"|poland|romania|ukraine|sweden|norway|denmark|finland|switzerland|austria|czechia"
+    r"|australia|new\s+zealand|singapore|japan|china|hong\s+kong|taiwan|korea|vietnam"
+    r"|malaysia|indonesia|brazil|argentina|colombia|chile|peru|costa\s+rica|israel"
+    r"|united\s+arab\s+emirates|uae|saudi\s+arabia|egypt|nigeria|kenya|south\s+africa"
+    r"|emea|apac|latam|europe)\b",
+    re.IGNORECASE,
+)
 
 
 def _not_remote(job: Mapping[str, Any], title: str, criteria: SearchCriteria) -> str | None:
@@ -154,11 +183,18 @@ def _not_remote(job: Mapping[str, Any], title: str, criteria: SearchCriteria) ->
     flag = job.get("remote")
     have = _text(job, "location").strip()
     said = office_in_description(_text(job, "description"))
-    if not (flag is False or flag == 0 or _in_office(title) or _in_office(have) or said):
-        return None
     lower = have.lower()
     have_words = set(_words(lower))
     places = [want for want in wanted if want != "remote"]
+    if not (flag is False or flag == 0 or _in_office(title) or _in_office(have) or said):
+        if flag is None and _somewhere_unwanted(job, lower, have_words, places):
+            # A place named, none of those wanted, and nothing saying it is
+            # remote: LinkedIn's Remote search returned on-site jobs across
+            # the country (Buffalo, Phoenix, Westport) for one in Menifee.
+            if not places:
+                return f"nothing says it is remote ({have}); only Remote is wanted"
+            return f"nothing says it is remote ({have}) and not in {', '.join(places)}"
+        return None
     if any(_location_matches(want, lower, have_words) for want in places):
         return None
     if _found_near_wanted(job, places):
@@ -169,6 +205,48 @@ def _not_remote(job: Mapping[str, Any], title: str, criteria: SearchCriteria) ->
     if not places:
         return f"not remote ({where or 'on-site'}); only Remote is wanted"
     return f"not remote ({where or 'on-site'}) and not in {', '.join(places)}"
+
+
+def _somewhere_unwanted(
+    job: Mapping[str, Any], lower: str, have_words: set[str], places: list[str]
+) -> bool:
+    """A specific place, not a wanted one, with no word of remote work in the
+    title, the location or the description."""
+    if not lower or lower.strip(" .") in BROAD_PLACES:
+        return False
+    if any(_location_matches(want, lower, have_words) for want in places):
+        return False
+    if _found_near_wanted(job, places):
+        return False
+    text = f"{_text(job, 'title')}\n{_text(job, 'description')}"
+    return not _ANY_REMOTE.search(text)
+
+
+# Any word of remote work in a posting; "not remote" is not one.
+_ANY_REMOTE = re.compile(
+    r"(?<!not )(?<!no )(?<!non-)\bremote(?:ly)?\b|\bwork(?:ing)? from home\b|\bwfh\b"
+    r"|\btelecommut|\btelework|\banywhere in the (?:us|u\.s\.|united states)\b",
+    re.I,
+)
+# Locations too broad to say where the job is.
+BROAD_PLACES = frozenset(
+    {
+        "united states",
+        "united states of america",
+        "usa",
+        "us",
+        "u.s",
+        "u.s.a",
+        "america",
+        "north america",
+        "anywhere",
+        "worldwide",
+        "global",
+        "multiple locations",
+        "various",
+        "remote",
+    }
+)
 
 
 def not_remote(job: Mapping[str, Any], criteria: SearchCriteria) -> str | None:

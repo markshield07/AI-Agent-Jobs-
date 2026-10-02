@@ -25,7 +25,7 @@ _JS = Path(__file__).parent / "js"
 
 def script(name: str) -> str:
     """One of the scripts under js/, run in the page with `page.evaluate`."""
-    return (_JS / name).read_text()
+    return (_JS / name).read_text(encoding="utf-8")
 
 
 INVENTORY_JS = script("inventory.js")

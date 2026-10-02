@@ -74,7 +74,7 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     """Apply the schema. Safe to call on every start — every statement is IF NOT EXISTS."""
-    conn.executescript(_SCHEMA_FILE.read_text())
+    conn.executescript(_SCHEMA_FILE.read_text(encoding="utf-8"))
     current = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()["v"]
     if current is None:
         conn.execute(

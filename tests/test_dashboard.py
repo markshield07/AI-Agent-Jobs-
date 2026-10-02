@@ -106,6 +106,7 @@ def test_stats_activity_and_config_routes(client, conn, settings):
     config = client.get("/api/config")
     assert config.json()["apply_mode"] == "dry_run"
     assert config.json()["easy_apply_daily_cap"] == 10
+    assert config.json()["dice_daily_cap"] == 3 and config.json()["apply_sites"] == []
     assert settings.anthropic_api_key not in config.text
 
 

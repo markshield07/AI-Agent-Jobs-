@@ -99,12 +99,19 @@ class JobSpySource:
                     if board_remote:
                         # The board's own remote filter chose it. jobspy's is_remote
                         # column only says "remote" appears somewhere in the text.
-                        job.remote = True
+                        # LinkedIn's filter lets on-site postings through (Buffalo,
+                        # Westport, Phoenix in the PC's data, 2026-10-01): there
+                        # the text has to say remote, else it is left open.
+                        job.remote = True if job.source != "linkedin" or job.remote else None
                     elif location and _state(job.location) in (None, usual):
                         # Within the board's radius of the place searched; a posting
                         # in another state than the rest is a board padding its list.
                         job.found_near = location
                     yield job
+
+
+# Where a Remote search looks on the boards that search the world (LinkedIn).
+REMOTE_COUNTRY = "United States"
 
 
 def _calls(
@@ -159,14 +166,19 @@ def _calls(
             calls.append((apply_here, False))
             calls.append(({**usual, "hours_old": None}, True) if remote else (usual, False))
         if "linkedin" in sites:
-            calls.append(({"site_name": ["linkedin"], **base, "easy_apply": True}, remote))
+            linkedin = {"site_name": ["linkedin"], **base, "easy_apply": True}
+            if remote:
+                # With no place LinkedIn's Remote search is worldwide.
+                linkedin["location"] = REMOTE_COUNTRY
+            calls.append((linkedin, remote))
         return calls
     if not (remote and "indeed" in sites):
-        return [({"site_name": sites, **base}, remote)]
+        everywhere = {**base, "location": REMOTE_COUNTRY} if remote else base
+        return [({"site_name": sites, **everywhere}, remote)]
     calls = [({"site_name": ["indeed"], **base, "hours_old": None}, True)]
     others = [site for site in sites if site != "indeed"]
     if others:
-        calls.append(({"site_name": others, **base}, True))
+        calls.append(({"site_name": others, **base, "location": REMOTE_COUNTRY}, True))
     return calls
 
 

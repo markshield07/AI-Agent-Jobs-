@@ -352,13 +352,22 @@ def _same_role(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
 
+def _same_company(value: str | None) -> str:
+    """The company for matching twins: "Acme, Inc." is Acme. A board's
+    placeholder for a company it did not name ("Unknown (Dice)") is no company."""
+    name = _same_role(value)
+    if name.startswith("unknown"):
+        return ""
+    return re.sub(r"(?:\s+(?:inc|llc|l l c|ltd|corp|corporation|co|company|plc|lp))+$", "", name)
+
+
 def twin_application(conn: sqlite3.Connection, job_id: str) -> dict[str, Any] | None:
     """An earlier application to the same role at the same company (the same
     title reposted under another posting id), sent or still under way; None
     when there is none. The earlier one is the one kept, so of two twins exactly
     one goes on."""
     job = conn.execute("SELECT title, company FROM jobs WHERE id = ?", (job_id,)).fetchone()
-    if job is None or not _same_role(job["title"]) or not _same_role(job["company"]):
+    if job is None or not _same_role(job["title"]) or not _same_company(job["company"]):
         return None
     own = conn.execute("SELECT id FROM applications WHERE job_id = ?", (job_id,)).fetchone()
     rows = conn.execute(
@@ -369,9 +378,9 @@ def twin_application(conn: sqlite3.Connection, job_id: str) -> dict[str, Any] | 
     for row in rows:
         if own is not None and row["id"] > own["id"]:
             break
-        if (_same_role(row["title"]), _same_role(row["company"])) != (
+        if (_same_role(row["title"]), _same_company(row["company"])) != (
             _same_role(job["title"]),
-            _same_role(job["company"]),
+            _same_company(job["company"]),
         ):
             continue
         app = get_application(conn, int(row["id"]))

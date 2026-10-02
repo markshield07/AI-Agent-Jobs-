@@ -127,6 +127,7 @@ def run_discovery(
                 client=client,
                 completer=completer if enrich_with_model else None,
                 criteria=criteria,
+                max_enrich=max_enrich,
             )
         _score(conn, criteria, report)
         if classify:

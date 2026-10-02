@@ -111,6 +111,11 @@ def upsert_jobs(
                 result.new_ids.append(jid)
             else:
                 result.duplicates += 1
+                # The posting may be on file under another id (its title or
+                # company read differently this time): update that row.
+                known = conn.execute("SELECT id FROM jobs WHERE url = ?", (url,)).fetchone()
+                if known is not None:
+                    jid = known["id"]
                 if job.found_near:
                     _vouch(conn, jid, job.found_near)
                 if job.applies_on_board:
@@ -132,7 +137,8 @@ def _vouch(conn: sqlite3.Connection, jid: str, near: str) -> None:
         """UPDATE jobs SET status = 'pending', scored_at = NULL, score = NULL,
                            score_reason = NULL
            WHERE id = ? AND status = 'skipped' AND classified_at IS NULL
-             AND score_reason LIKE 'not remote (%'""",
+             AND (score_reason LIKE 'not remote (%'
+                  OR score_reason LIKE 'nothing says it is remote (%')""",
         (jid,),
     )
 

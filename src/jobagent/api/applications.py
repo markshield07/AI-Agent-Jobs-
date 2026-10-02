@@ -23,6 +23,7 @@ from jobagent.apply.models import MODES
 from jobagent.apply.pipeline import (
     ApplyError,
     answer_questions,
+    apply_lock,
     approve_application,
     retry_application,
     run_apply,
@@ -79,6 +80,16 @@ def _browser_slot(request: Request):
         yield
     finally:
         lock.release()
+
+
+@contextmanager
+def _run_slot(request: Request, settings):
+    """The browser slot, plus the apply lock the hourly loop takes: an approve
+    or retry sent while that run is going would race it for the daily cap."""
+    with _browser_slot(request), apply_lock(settings) as holder:
+        if holder is not None:
+            raise HTTPException(409, f"An apply run is under way ({holder}).")
+        yield
 
 
 # ------------------------------------------------------------------ runs --
@@ -195,7 +206,7 @@ def post_answers(
     remaining = answer_questions(conn, application_id, body.answers)
     result = None
     if body.retry:
-        with _browser_slot(request):
+        with _run_slot(request, settings):
             try:
                 result = retry_application(conn, application_id, settings)
             except ApplyError as exc:
@@ -213,7 +224,7 @@ def post_approve(
 ) -> dict[str, Any]:
     """Submit an application that a dry run or review left at the button."""
     _get(db, application_id)
-    with _browser_slot(request):
+    with _run_slot(request, settings):
         try:
             result = approve_application(db.connection(), application_id, settings)
         except ApplyError as exc:

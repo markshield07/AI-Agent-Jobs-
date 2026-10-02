@@ -74,7 +74,6 @@
         <div class="legend">
           <span><i class="sw applied"></i>Applied</span>
           <span><i class="sw responses"></i>Heard back</span>
-          <span><i class="sw discovered"></i>Found</span>
         </div>
         <div id="per-day" class="chart"></div>
         <p class="sub" id="window-note"></p>
@@ -185,14 +184,14 @@
     <div class="grid two">
       <article class="card">
         <header class="card-head"><h2>Sign-ins</h2></header>
-        <p class="sub">Sign in on your own machine with the command shown. Your password is never stored. Each company on Workday has its own account, and Workday ends a sign-in after a while (about an hour on CrowdStrike's).</p>
+        <p class="sub">Sign in on your own machine with the command shown. Your password is never stored. A site that ends a sign-in shows here as expired; sign in again with the same command.</p>
         <div id="sessions"></div>
       </article>
 
       <article class="card">
         <header class="card-head"><h2>How it runs</h2></header>
         <dl class="facts-list" id="config"></dl>
-        <p class="sub">Change these in <code>.env</code> and restart. Nothing is submitted unless the mode is <b>auto</b>.</p>
+        <p class="sub">Change these where the agent reads its settings (<code>.env</code>, or the scheduled task's own settings) and restart. Nothing is submitted unless the mode is <b>auto</b>.</p>
       </article>
 
       <article class="card wide">

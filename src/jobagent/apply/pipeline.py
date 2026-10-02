@@ -24,7 +24,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from jobagent.answers import list_answers, set_answer
 from jobagent.apply import sessions, store
@@ -610,7 +610,11 @@ def run_apply(
     submit = mode == "auto"
     delay = settings.apply_delay_seconds if delay is None else delay
     report = ApplyReport(run_id=None, mode=mode)
-    candidates = _candidates(conn, job_ids, limit, settings.apply_site_list)
+    # Queued jobs come with spares: a job skipped on the spot (its site's cap
+    # reached, its form somewhere else) must not take the place of one that
+    # can go, or a capped LinkedIn would keep Dice waiting all day.
+    pool = limit if job_ids else max(limit * 5, 50)
+    candidates = _candidates(conn, job_ids, pool, settings.apply_site_list)
     report.considered = len(candidates)
     if not candidates:
         report.notes.append("nothing to apply to: no queued job has a ready resume")
@@ -629,6 +633,7 @@ def run_apply(
             settings,
             report,
             candidates,
+            limit=None if job_ids else limit,
             mode=mode,
             submit=submit,
             delay=delay,
@@ -647,20 +652,17 @@ def apply_lock(settings: Settings) -> Iterator[str | None]:
     browser profile and count against the same daily cap. Yields None when
     this run holds the lock, else who holds it. The lock goes with the
     process, so a run that dies leaves nothing to clean up."""
-    try:
-        import fcntl
-    except ImportError:  # not on macOS or Linux: no lock to take
-        yield None
-        return
     path = Path(settings.data_dir) / "apply.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
-    handle = open(path, "a+")  # noqa: SIM115 - held for the whole run
+    handle = open(path, "a+", encoding="utf-8")  # noqa: SIM115 - held for the whole run
     try:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            handle.seek(0)
-            yield handle.read().strip() or "another process"
+        if not _try_lock(handle):
+            try:
+                handle.seek(0)
+                holder = handle.read().strip()
+            except OSError:  # Windows: the holder's lock covers the text too
+                holder = ""
+            yield holder or "another process"
             return
         handle.seek(0)
         handle.truncate()
@@ -669,9 +671,45 @@ def apply_lock(settings: Settings) -> Iterator[str | None]:
         try:
             yield None
         finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+            _unlock(handle)
     finally:
         handle.close()
+
+
+def _try_lock(handle: IO[str]) -> bool:
+    """Take the lock without waiting: `flock` on macOS and Linux, a lock on the
+    file's first byte on Windows. Either goes with the process if it dies."""
+    try:
+        import fcntl
+    except ImportError:
+        import msvcrt
+
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _unlock(handle: IO[str]) -> None:
+    try:
+        import fcntl
+    except ImportError:
+        import msvcrt
+
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass  # closing the file lets it go as well
+        return
+    fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def _run_apply_locked(
@@ -680,6 +718,7 @@ def _run_apply_locked(
     report: ApplyReport,
     candidates: list[str],
     *,
+    limit: int | None = None,
     mode: str,
     submit: bool,
     delay: float,
@@ -696,6 +735,9 @@ def _run_apply_locked(
         session_cm = nullcontext(browser) if browser is not None else open_browser(settings)
         with session_cm as session:
             for index, job_id in enumerate(candidates):
+                if limit is not None and report.attempted >= limit:
+                    report.considered = index
+                    break
                 if submit and store.submitted_last_day(conn) >= settings.daily_apply_cap:
                     report.cap_hit = True
                     report.notes.append(
@@ -713,7 +755,8 @@ def _run_apply_locked(
                     handlers=handlers,
                 )
                 _tally(report, record)
-                if submit and delay > 0 and index < len(candidates) - 1:
+                tried = record["outcome"] != "skipped"
+                if submit and tried and delay > 0 and index < len(candidates) - 1:
                     sleep(delay * random.uniform(0.7, 1.3))
     except BrowserUnavailable as exc:
         report.notes.append(str(exc))

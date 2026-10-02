@@ -12,6 +12,8 @@ from jobagent.discovery.scoring.rules import (
     score_rules,
 )
 
+OPEN = "Open to remote candidates."
+
 
 def crit(**overrides: Any) -> SearchCriteria:
     """Criteria with nothing constrained unless a test says so."""
@@ -172,7 +174,7 @@ def test_location_remote_mention_in_location_or_title():
     criteria = crit(locations=["Austin, TX"])
     assert points("location", criteria, location="Remote - US") == 20
     assert points("location", criteria, title="Engineer (Remote)", location="Boston, MA") == 20
-    assert points("location", criteria, location="Remotely nowhere") == 0
+    assert points("location", criteria, location="Remotely nowhere", description=OPEN) == 0
 
 
 def test_location_remote_job_when_remote_not_ok():
@@ -195,11 +197,11 @@ def test_location_city_alone_matches_for_city_state_form():
     criteria = crit(locations=["Austin, TX"])
     assert points("location", criteria, location="Austin, Texas") == 20
     assert points("location", criteria, location="Austin") == 20
-    assert points("location", criteria, location="Dallas, TX") == 0
+    assert points("location", criteria, location="Dallas, TX", description=OPEN) == 0
 
 
 def test_location_short_code_does_not_match_inside_a_word():
-    assert points("location", crit(locations=["US"]), location="Austin, TX") == 0
+    assert points("location", crit(locations=["US"]), location="Austin, TX", description=OPEN) == 0
     assert points("location", crit(remote_ok=False, locations=["US"]), location="Remote, US") == 20
 
 
@@ -207,12 +209,12 @@ def test_location_missing_scores_eight_and_mismatch_zero():
     criteria = crit(locations=["Austin, TX"])
     assert points("location", criteria, location=None) == 8
     assert points("location", criteria, location="") == 8
-    assert points("location", criteria, location="Berlin, Germany") == 0
+    assert points("location", criteria, location="Denver, CO", description=OPEN) == 0
 
 
 def test_location_remote_criterion_only_matches_remote_jobs():
     criteria = crit(locations=["Remote"])
-    assert points("location", criteria, location="Austin, TX") == 0
+    assert points("location", criteria, location="Austin, TX", description=OPEN) == 0
     assert points("location", criteria, location=None) == 8
     assert points("location", criteria, location="Remote") == 20
     assert points("location", criteria, remote=True, location="Austin, TX") == 20
@@ -397,7 +399,18 @@ def test_cities_plus_remote_drop_on_site_postings_elsewhere():
     assert "not in menifee, temecula, winchester" in reason
     assert not rejected(local, remote=0, location="Temecula, CA, US")
     assert not rejected(local, remote=True, location="Lonoke, AR, US")
-    assert not rejected(local, location="San Diego, CA, US")
+    assert rejected(local, location="San Diego, CA, US"), "nothing says it is remote"
+    assert not rejected(local, location="San Diego, CA, US", description="A remote role.")
+    assert not rejected(local, location="United States")
+    assert "nothing says it is remote" in score(local, location="Buffalo, NY").reason
+
+
+def test_a_job_in_another_country_is_dropped_even_when_remote():
+    local = crit(locations=["Remote", "winchester"])
+    for where in ("Southampton, England, United Kingdom", "Toronto, ON, Canada", "EMEA"):
+        assert "outside the United States" in score(local, remote=True, location=where).reason
+    assert not rejected(local, remote=True, location="New Mexico")
+    assert not rejected(local, remote=True, location="Peru, IN")
 
 
 @pytest.mark.parametrize(

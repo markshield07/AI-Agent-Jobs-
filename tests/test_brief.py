@@ -196,3 +196,21 @@ def test_the_overview_shows_the_latest_sent_and_the_queue(client, conn):
     detail = client.get(f"/api/applications/{out['recent'][0]['id']}").json()
     assert detail["job"]["description"] == PLAIN
     assert detail["job"]["highlights"]["needs"] == ["10 years in networking"]
+
+
+def test_the_queue_ahead_is_only_the_sites_applied_on(settings, conn):
+    linkedin = RawJob(
+        url="https://www.linkedin.com/jobs/view/1", title="Job L", company="Co L", source="linkedin"
+    )
+    indeed = RawJob(
+        url="https://www.indeed.com/viewjob?jk=1", title="Job I", company="Co I", source="indeed"
+    )
+    on_board, off = jobs.upsert_jobs(conn, [linkedin, indeed]).new_ids
+    for jid in (on_board, off):
+        jobs.set_status(conn, jid, "queued")
+    conn.commit()
+
+    linkedin_only = settings.model_copy(update={"apply_sites": "linkedin"})
+    with TestClient(create_app(linkedin_only)) as client:
+        out = client.get("/api/overview").json()
+    assert [j["id"] for j in out["up_next"]] == [on_board] and out["queued"] == 1

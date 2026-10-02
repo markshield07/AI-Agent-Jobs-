@@ -21,7 +21,7 @@
   };
   const SITE_LABEL = {
     linkedin: 'LinkedIn', indeed: 'Indeed', greenhouse: 'Greenhouse', lever: 'Lever',
-    ashby: 'Ashby', workday: 'Workday', generic: 'Company site', other: 'Other',
+    ashby: 'Ashby', workday: 'Workday', dice: 'Dice', generic: 'Company site', other: 'Other',
   };
 
   const state = { days: 30, appStatus: '', jobStatus: 'queued', selectedApp: null, config: null };
@@ -281,7 +281,7 @@
     ]);
     renderHello(stats, cards);
     renderAttention(stats.attention, signIns);
-    renderKpis(stats);
+    renderKpis(stats, cards.queued);
     renderRecent(cards.recent);
     renderUpNext(cards.up_next, cards.queued);
     renderPerDay(stats.per_day);
@@ -327,7 +327,7 @@
     for (const [n, text, href] of items) box.append(el('a', { href }, el('b', {}, n), text));
   }
 
-  function renderKpis(stats) {
+  function renderKpis(stats, queued) {
     const t = stats.totals;
     const cards = [
       ['Applied', t.applied, `${stats.window_totals.applied} in the last ${stats.window.days} days`, 'lead'],
@@ -335,7 +335,7 @@
       ['Interviews', t.interviews, `${pct(t.interview_rate)} of applications`],
       ['Offers', t.offers, `${t.rejections} rejections`],
       ['Days to a reply', t.median_days_to_response === null ? '–' : t.median_days_to_response, 'median'],
-      ['Jobs found', t.discovered, `${t.queued} queued to apply`],
+      ['Jobs found', t.discovered, `${queued} queued to apply`],
     ];
     document.getElementById('kpis').replaceChildren(
       ...cards.map(([label, value, note, tone]) =>
@@ -372,11 +372,13 @@
     const box = document.getElementById('per-day');
     const W = Math.max(300, Math.round(box.clientWidth || 760));
     const H = W < 500 ? 180 : 220, left = 30, right = 8, top = 10, bottom = 24;
-    const max = Math.max(1, ...series.map((d) => Math.max(d.applied, d.responses, d.discovered)));
+    // Found runs to hundreds a day and would flatten the applied bars, so it is
+    // in the tooltip and the note under the chart, not drawn.
+    const max = Math.max(1, ...series.map((d) => Math.max(d.applied, d.responses)));
     const niceMax = niceCeil(max);
     const plotW = W - left - right, plotH = H - top - bottom;
     const slot = plotW / series.length;
-    const barW = Math.max(1.5, Math.min(14, slot * 0.28));
+    const barW = Math.max(2, Math.min(18, slot * 0.36));
     const y = (v) => top + plotH - (v / niceMax) * plotH;
     const root = svg('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Applications per day' });
 
@@ -390,9 +392,8 @@
       const x = left + i * slot + slot / 2;
       const g = svg('g', {});
       g.append(svg('title', {}, `${shortDate(d.date)}: ${d.applied} applied, ${d.responses} heard back, ${d.discovered} found`));
-      g.append(svg('rect', { class: 'bar-discovered', x: x - barW * 1.5, width: barW, y: y(d.discovered), height: Math.max(0, top + plotH - y(d.discovered)), rx: 2 }));
-      g.append(svg('rect', { class: 'bar-applied', x: x - barW / 2, width: barW, y: y(d.applied), height: Math.max(0, top + plotH - y(d.applied)), rx: 2 }));
-      g.append(svg('rect', { class: 'bar-responses', x: x + barW / 2, width: barW, y: y(d.responses), height: Math.max(0, top + plotH - y(d.responses)), rx: 2 }));
+      g.append(svg('rect', { class: 'bar-applied', x: x - barW, width: barW, y: y(d.applied), height: Math.max(0, top + plotH - y(d.applied)), rx: 2 }));
+      g.append(svg('rect', { class: 'bar-responses', x, width: barW, y: y(d.responses), height: Math.max(0, top + plotH - y(d.responses)), rx: 2 }));
       g.append(svg('rect', { x: left + i * slot, width: slot, y: top, height: plotH, fill: 'transparent' }));
       root.append(g);
       const last = i === series.length - 1;
@@ -795,6 +796,7 @@
     const [sessions, criteria, config] = await Promise.all([
       api('/api/sessions'), api('/api/search-criteria'), loadConfig(),
     ]);
+    const sites = config.apply_sites || [];
     document.getElementById('sessions').replaceChildren(...sessions.map((s) => {
       if (s.site === 'workday') return workdaySession(s);
       const status = s.signed_in
@@ -810,7 +812,8 @@
 
     document.getElementById('config').replaceChildren(
       el('dt', {}, 'Mode'), el('dd', {}, { dry_run: 'Dry run: fill forms, send nothing', review: 'Review: fill, then wait for your approval', auto: 'Auto: submit' }[config.apply_mode] || config.apply_mode),
-      el('dt', {}, 'Daily cap'), el('dd', {}, `${config.daily_apply_cap} applications, ${config.easy_apply_daily_cap} each on LinkedIn and Indeed`),
+      el('dt', {}, 'Applies on'), el('dd', {}, sites.length ? sites.map(siteName).join(', ') : 'Every site'),
+      el('dt', {}, 'Daily cap'), el('dd', {}, capLine(config, sites)),
       el('dt', {}, 'Pause between'), el('dd', {}, `about ${Math.round(config.apply_delay_seconds)} seconds`),
       el('dt', {}, 'Model'), el('dd', {}, { 'claude-code': 'Your Claude subscription (claude -p)', api: 'Claude API key', auto: 'Automatic' }[config.llm_backend] || config.llm_backend),
       el('dt', {}, 'Mailbox'), el('dd', {}, config.inbox_configured ? 'Connected (read-only)' : 'Not set up; replies are not tracked'));
@@ -823,8 +826,17 @@
     document.getElementById('criteria-sites').replaceChildren(el('span', { class: 'inline' }, 'Search on:'),
       ...JOBSPY_SITES.map((site) => el('label', { class: 'inline check' },
         el('input', { type: 'checkbox', name: 'site', value: site, checked: (criteria.jobspy_sites || []).includes(site) }),
-        siteName(site) === site ? site.replace('_', ' ') : siteName(site))));
+        siteName(site) === site ? site.replace('_', ' ') : siteName(site))),
+      el('span', { class: 'sub' }, sites.includes('dice') ? 'Dice is searched too, since it is applied on.' : ''));
   };
+
+  // The caps in force: the overall one, then each board's own, for the sites applied on.
+  function capLine(config, sites) {
+    const own = { linkedin: config.easy_apply_daily_cap, indeed: config.easy_apply_daily_cap, dice: config.dice_daily_cap };
+    const boards = Object.keys(own).filter((s) => !sites.length || sites.includes(s));
+    const parts = boards.map((s) => `${siteName(s)} ${own[s]}`);
+    return `${config.daily_apply_cap} in all${parts.length ? `; ${parts.join(', ')}` : ''} (in any 24 hours)`;
+  }
 
   async function loadConfig() {
     state.config = await api('/api/config');

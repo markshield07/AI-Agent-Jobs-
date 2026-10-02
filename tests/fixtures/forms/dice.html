@@ -26,6 +26,8 @@
     replace_button  the card shows a plain Replace button, as the Dice bots described it
     replace_box  that Replace button draws a file box instead of opening the file chooser
     invalid      the questions step rejects its answers with an error
+    slow_submit  Submit spins for 5 seconds before the confirmation shows
+    no_card      Submit spins and never shows a confirmation, but the posting then reads Applied
     relogin      after the questions, Dice asks for the password again ("Log in to continue")
     covered      after Replace, a see-through layer over the wizard takes every click
     cookie_frame the cookie banner is drawn in a frame, a moment after the wizard opens
@@ -63,7 +65,7 @@
 <div id="posting">
   <h1 data-testid="job-detail-header">Senior Network Engineer</h1>
   <div>Acme Networks · Remote · Full-time</div>
-  <div data-variant=",needs_input,signed_out,replace_button,replace_box,invalid,cookie_frame,covered,relogin">
+  <div data-variant=",needs_input,signed_out,replace_button,replace_box,invalid,cookie_frame,covered,relogin,slow_submit,no_card">
     <button data-testid="apply-button" id="easy">Easy Apply</button>
   </div>
   <div data-variant="external">
@@ -156,9 +158,12 @@
   var params = new URLSearchParams(location.search);
   var variant = params.get('variant') || '';
   var flow = params.get('flow') === '1';
+  var sent = false;
+  try { sent = sessionStorage.getItem('dice_applied') === '1'; } catch (e) {}
+  var shown = !flow && sent ? 'applied' : variant;
   Array.prototype.forEach.call(document.querySelectorAll('[data-variant]'), function (el) {
     var wanted = el.getAttribute('data-variant').split(',');
-    if (wanted.indexOf(variant) < 0) el.parentNode.removeChild(el);
+    if (wanted.indexOf(shown) < 0) el.parentNode.removeChild(el);
   });
 
   function record(key, value) { window[key] = value; }
@@ -285,7 +290,15 @@
     var pw = box.querySelector('#password');
     if (pw) pw.addEventListener('input', function () { record('__password', pw.value); });
     var submit = box.querySelector('#submit');
-    if (submit) submit.addEventListener('click', function () { record('__submitted', true); show('sent'); });
+    if (submit) submit.addEventListener('click', function () {
+      record('__submitted', true);
+      try { sessionStorage.setItem('dice_applied', '1'); } catch (e) {}
+      if (variant !== 'slow_submit' && variant !== 'no_card') { show('sent'); return; }
+      // Dice spins on Submit; on the live run (2026-10-02) the confirmation
+      // never showed before the run judged, yet the application went in.
+      submit.innerHTML = '<span class="spinner" role="progressbar" aria-label="Loading">...</span>';
+      if (variant === 'slow_submit') setTimeout(function () { show('sent'); }, 5000);
+    });
   }
 
   function advance(from, to) {

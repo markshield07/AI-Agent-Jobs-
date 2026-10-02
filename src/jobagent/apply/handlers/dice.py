@@ -113,6 +113,15 @@ COOKIE_REJECT = (
     "button:has-text('Reject All')",
 )
 # Shown on or near Next while Dice loads the following step.
+# The posting once an application went in: its apply button reads
+# "Applied" (the PC, 2026-10-02) and Easy Apply is gone.
+APPLIED = (
+    "[data-testid='apply-button']:text-is('Applied')",
+    "button:text-is('Applied')",
+    "apply-button-wc :text-is('Applied')",
+)
+SUBMIT_WAIT_MS = 20_000
+
 BUSY = (
     "[aria-busy='true']",
     "[role='progressbar']",
@@ -219,6 +228,7 @@ class DiceHandler(WizardHandler):
 
     def apply(self, page: Any, packet: Any, answerer: Any, **kwargs: Any) -> Any:
         url = self.application_url(packet.job.get("apply_url") or packet.job.get("url") or "")
+        self._posting = url
         if url.startswith("https://www.dice.com/"):
             # In the browser the steps run in, right before the posting opens.
             if not refresh_sign_in(page):
@@ -232,6 +242,34 @@ class DiceHandler(WizardHandler):
                 )
             log.info("dice: signed in, %s", token_note(page))
         return super().apply(page, packet, answerer, **kwargs)
+
+    def after_send(self, page: Any) -> None:
+        """Dice spins on Submit for a while (the live run, 2026-10-02): wait
+        it out, up to SUBMIT_WAIT_MS, before reading the page."""
+        waited = 0
+        while waited < SUBMIT_WAIT_MS and self._busy(page):
+            page.wait_for_timeout(500)
+            waited += 500
+        if waited:
+            wait_settled(page, 1_500)
+
+    def confirm_elsewhere(self, page: Any) -> str | None:
+        """Open the posting again: "Applied" there, with Easy Apply gone,
+        means the application went in."""
+        url = getattr(self, "_posting", "")
+        if not url:
+            return None
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=self.settle_ms * 3)
+            wait_settled(page, self.settle_ms)
+        except Exception as exc:
+            log.info("dice: could not reopen the posting to check it: %s", exc)
+            return None
+        if self._any_visible(page, APPLIED) and not self._any_visible(
+            page, self.easy_apply_selectors
+        ):
+            return "Dice's job page now shows Applied"
+        return None
 
     def sign_in_asked(self, page: Any) -> str | None:
         try:

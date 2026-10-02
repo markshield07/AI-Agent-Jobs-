@@ -152,6 +152,15 @@ class WizardHandler(BaseHandler):
         or None. The default finds nothing."""
         return None
 
+    def after_send(self, page: Any) -> None:
+        """After Submit, before the page is read: wait out what the site
+        still shows as busy. The default waits for nothing more."""
+
+    def confirm_elsewhere(self, page: Any) -> str | None:
+        """When the page after Submit says nothing, another place that shows
+        the application went in (the posting reading "Applied"), or None."""
+        return None
+
     def click_next(self, page: Any, root: str | None) -> bool:
         """Press the step's Next. A site may set `next_problem` to say why it
         could not, for the error that stops the run."""
@@ -363,6 +372,7 @@ class WizardHandler(BaseHandler):
         if not click_first_visible(page, self._scoped(root, self.submit_selectors)):
             return self._stop(page, "failed", screenshot_path, error="no submit button", **common)
         wait_settled(page, self.submit_settle_ms)
+        self.after_send(page)
         confirmation = self._confirmation(page, before_url, before_text)
         if confirmation:
             return self._result(
@@ -385,6 +395,11 @@ class WizardHandler(BaseHandler):
                 screenshot_path,
                 error=f"{captcha} after the submit button; solve it in a visible browser",
                 **common,
+            )
+        elsewhere = self.confirm_elsewhere(page)
+        if elsewhere:
+            return self._result(
+                page, "submitted", screenshot_path, confirmation=elsewhere, **common
             )
         return self._result(
             page,

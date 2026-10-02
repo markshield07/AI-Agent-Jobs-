@@ -546,6 +546,12 @@
         el('button', { type: 'button', class: 'primary', onclick: (e) => approve(app.id, e.currentTarget) }, 'Submit this application')));
     }
 
+    if (app.status === 'unconfirmed' && !app.submitted_at) {
+      parts.push(el('section', {}, el('h4', {}, 'Did it go through?'),
+        el('p', { class: 'sub' }, 'Submit was pressed but the site never said so. If the job page or your applied list shows it, mark it applied.'),
+        el('button', { type: 'button', class: 'primary', onclick: (e) => logStatus(app.id, 'applied', e.currentTarget) }, 'Mark as applied')));
+    }
+
     if (app.submitted_at) {
       const select = el('select', {}, ['screening', 'interviewing', 'offer', 'rejected', 'withdrawn'].map((s) => el('option', { value: s }, STATUS_LABEL[s])));
       parts.push(el('section', {}, el('h4', {}, 'Record what happened'),

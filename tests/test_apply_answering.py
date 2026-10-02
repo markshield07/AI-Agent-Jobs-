@@ -644,6 +644,40 @@ def test_legal_attestations_are_never_drafted(packet, label):
     assert plan.needed[0].answer_key.startswith("q:")
 
 
+# Greenhouse's Anthropic form, word for word: neither label says "agree", but
+# every choice does, and the model picked them for the person.
+_ARBITRATION = [
+    (
+        "Please read the arbitration agreement below",
+        ["I will read the arbitration agreement below."],
+    ),
+    (
+        "Agreement to Arbitrate",
+        ["I understand and agree to the terms of the Agreement to Arbitrate set forth above."],
+    ),
+    ("Do you accept these terms?", ["I accept", "I do not accept"]),
+    ("Class Action Waiver", ["Yes", "No"]),
+]
+
+
+@pytest.mark.parametrize(("label", "options"), _ARBITRATION)
+def test_arbitration_and_agreeing_choices_are_never_drafted(packet, label, options):
+    field = FormField(key="k", label=label, kind="select", required=True, options=options)
+    calls = []
+    plan = answering.make_answerer(
+        packet, completer=lambda *a, **k: calls.append(a), allow_model=True
+    )([field])
+    assert calls == [], "never sent to the model"
+    assert [n.reason for n in plan.needed] == [answering.NEVER_GUESSED]
+
+
+def test_an_arbitration_answer_on_file_is_used(packet):
+    label, options = _ARBITRATION[1]
+    packet.answers[answering.question_key(label)] = options[0]
+    field = FormField(key="k", label=label, kind="select", required=True, options=options)
+    assert fills(plan_fills([field], packet)) == {"k": options[0]}
+
+
 def test_an_attestation_answered_once_is_kept(packet):
     label = "Conflict of Interest If hired, do you expect outside employment?"
     packet.answers[answering.question_key(label)] = "No"

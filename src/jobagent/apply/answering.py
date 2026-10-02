@@ -235,9 +235,29 @@ _MARKETING = re.compile(
 _ATTESTATION = re.compile(
     r"\bconflicts?\s+of\s+interest\b|\boutside\s+(?:employment|business|activit)"
     r"|\bnon[-\s]?(?:compete|solicit)|\bconvicted\b|\bfelony\b|\bcriminal\b"
-    r"|\backnowledg|\battest\b|\bcertify\b",
+    r"|\backnowledg|\battest\b|\bcertify\b"
+    # Signing away rights: an arbitration agreement, a class or jury waiver.
+    r"|\barbitrat|\bclass[-\s]+action\b|\bjury\s+trial\b|\bwaive(?:r|s)?\b",
     re.IGNORECASE,
 )
+# A choice that agrees to something on the person's behalf ("I understand and
+# agree to the terms of the Agreement to Arbitrate"): whatever the label says,
+# the question is a legal one.
+_AGREEING_OPTION = re.compile(
+    r"\bi\s+(?:understand\s+and\s+)?(?:agree|accept|consent)\b|\bagree\s+to\s+the\b",
+    re.IGNORECASE,
+)
+
+
+def _is_attestation(field: FormField) -> bool:
+    """A legal question only the person answers: by its label, or by a choice
+    that would agree to terms for them."""
+    if _ATTESTATION.search(field.label or ""):
+        return True
+    options = field.options or ()
+    return any(_ATTESTATION.search(o) or _AGREEING_OPTION.search(o) for o in options)
+
+
 # "Why are you interested in working for us?": what the cover letter says,
 # in words already checked against the facts.
 _WHY_US = re.compile(
@@ -697,11 +717,7 @@ class _Planner:
         if key in ("contact_time", "contact_method"):
             self._plan_reach(field, key)
             return
-        if (
-            key in SENSITIVE
-            or _ATTESTATION.search(field.label)
-            or _ACCOMMODATION.search(field.label)
-        ):
+        if key in SENSITIVE or _is_attestation(field) or _ACCOMMODATION.search(field.label):
             self._need(field, NEVER_GUESSED)
             return
         if key in ("heard_about", "heard_about_source"):

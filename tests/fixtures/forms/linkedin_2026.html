@@ -22,6 +22,9 @@
     urnprefill   the city box opens already holding LinkedIn's id, urn:li:geo:103033862,
                  as it does when an earlier application left that id saved (Robert Half,
                  2026-10-01)
+    nolist       typing in the city box brings up no list of places; the typed text stays
+                 in the box and LinkedIn keeps the saved place, urn:li:geo:103033862,
+                 underneath, which Review shows
     radios       Luxoft's two Yes/No questions as the Mac captured them on 2026-09-28
                  (capture-linkedin-radios-luxoft.html): the question is a <p> before a
                  <fieldset role="radiogroup">, each choice a <div role="radio"> whose
@@ -132,7 +135,7 @@
     } },
     { name: 'review', title: 'Review your application', body: function () {
       var city = (kept.contact && kept.contact.city) || '';
-      if (variant === 'urnreview') city = 'urn:li:geo:103033862';
+      if (variant === 'urnreview' || (variant === 'nolist' && !window.__picked)) city = 'urn:li:geo:103033862';
       return '<p>Check your answers before you send them.</p><p>Location (city)</p><p>' + city + '</p>';
     } },
   ];
@@ -163,12 +166,13 @@
     var loc = document.getElementById('_r_k_');
     if (loc) loc.addEventListener('input', function () {
       var hits = document.getElementById('hits');
-      hits.innerHTML = loc.value.length < 3 ? '' : '<div role="listbox"><div role="option">Menifee, California, United States</div></div>';
+      hits.innerHTML = loc.value.length < 3 || variant === 'nolist' ? '' : '<div role="listbox"><div role="option">Menifee, California, United States</div></div>';
       var opt = hits.querySelector('[role="option"]');
       // Like the live one on 2026-09-28: a click the page did not see as a real
       // one leaves the place's id in the box ("urn:li:geo:..."), shown on Review.
       if (opt) opt.addEventListener('click', function (e) {
         loc.value = e.isTrusted ? opt.textContent : 'urn:li:geo:103033862';
+        window.__picked = e.isTrusted;
         hits.innerHTML = '';
       });
     });

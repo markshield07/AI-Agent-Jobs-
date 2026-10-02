@@ -739,6 +739,13 @@
           el('button', { type: 'button', onclick: (e) => toggleFact(fact, e.currentTarget) }, fact.active ? 'Turn off' : 'Turn on')))))));
     if (!facts.length) document.getElementById('facts').replaceChildren(el('p', { class: 'sub' }, 'Upload a resume to fill the fact base.'));
 
+    const skills = facts.filter((f) => f.kind === 'skill' && f.active);
+    document.getElementById('skill-count').textContent = skills.length ? `(${skills.length})` : '';
+    document.getElementById('skills').replaceChildren(...(skills.length ? skills.map((fact) =>
+      el('li', { class: fact.source === 'user_added' ? 'mine' : '' }, fact.text,
+        el('button', { type: 'button', 'aria-label': `Turn off ${fact.text}`, title: 'Stop using this skill', onclick: (e) => toggleFact(fact, e.currentTarget) }, '×')))
+      : [el('li', { class: 'empty' }, 'None yet. Upload a resume or add some above.')]));
+
     document.getElementById('never').replaceChildren(...never.map((row) =>
       el('li', {}, row.term, el('button', { type: 'button', 'aria-label': `Remove ${row.term}`, onclick: () => removeNever(row.term) }, '×'))));
 
@@ -765,7 +772,7 @@
     const form = event.currentTarget;
     try {
       const out = await busy(form.querySelector('button'), api('/api/resume', { method: 'POST', body: new FormData(form) }));
-      toast(out.already_uploaded ? 'That resume was already on file.' : `Parsed ${out.filename}: ${out.facts_created} facts added.`);
+      toast(out.facts_created ? `Read ${out.filename}: ${out.facts_created} facts.` : 'That resume was already on file. Tick "Read it again" to re-read it.');
       form.reset();
       LOADERS.profile();
     } catch (e) { toast(e.message, true); }

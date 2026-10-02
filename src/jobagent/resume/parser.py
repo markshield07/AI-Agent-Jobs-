@@ -28,6 +28,10 @@ or duty listed under a role (each bullet or sentence of its own), per project, \
 per distinct skill, per degree or certification. A role with ten lines under \
 it is ten role facts, each repeating that role's employer, title and dates; a \
 role with no lines under it is one fact.
+- Also give each technology, protocol, product, tool or method the resume names \
+anywhere (in a skills list or inside a role's lines, e.g. "OSPF", "Splunk", \
+"F5 load balancers") its own `skill` fact, written as the resume writes it. A \
+skill fact never names something the resume does not.
 - For a role or project, `text` is that one accomplishment or duty, phrased as \
 it appears in the resume rather than rewritten.
 - `tags` are lowercase keywords a job posting might match on: technologies, \

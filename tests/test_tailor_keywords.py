@@ -320,3 +320,55 @@ def test_coverage_can_be_taken_of_a_longer_list():
     assert coverage("python and aws", ["python"], of=["python", "aws", "go"]) == 0.333
     assert coverage("python", [], of=["python"]) == 0.0
     assert coverage("python", ["python"], of=[]) == 0.0
+
+
+# ------------------------------------------------- postings as stored live --
+
+
+ANTHROPIC_LIKE = """About Anthropic
+Anthropic�s mission is to build AI. Researchers study Interpretability.
+About the role
+You will own the network repair program: break-fix, vendor RMA, and SLAs.
+Be on site for turn-up and acceptance in fast-paced, Anthropic-owned data halls.
+Responsibilities
+Possess hands-on depth in structured cabling, fiber, and optics.
+Partner with Anthropics WAN team on turn-up windows.
+The annual compensation range for this role is listed below.
+For sales roles, the range is the role's On Target Earnings ("OTE") range, including Commissions.
+Annual Salary:
+$320,000 - $405,000 USD
+Logistics
+Minimum education: Bachelor's degree. We sponsor visas."""
+
+
+def test_company_and_pay_sections_are_left_out():
+    found = posting_keywords(ANTHROPIC_LIKE, exclude=["Anthropic"])
+    for noise in ("interpretability", "earnings", "ote", "commissions", "usd", "sales"):
+        assert noise not in found
+    assert {"break-fix", "rma", "slas", "turn-up", "structured cabling", "optics"} <= set(found)
+
+
+def test_traits_and_company_words_are_not_keywords():
+    found = posting_keywords(ANTHROPIC_LIKE, exclude=["Anthropic"])
+    for noise in ("hands-on", "fast-paced", "anthropic-owned", "anthropics", "anthropic"):
+        assert noise not in found
+
+
+def test_an_unknown_compound_must_be_repeated_to_count():
+    once = posting_keywords("Work in partner-operated sites with Cisco.")
+    twice = posting_keywords("Work in partner-operated sites. Lead partner-operated halls.")
+    assert "partner-operated" not in once
+    assert "partner-operated" in twice
+
+
+def test_paragraphs_glued_together_are_split_again():
+    text = "Come be a part of what's next.Open Connect delivers.Qualifications:8+ years of BGP."
+    found = posting_keywords(text)
+    assert not [k for k in found if "next." in k or "qualifications" in k]
+    assert "bgp" in found
+    assert "node.js" in posting_keywords("We use Node.js and ASP.NET daily.")
+
+
+def test_everything_off_topic_keeps_the_text():
+    only_about = "About Us\nWe run Cisco and Juniper networks."
+    assert {"cisco", "juniper"} <= set(posting_keywords(only_about))

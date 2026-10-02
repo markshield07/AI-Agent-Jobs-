@@ -18,7 +18,7 @@ import pytest
 
 from jobagent.apply.answering import make_answerer
 from jobagent.apply.handlers import default_handlers, handler_for
-from jobagent.apply.handlers.dice import REFRESH_URL, DiceHandler, refresh_sign_in
+from jobagent.apply.handlers.dice import REFRESH_URL, DiceHandler, refresh_sign_in, token_note
 from jobagent.apply.models import Packet
 from jobagent.apply.sessions import jwt_expiry
 from jobagent.discovery.ats import detect_ats
@@ -284,3 +284,24 @@ def test_a_next_that_cannot_be_pressed_says_why(page, packet):
     assert result.outcome == "blocked", result.error
     assert "step 2 has neither a Next nor a Submit button" in result.error
     assert "could not be pressed" in result.error
+
+
+@pytest.mark.usefixtures("page")
+def test_a_password_asked_for_partway_stops_as_a_sign_in_not_a_step(page, packet):
+    """The first live auto run (the PC, 2026-10-02): after the questions Dice
+    showed "Log in to continue" with only a Password box. That is a sign-in to
+    redo, never a step to fill."""
+    result = run(page, packet, submit=True, variant="relogin")
+    assert result.outcome == "blocked", result.error
+    assert result.sign_in == "dice"
+    assert "asked to sign in again" in result.error and "at step" in result.error
+    assert "jobagent login dice" in result.error
+    assert js(page, "__password") is None
+    assert js(page, "__submitted") is None
+
+
+def test_the_token_note_says_how_long_the_sign_in_has_left():
+    page = FakePage(FakeContext(exp=1_000 + 30 * 60), renews_to=None)
+    assert token_note(page, now=1_000) == "sign-in token good for 30 more min"
+    assert token_note(FakePage(FakeContext(exp=900), None), now=1_000) == "sign-in token expired"
+    assert token_note(FakePage(FakeContext(exp=None), None), now=1_000) == "no sign-in token"

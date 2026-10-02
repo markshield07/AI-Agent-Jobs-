@@ -26,6 +26,7 @@
     replace_button  the card shows a plain Replace button, as the Dice bots described it
     replace_box  that Replace button draws a file box instead of opening the file chooser
     invalid      the questions step rejects its answers with an error
+    relogin      after the questions, Dice asks for the password again ("Log in to continue")
     covered      after Replace, a see-through layer over the wizard takes every click
     cookie_frame the cookie banner is drawn in a frame, a moment after the wizard opens
 
@@ -62,7 +63,7 @@
 <div id="posting">
   <h1 data-testid="job-detail-header">Senior Network Engineer</h1>
   <div>Acme Networks · Remote · Full-time</div>
-  <div data-variant=",needs_input,signed_out,replace_button,replace_box,invalid,cookie_frame,covered">
+  <div data-variant=",needs_input,signed_out,replace_button,replace_box,invalid,cookie_frame,covered,relogin">
     <button data-testid="apply-button" id="easy">Easy Apply</button>
   </div>
   <div data-variant="external">
@@ -133,6 +134,14 @@
   <h2>Review your application</h2>
   <p>Resume: <span id="review-resume"></span></p>
   <button type="button" id="submit">Submit</button>
+</template>
+
+<template id="step-relogin">
+  <h2>Welcome</h2>
+  <p>Log in to continue</p>
+  <label for="password">Password</label>
+  <input id="password" type="password" name="password" required>
+  <button type="button" id="signin">Sign In</button>
 </template>
 
 <template id="step-sent">
@@ -273,6 +282,8 @@
       next.innerHTML = '<span class="spinner" role="progressbar" aria-label="Loading">...</span>';
       setTimeout(function () { advance(name, next.getAttribute('data-next')); }, 2500);
     });
+    var pw = box.querySelector('#password');
+    if (pw) pw.addEventListener('input', function () { record('__password', pw.value); });
     var submit = box.querySelector('#submit');
     if (submit) submit.addEventListener('click', function () { record('__submitted', true); show('sent'); });
   }
@@ -290,6 +301,7 @@
         return;
       }
       if (variant === 'needs_input' && !value('bgp')) return;
+      if (variant === 'relogin') to = 'relogin';
     }
     show(to);
   }

@@ -34,6 +34,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from jobagent.apply.browser.fill import click_first_visible, fill_field, fill_plan, wait_settled
 from jobagent.apply.handlers.wizard import ROOT, WizardHandler
@@ -152,6 +153,14 @@ class DiceHandler(WizardHandler):
         "button:has-text('Login to apply')",
         "a:has-text('Login to apply')",
     )
+    # Partway through the steps (the PC's first live run, 2026-10-02) Dice
+    # sent the browser to /dashboard/login/password: "Welcome / Log in to
+    # continue" with only a Password box, for an account it knows.
+    relogin_url = re.compile(r"/dashboard/login|/login\b|/signin\b", re.IGNORECASE)
+    relogin_selectors = (
+        "input[type='password']",
+        "text=/log in to continue/i",
+    )
     # The live wizard (the PC's probe, 2026-10-01) has no `main` and no
     # data-testid: its steps are a plain <form> a few divs under <body>. The
     # site header's search form is never the root.
@@ -211,8 +220,31 @@ class DiceHandler(WizardHandler):
     def apply(self, page: Any, packet: Any, answerer: Any, **kwargs: Any) -> Any:
         url = self.application_url(packet.job.get("apply_url") or packet.job.get("url") or "")
         if url.startswith("https://www.dice.com/"):
-            refresh_sign_in(page)
+            # In the browser the steps run in, right before the posting opens.
+            if not refresh_sign_in(page):
+                return self._result(
+                    page,
+                    "blocked",
+                    kwargs.get("screenshot_path"),
+                    error=f"Dice's sign-in could not be renewed ({token_note(page)}); "
+                    + self.login_hint(),
+                    sign_in=self.sign_in_target(),
+                )
+            log.info("dice: signed in, %s", token_note(page))
         return super().apply(page, packet, answerer, **kwargs)
+
+    def sign_in_asked(self, page: Any) -> str | None:
+        try:
+            path = urlparse(page.url or "").path or ""
+        except Exception:
+            path = ""
+        if self.relogin_url.search(path):
+            shown = path
+        elif self._any_visible(page, self.relogin_selectors):
+            shown = "a Log in / Password box"
+        else:
+            return None
+        return f"Dice asked to sign in again ({shown}; {token_note(page)})"
 
     def open_flow(self, page: Any) -> Any:
         reject_cookies(page)
@@ -420,6 +452,25 @@ def refresh_sign_in(page: Any, *, now: float | None = None) -> bool:
             return True
     log.info("dice: the sign-in token was not renewed; signing in again may be needed")
     return False
+
+
+def token_note(page: Any, *, now: float | None = None) -> str:
+    """How long the browser's Dice sign-in token has left, in words."""
+    try:
+        cookies = page.context.cookies("https://www.dice.com")
+    except Exception:
+        return "sign-in token unreadable"
+    now = time.time() if now is None else now
+    for cookie in cookies:
+        if cookie.get("name") == "access":
+            expires = jwt_expiry(str(cookie.get("value") or ""))
+            if expires is None:
+                return "sign-in token unreadable"
+            left = int((expires - now) // 60)
+            return (
+                f"sign-in token good for {left} more min" if left > 0 else "sign-in token expired"
+            )
+    return "no sign-in token"
 
 
 def _access_fresh(context: Any, *, now: float | None = None) -> bool:

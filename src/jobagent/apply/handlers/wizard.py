@@ -251,6 +251,16 @@ class WizardHandler(BaseHandler):
             return {"filled": list(filled), "fields": list(seen), "needed": list(needed), **tokens}
 
         for step in range(1, self.max_steps + 1):
+            asked = self.sign_in_asked(page)
+            if asked:
+                return self._stop(
+                    page,
+                    "blocked",
+                    screenshot_path,
+                    error=f"{asked} at step {step}; {self.login_hint()}",
+                    sign_in=self.sign_in_target(),
+                    **common(),
+                )
             root = self._mark_root(page)
             try:
                 fields = self.discover_step(page, root)
@@ -415,6 +425,11 @@ class WizardHandler(BaseHandler):
         if self.signed_out_url.search(urlparse(page.url or "").path or ""):
             return True
         return self._any_visible(page, self.signed_out_selectors)
+
+    def sign_in_asked(self, page: Any) -> str | None:
+        """Whether the site has asked to sign in again partway through the
+        steps, and what it showed. The default never sees one."""
+        return None
 
     def sign_in_target(self) -> str:
         """What to sign in to again when the run meets a sign-in page."""

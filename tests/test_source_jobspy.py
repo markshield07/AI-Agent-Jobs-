@@ -203,7 +203,8 @@ def test_a_remote_location_becomes_the_is_remote_flag(spelling):
     # per search), then the other boards with both.
     indeed, rest = scraper.calls
     assert indeed["site_name"] == ["indeed"] and rest["site_name"] == ["linkedin"]
-    assert indeed["location"] is None and rest["location"] is None
+    # LinkedIn's Remote search is worldwide unless given a country.
+    assert indeed["location"] is None and rest["location"] == "United States"
     assert indeed["is_remote"] is True and rest["is_remote"] is True
     assert indeed["hours_old"] is None and rest["hours_old"] == 72
 
@@ -215,7 +216,7 @@ def test_other_locations_are_passed_through_as_text():
 
     assert [(c["site_name"], c["location"], c["is_remote"]) for c in scraper.calls] == [
         (["indeed"], None, True),
-        (["linkedin"], None, True),
+        (["linkedin"], "United States", True),
         (["indeed", "linkedin"], "New York, NY", False),
     ]
 
@@ -230,10 +231,10 @@ def test_queries_are_every_title_by_every_location():
 
     assert [(c["search_term"], c["location"]) for c in scraper.calls] == [
         ("Backend Engineer", None),
-        ("Backend Engineer", None),
+        ("Backend Engineer", "United States"),
         ("Backend Engineer", "Austin"),
         ("Platform Engineer", None),
-        ("Platform Engineer", None),
+        ("Platform Engineer", "United States"),
         ("Platform Engineer", "Austin"),
     ]
 
@@ -249,7 +250,7 @@ def test_repeated_and_blank_titles_and_locations_do_not_spend_queries():
 
     assert [(c["search_term"], c["location"]) for c in scraper.calls] == [
         ("Backend Engineer", None),
-        ("Backend Engineer", None),
+        ("Backend Engineer", "United States"),
         ("Backend Engineer", "Austin"),
     ]
 
@@ -569,9 +570,11 @@ def test_what_a_boards_remote_filter_chose_counts_as_remote():
 
     jobs = search(scraper, criteria(locations=["Remote", "Austin"]))
 
+    # Not LinkedIn's: its Remote search returns on-site jobs too, so there the
+    # question is left open unless the posting's own text says remote.
     assert [(job.external_id, job.remote) for job in jobs] == [
         ("a", True),
-        ("b", True),
+        ("b", None),
         ("c", False),
     ]
 

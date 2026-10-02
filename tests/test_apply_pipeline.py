@@ -449,6 +449,23 @@ def test_the_same_role_reposted_gets_one_application(conn, settings, ready_job):
     assert len(handler.calls) == 2
 
 
+def test_twins_match_across_company_suffixes_but_not_on_a_placeholder(conn, settings, ready_job):
+    handler = FakeHandler()
+    acme = ready_job(f"https://{FAKE_HOST}/a/1", title="Network Engineer", company="Acme")
+    inc = ready_job(f"https://{FAKE_HOST}/a/2", title="Network Engineer", company="Acme, Inc.")
+    assert _apply(conn, acme, settings, handler)["outcome"] == "dry_run"
+    assert _apply(conn, inc, settings, handler)["outcome"] == "skipped"
+
+    unnamed = [
+        ready_job(f"https://{FAKE_HOST}/d/{i}", title="Network Engineer", company="Unknown (Dice)")
+        for i in (1, 2)
+    ]
+    assert [_apply(conn, j, settings, handler)["outcome"] for j in unnamed] == [
+        "dry_run",
+        "dry_run",
+    ], "two employers Dice did not name are not one role"
+
+
 def test_of_two_open_applications_to_one_role_the_earlier_goes_on(conn, settings, ready_job):
     first = ready_job(
         f"https://{FAKE_HOST}/coinbase/1", title="Network Engineer", company="Coinbase"
@@ -653,6 +670,30 @@ def test_auto_run_pauses_between_jobs_and_stops_at_the_daily_cap(conn, settings,
     assert len(slept) == 2 and all(7.0 <= s <= 13.0 for s in slept), "jittered around 10s"
     assert store.submitted_last_day(conn) == 2
     assert jobs.list_runs(conn)[0]["applied"] == 2
+
+
+def test_a_site_at_its_cap_does_not_keep_the_other_site_waiting(conn, settings, ready_job):
+    capped = settings.model_copy(update={"easy_apply_daily_cap": 0, "apply_delay_seconds": 10.0})
+    linkedin = FakeHandler(_result("submitted"), ats="linkedin", hosts=("li.example",))
+    dice = FakeHandler(_result("submitted"), ats="dice", hosts=("dice.example",))
+    for i in range(3):
+        ready_job(f"https://li.example/job/{i}")
+    ready_job("https://dice.example/job/1")
+    slept: list[float] = []
+
+    report = run_apply(
+        conn,
+        capped,
+        mode="auto",
+        limit=1,
+        handlers=[linkedin, dice],
+        completer=NeverCalled(),
+        browser=FakeBrowser(),
+        sleep=slept.append,
+    )
+
+    assert report.submitted == 1 and len(dice.calls) == 1 and linkedin.calls == []
+    assert report.skipped == 3 and slept == [], "a job skipped on the spot is no reason to wait"
 
 
 def test_earlier_submissions_today_count_toward_the_cap(conn, settings, ready_job):

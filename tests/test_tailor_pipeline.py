@@ -145,6 +145,23 @@ def test_clean_plan_becomes_a_ready_variant_with_pdf(conn, settings, world):
     assert stored.pdf_path == variant.pdf_path and stored.facts_used == variant.facts_used
 
 
+def test_a_pdf_that_cannot_be_written_leaves_no_ready_resume(conn, settings, world, monkeypatch):
+    from jobagent.tailor import pipeline
+
+    def broken(html, path):
+        raise OSError("cannot load library 'gobject-2.0-0'")
+
+    monkeypatch.setattr(pipeline, "write_pdf", broken)
+    completer = FakeCompleter([good_plan(world)], [LETTER])
+
+    with pytest.raises(TailorError, match="PDF could not be written"):
+        tailor_job(conn, world["job_id"], settings, completer=completer)
+
+    assert store.latest_ready_variant(conn, world["job_id"]) is None
+    latest = store.latest_variant(conn, world["job_id"])
+    assert latest.status == "rejected" and not latest.inputs_sha, "tried again next run"
+
+
 def test_invented_claim_is_sent_back_once_then_accepted(conn, settings, world):
     completer = FakeCompleter([bad_plan(world), good_plan(world)], [LETTER])
 

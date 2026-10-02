@@ -188,6 +188,9 @@ class ClaudeCodeBackend:
                 input=prompt,
                 capture_output=True,
                 text=True,
+                # `claude` speaks UTF-8; Windows would otherwise decode with its code page.
+                encoding="utf-8",
+                errors="replace",
                 timeout=self.timeout_seconds,
                 cwd=workdir,
                 env=env,

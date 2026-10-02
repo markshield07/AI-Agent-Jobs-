@@ -135,7 +135,7 @@ def save_session(settings: Settings, name: str, state: dict[str, Any]) -> Path:
         pass
     payload = {"site": s.name, "saved_at": _now(), "cookies": cookies}
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as handle:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(payload, handle)
     os.chmod(path, 0o600)
     return path
@@ -195,7 +195,7 @@ def load_session(settings: Settings, name: str) -> list[dict[str, Any]]:
     """The saved cookies for a site, or [] when there are none or the file is unreadable."""
     path = session_path(settings, name)
     try:
-        payload = json.loads(path.read_text())
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
     return site_cookies(payload, name)
@@ -227,7 +227,7 @@ def session_status(settings: Settings, name: str) -> dict[str, Any]:
     saved_at = None
     if path.exists():
         try:
-            saved_at = json.loads(path.read_text()).get("saved_at")
+            saved_at = json.loads(path.read_text(encoding="utf-8")).get("saved_at")
         except (OSError, ValueError):
             saved_at = None
     expiries = [
@@ -292,7 +292,7 @@ def workday_cookies(state: dict[str, Any], host: str) -> list[dict[str, Any]]:
 
 def _workday_payload(settings: Settings, host: str) -> dict[str, Any]:
     try:
-        payload = json.loads(workday_session_path(settings, host).read_text())
+        payload = json.loads(workday_session_path(settings, host).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return payload if isinstance(payload, dict) else {}
@@ -327,7 +327,7 @@ def save_workday_session(
 
 def load_workday_session(settings: Settings, host: str) -> list[dict[str, Any]]:
     try:
-        payload = json.loads(workday_session_path(settings, host).read_text())
+        payload = json.loads(workday_session_path(settings, host).read_text(encoding="utf-8"))
     except (OSError, ValueError, UnknownSite):
         return []
     return workday_cookies(payload, host)
@@ -430,7 +430,7 @@ def save_workday_capture(settings: Settings, host: str, name: str, html: str) ->
     path = workday_dir(settings) / f"{host}-{name}.html"
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as handle:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(html)
     os.chmod(path, 0o600)
     return path
@@ -508,7 +508,7 @@ def _write_private(path: Path, payload: dict[str, Any]) -> None:
             except OSError:
                 pass
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as handle:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(payload, handle)
     os.chmod(path, 0o600)
 

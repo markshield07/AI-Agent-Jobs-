@@ -532,6 +532,22 @@ def test_a_board_search_place_is_kept_and_reopens_a_not_remote_skip(conn):
     assert store.get_job(conn, kid)["status"] == "skipped", "other reasons stand"
 
 
+def test_a_posting_seen_again_under_a_new_title_still_gets_its_place(conn):
+    url = "https://www.linkedin.com/jobs/view/42"
+    [jid] = _insert(conn, _job(url=url, source="linkedin", title="Network Engineer"))
+    store.set_rule_score(conn, jid, 0, "nothing says it is remote (Irvine, CA)")
+    store.set_status(conn, jid, "skipped")
+
+    again = upsert_jobs(
+        conn,
+        [_job(url=url, source="linkedin", title="Network Engineer II", found_near="Irvine")],
+    )
+
+    assert again.duplicates == 1
+    job = store.get_job(conn, jid)
+    assert job["found_near"] == "Irvine" and job["status"] == "pending"
+
+
 def test_a_posting_seen_again_from_the_boards_apply_filter_applies_on_the_board(conn):
     posting = "https://www.indeed.com/viewjob?jk=abc"
     first = RawJob(

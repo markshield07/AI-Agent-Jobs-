@@ -10,6 +10,7 @@ from fastapi import APIRouter, Query
 from jobagent.api.discovery import job_cards
 from jobagent.api.routes import DbDep, SettingsDep
 from jobagent.apply import store as applications
+from jobagent.apply.pipeline import in_apply_order
 from jobagent.discovery import store as jobs
 from jobagent.stats import dashboard_stats, recent_activity
 
@@ -31,13 +32,20 @@ def activity(db: DbDep, limit: int = Query(20, ge=1, le=200)) -> list[dict[str, 
 
 
 @router.get("/overview")
-def overview(db: DbDep, limit: int = Query(6, ge=1, le=50)) -> dict[str, Any]:
-    """The overview's job cards: the latest applications sent and the queue ahead."""
+def overview(
+    db: DbDep, settings: SettingsDep, limit: int = Query(6, ge=1, le=50)
+) -> dict[str, Any]:
+    """The overview's job cards: the latest applications sent and the queue
+    ahead, which is only the queued jobs on the sites applied on
+    (JOBAGENT_APPLY_SITES), in the order they go."""
     conn = db.connection()
+    ahead = in_apply_order(
+        jobs.list_jobs(conn, status="queued", limit=5000), settings.apply_site_list
+    )
     return {
         "recent": applications.list_applications(conn, submitted=True, limit=limit),
-        "up_next": job_cards(conn, jobs.list_jobs(conn, status="queued", limit=limit)),
-        "queued": jobs.count_jobs(conn).get("queued", 0),
+        "up_next": job_cards(conn, ahead[:limit]),
+        "queued": len(ahead),
     }
 
 
@@ -48,6 +56,8 @@ def config(settings: SettingsDep) -> dict[str, Any]:
         "apply_mode": settings.apply_mode,
         "daily_apply_cap": settings.daily_apply_cap,
         "easy_apply_daily_cap": settings.easy_apply_daily_cap,
+        "dice_daily_cap": settings.dice_daily_cap,
+        "apply_sites": list(settings.apply_site_list),
         "apply_delay_seconds": settings.apply_delay_seconds,
         "llm_backend": settings.llm_backend,
         "inbox_configured": bool(settings.imap_host and settings.imap_user),

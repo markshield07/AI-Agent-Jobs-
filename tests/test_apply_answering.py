@@ -255,6 +255,48 @@ def test_answer_bank_answers_by_canonical_key_and_by_label(packet):
     assert set(sources(plan).values()) == {"answer_bank"}
 
 
+def test_the_us_answers_are_not_used_for_another_country(packet):
+    packet.answers = {"work_authorization": "Yes", "visa_sponsorship": "No"}
+    fields = [
+        F("ca", "Are you authorized to work in Canada?", kind="radio", options=["Yes", "No"]),
+        F("uk", "Will you require sponsorship in the UK?", kind="radio", options=["Yes", "No"]),
+    ]
+    plan = plan_fills(fields, packet)
+    assert plan.fills == []
+    assert {n.key for n in plan.needed} == {"ca", "uk"}
+
+
+@pytest.mark.parametrize(
+    "label, key",
+    [
+        ("Are you currently employed?", None),
+        ("Are you currently employed by Acme?", "previously_employed"),
+        ("Do you have at least 18 months of experience with Python?", None),
+        ("Are you 18 years of age or older?", "over_18"),
+        ("Are you at least 18?", "over_18"),
+        ("What is your availability for interviews?", None),
+        ("What is your availability?", "start_date"),
+    ],
+)
+def test_look_alike_questions_get_their_own_key(label, key):
+    assert answering._key_of_text(label) == key
+
+
+def test_a_yes_or_no_about_the_salary_is_not_the_salary(packet):
+    packet.answers = {"salary_expectation": "150000"}
+    field = F(
+        "range",
+        "Is the salary range of $120,000 - $140,000 acceptable?",
+        kind="radio",
+        options=["Yes", "No"],
+        required=True,
+    )
+    plan = plan_fills([field], packet)
+    assert plan.fills == []
+    assert plan.needed[0].reason == NEVER_GUESSED
+    assert plan.needed[0].answer_key.startswith("q:"), "its Yes is kept apart from the amount"
+
+
 def test_answer_that_fits_no_option_is_asked_again(packet):
     packet.answers = {"work_authorization": "Maybe"}
     field = F("auth", "Work authorization", kind="select", options=["Yes", "No"], required=True)

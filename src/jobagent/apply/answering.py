@@ -131,7 +131,9 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     ),
     (
         "start_date",
-        r"\bstart\s+date\b|\bavailable\s+to\s+start\b|\bavailability\b|\bnotice\s+period\b"
+        r"\bstart\s+date\b|\bavailable\s+to\s+start\b|\bnotice\s+period\b"
+        # "Availability for an interview" is not a start date.
+        r"|\bavailability\b(?!\s+(?:for|to)\s+(?:an?\s+)?interview)"
         r"|\bwhen\s+(?:can|could)\s+you\s+start\b|\bearliest\s+start\b",
     ),
     ("relocation", r"\brelocat"),
@@ -139,11 +141,18 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     # "Clearance Status" beside "Clearance Level" (Serco) is a second answer.
     ("clearance_status", r"\bclearance\s+status\b"),
     ("security_clearance", r"\bclearance\b"),
-    ("over_18", r"\b18\b|\beighteen\b|\blegal\s+age\b|\bage\s+of\s+majority\b"),
+    # Age only: "at least 18 months of experience" is a question about experience.
+    (
+        "over_18",
+        r"\b(?:18|eighteen)\b(?!\s*(?:\+\s*)?(?:months?|years?\s+of\s+(?!age)|years?\s+experience))"
+        r"|\blegal\s+age\b|\bage\s+of\s+majority\b",
+    ),
     ("background_check", r"\bbackground\s+check\b|\bdrug\s+(?:test|screen)"),
     (
         "previously_employed",
-        r"\b(?:previously|ever|currently)\s+(?:worked|employed|been\s+employed|interviewed)\b"
+        r"\b(?:previously|ever)\s+(?:worked|employed|been\s+employed|interviewed)\b"
+        # "Are you currently employed?" asks whether the person has a job now.
+        r"|\bcurrently\s+(?:work(?:ing)?|employed)\s+(?:by|with|at|for)\b"
         r"|\bformer\s+employee\b|\bcurrent(?:ly)?\s+(?:an?\s+)?employee\b",
     ),
     ("non_compete", r"\bnon-?compete\b|\bnon-?solicit"),
@@ -277,6 +286,17 @@ def canonical_key(field: FormField) -> str | None:
     return None
 
 
+# Keys whose answer is a value (an amount, a choice of arrangement), never a
+# bare yes or no: "Is the salary range of $120k acceptable?" is a question of
+# its own, still never guessed, and its "Yes" must not become the amount.
+_VALUE_KEYS = frozenset({"salary_expectation", "work_arrangement"})
+
+
+def _yes_or_no(field: FormField) -> bool:
+    options = {_norm(o) for o in field.options or () if _norm(o)}
+    return bool(options) and options <= (_YES | _NO)
+
+
 def _key_of_text(text: str, *, upload: bool = False) -> str | None:
     if not text:
         return None
@@ -294,6 +314,15 @@ def _key_of_text(text: str, *, upload: bool = False) -> str | None:
 
 
 _UPLOADS = frozenset({"resume", "cover_letter"})
+# Answers that hold for one country: "authorized to work in Canada?" is not
+# answered with the answer about the United States.
+_COUNTRY_BOUND = frozenset({"work_authorization", "visa_sponsorship", "citizenship"})
+_FOREIGN = re.compile(
+    r"\b(?:canada|canadian|mexic|united\s+kingdom|u\.?k\.?|britain|ireland|europe|e\.?u\.?"
+    r"|germany|france|spain|netherlands|poland|india|philippines|australia|new\s+zealand"
+    r"|singapore|japan|china|brazil|costa\s+rica|colombia|argentina|israel|uae|dubai)\b",
+    re.IGNORECASE,
+)
 # Questions whose answer is the same whatever the form's wording, so an answer
 # given to one company's wording before the key existed serves the next. Not
 # work authorization or sponsorship: "authorized to work in Canada?" is
@@ -366,6 +395,8 @@ def answer_key_for(field: FormField, job: Mapping[str, Any] | None = None) -> st
     key = canonical_key(field)
     if key == "commute_ok":
         return commute_key(job)
+    if key in _VALUE_KEYS and _yes_or_no(field):
+        return question_key(field.label)
     return key or question_key(field.label)
 
 
@@ -630,6 +661,11 @@ class _Planner:
         keys = (key, question_key(field.label))
         if key == "commute_ok":
             keys = (commute_key(self.packet.job), None)
+        elif key in _VALUE_KEYS and _yes_or_no(field):
+            keys = (question_key(field.label), None)
+        elif key in _COUNTRY_BOUND and _FOREIGN.search(field.label or ""):
+            # The stored answers are about the United States.
+            keys = (question_key(field.label), None)
         banked = self._bank(*(k for k in keys if k))
         if banked is None and key in _SAME_EVERYWHERE:
             banked = self._bank_by_meaning(key)

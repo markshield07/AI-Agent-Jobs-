@@ -23,10 +23,13 @@ improving anything.
 Rules:
 - Every fact must be supported by text already in the resume. Never add an \
 employer, date, metric, technology or achievement that is not written there.
-- Split the resume into the smallest useful claims: one fact per role, per \
-project, per distinct skill, per degree or certification.
-- For a role or project, `text` is a one-line description of what the person \
-did, phrased as it appears in the resume rather than rewritten.
+- Split the resume into the smallest useful claims: one fact per accomplishment \
+or duty listed under a role (each bullet or sentence of its own), per project, \
+per distinct skill, per degree or certification. A role with ten lines under \
+it is ten role facts, each repeating that role's employer, title and dates; a \
+role with no lines under it is one fact.
+- For a role or project, `text` is that one accomplishment or duty, phrased as \
+it appears in the resume rather than rewritten.
 - `tags` are lowercase keywords a job posting might match on: technologies, \
 domains, methodologies. Take them from the resume's own words.
 - If a field is not stated in the resume, leave it null. Do not guess dates.

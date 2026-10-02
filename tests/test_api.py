@@ -121,3 +121,41 @@ def test_deactivating_a_fact_removes_it_from_the_default_list(client):
 
 def test_patching_a_missing_fact_is_404(client):
     assert client.patch("/api/facts/999", json={"active": False}).status_code == 404
+
+
+def test_a_new_resume_replaces_the_parsed_facts_and_keeps_your_own(client, monkeypatch):
+    client.post("/api/resume", files={"file": ("old.txt", b"old resume", "text/plain")})
+    client.post("/api/facts/keywords", json={"keywords": ["Automation"]})
+    newer = ParsedResume(
+        contact=ParsedContact(name="Mark Shield"),
+        facts=[
+            ParsedFact(kind="role", text="Hired and mentored engineers", employer="GoTo"),
+            ParsedFact(kind="role", text="Set up customer LAN and WAN", employer="GoTo"),
+        ],
+    )
+    monkeypatch.setattr(
+        "jobagent.resume.intake.resume_parser.parse_resume", lambda text, **kwargs: newer
+    )
+
+    out = client.post("/api/resume", files={"file": ("new.txt", b"new resume", "text/plain")})
+
+    assert out.json()["facts_created"] == 2
+    texts = {f["text"] for f in client.get("/api/facts").json()}
+    assert "Led the billing rewrite" not in texts, "the old resume's facts are set aside"
+    assert {"Hired and mentored engineers", "Set up customer LAN and WAN"} <= texts
+    assert any(f["source"] == "user_added" for f in client.get("/api/facts").json())
+
+
+def test_the_same_resume_is_parsed_again_when_asked(settings, conn, monkeypatch):
+    from jobagent.resume.intake import ingest_resume
+
+    monkeypatch.setattr(
+        "jobagent.resume.intake.resume_parser.parse_resume", lambda text, **kwargs: STUB_PARSE
+    )
+    first = ingest_resume(conn, b"resume", "r.txt", settings)
+    again = ingest_resume(conn, b"resume", "r.txt", settings)
+    redo = ingest_resume(conn, b"resume", "r.txt", settings, reparse=True)
+
+    assert len(first.fact_ids) == 2 and again.fact_ids == [] and len(redo.fact_ids) == 2
+    active = conn.execute("SELECT COUNT(*) FROM resume_facts WHERE active = 1").fetchone()[0]
+    assert active == 2, "the earlier parse is set aside, not doubled"

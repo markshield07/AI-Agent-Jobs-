@@ -97,6 +97,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     discover.add_argument("--json", action="store_true", help="Print the full report as JSON.")
 
+    resume = sub.add_parser("resume", help="Load a resume file into the fact base.")
+    resume.add_argument("path", type=Path, help="A PDF, DOCX or text resume.")
+    resume.add_argument(
+        "--reparse", action="store_true", help="Parse it again even if it was loaded before."
+    )
+
     criteria = sub.add_parser("criteria", help="Show or change what to search for.")
     criteria.add_argument("--title", action="append", help="A job title to search for.")
     criteria.add_argument("--location", action="append", help="A location, or Remote.")
@@ -279,6 +285,31 @@ def _parse_board(text: str):
     ats, slug = parts[0].strip().lower(), parts[1].strip()
     company = parts[2].strip() if len(parts) == 3 else None
     return BoardRef(ats=ats, slug=slug, company=company)
+
+
+def _cmd_resume(args: argparse.Namespace) -> int:
+    from jobagent.resume.facts import list_facts
+    from jobagent.resume.intake import ingest_resume
+
+    settings = get_settings()
+    db = open_database(settings.db_path)
+    try:
+        conn = db.connection()
+        result = ingest_resume(
+            conn, args.path.read_bytes(), args.path.name, settings, reparse=args.reparse
+        )
+        if not result.fact_ids:
+            print(f"{args.path.name} is already loaded; --reparse parses it again.")
+            return 0
+        print(f"{args.path.name}: {len(result.fact_ids)} facts, replacing the earlier resume's.")
+        for fact in list_facts(conn):
+            where = " @ ".join(
+                p for p in (fact.detail.get("title"), fact.detail.get("employer")) if p
+            )
+            print(f"  [{fact.kind}] {fact.text}" + (f"  ({where})" if where else ""))
+        return 0
+    finally:
+        db.close()
 
 
 def _cmd_criteria(args: argparse.Namespace) -> int:
@@ -1021,6 +1052,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 _COMMANDS = {
     "discover": _cmd_discover,
+    "resume": _cmd_resume,
     "criteria": _cmd_criteria,
     "tailor": _cmd_tailor,
     "apply": _cmd_apply,

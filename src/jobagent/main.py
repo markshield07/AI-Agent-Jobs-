@@ -144,6 +144,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-generic", action="store_true", help="Skip forms no handler recognises."
     )
     apply.add_argument("--json", action="store_true", help="Print the full report as JSON.")
+    apply.add_argument(
+        "--picked",
+        action="store_true",
+        help="Jobs you chose yourself: search places and JOBAGENT_APPLY_SITES do not skip them.",
+    )
 
     applications = sub.add_parser("applications", help="List applications and what they wait on.")
     applications.add_argument("--status", help="Only this status, e.g. needs_input or applied.")
@@ -454,6 +459,7 @@ def _cmd_apply(args: argparse.Namespace) -> int:
             limit=args.limit,
             mode=mode,
             allow_generic=not args.no_generic,
+            picked=args.picked,
         )
     except ApplyError as exc:
         return _apply_error(args, str(exc), 2)

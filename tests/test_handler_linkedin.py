@@ -278,10 +278,32 @@ def test_a_2026_company_website_posting_reports_where_it_goes(page, packet):
 
 
 @pytest.mark.usefixtures("page")
-def test_a_review_that_shows_a_linkedin_id_for_an_answer_is_never_sent(page, packet):
+def test_a_review_that_lists_the_picked_city_by_its_place_id_is_sent(page, packet):
+    """LinkedIn's review shows a city picked from its list as the place's id."""
     result = run_new(page, packet, submit=True, variant="urnreview")
+    assert result.outcome == "submitted", (result.error, result.needed)
+    assert js(page, "__submitted")["contact"]["city"] == "Menifee, California, United States"
+
+
+@pytest.mark.usefixtures("page")
+def test_a_place_id_on_review_with_no_pick_behind_it_is_never_sent(page, packet):
+    result = run_new(page, packet, submit=True, variant="nolist")
     assert result.outcome == "blocked" and "urn:li:geo:103033862" in result.error
     assert js(page, "__submitted") is None and js(page, "__discarded") is True
+
+
+@pytest.mark.usefixtures("page")
+def test_any_other_linkedin_id_on_review_is_never_sent(page):
+    from jobagent.apply.handlers.linkedin import LinkedInHandler
+
+    handler = LinkedInHandler()
+    handler._places_picked = 1
+    page.set_content("<main><p>Company</p><p>urn:li:fsd_company:1234</p></main>")
+    assert "urn:li:fsd_company:1234" in handler.review_problem(page, "main")
+    page.set_content("<main><p>Location (city)</p><p>urn:li:geo:103033862</p></main>")
+    assert handler.review_problem(page, "main") is None
+    handler._places_picked = 0
+    assert "urn:li:geo:103033862" in handler.review_problem(page, "main")
 
 
 # The Yes/No questions of the 2026 window (Luxoft's and Insight Global's, 2026-09-28).

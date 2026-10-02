@@ -278,3 +278,17 @@ def test_recording_an_interview_updates_the_application(page, server):
         "document.querySelector('#app-detail') && "
         "document.querySelector('#app-detail').innerText.includes('Interviewing')"
     )
+
+
+@pytest.mark.usefixtures("page")
+def test_the_resume_tab_lists_your_skills_and_turns_one_off(page, server):
+    page.request.post(server["url"] + "/api/facts/keywords", data={"keywords": ["RMA", "Python"]})
+
+    page.goto(server["url"] + "/#profile")
+    page.wait_for_selector("#skills li:has-text('RMA')")
+    assert page.inner_text("#skill-count") == "(2)"
+    assert page.locator("#resume-form input[name='reparse']").count() == 1
+
+    page.click("#skills li:has-text('Python') button")
+    page.wait_for_function("document.querySelector('#skill-count').textContent === '(1)'")
+    assert "Python" not in page.inner_text("#skills")

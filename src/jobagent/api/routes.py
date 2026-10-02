@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 from jobagent.answers import list_answers
 from jobagent.api.models import (
@@ -76,6 +76,7 @@ def upload_resume(
     file: Annotated[UploadFile, File()],
     db: DbDep,
     settings: SettingsDep,
+    reparse: Annotated[bool, Form()] = False,
 ) -> UploadOut:
     data = file.file.read(MAX_UPLOAD_BYTES + 1)
     if not data:
@@ -84,7 +85,9 @@ def upload_resume(
         raise HTTPException(413, "Resume is larger than 10MB.")
 
     try:
-        result = ingest_resume(db.connection(), data, file.filename or "resume", settings)
+        result = ingest_resume(
+            db.connection(), data, file.filename or "resume", settings, reparse=reparse
+        )
     except (UnsupportedResume, EmptyResume) as exc:
         raise HTTPException(400, str(exc)) from exc
 

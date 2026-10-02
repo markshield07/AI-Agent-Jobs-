@@ -159,3 +159,13 @@ def test_the_same_resume_is_parsed_again_when_asked(settings, conn, monkeypatch)
     assert len(first.fact_ids) == 2 and again.fact_ids == [] and len(redo.fact_ids) == 2
     active = conn.execute("SELECT COUNT(*) FROM resume_facts WHERE active = 1").fetchone()[0]
     assert active == 2, "the earlier parse is set aside, not doubled"
+
+
+def test_the_dashboard_can_ask_to_read_the_same_resume_again(client):
+    payload = {"file": ("resume.txt", b"Mark Shield\nEngineer", "text/plain")}
+    client.post("/api/resume", files=payload)
+    again = client.post("/api/resume", files=payload, data={"reparse": "true"}).json()
+
+    assert again["already_uploaded"] is True
+    assert again["facts_created"] == 2
+    assert len(client.get("/api/facts").json()) == 2, "the earlier parse is set aside"

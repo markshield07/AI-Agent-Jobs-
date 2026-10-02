@@ -60,20 +60,39 @@ def ingest_resume(
     filename: str,
     settings: Settings,
     completer: Completer | None = None,
+    *,
+    reparse: bool = False,
 ) -> IntakeResult:
-    """Store an uploaded resume and parse it into the fact base."""
+    """Store an uploaded resume and parse it into the fact base.
+
+    The facts parsed from it replace those parsed from any resume before it
+    (they are set inactive, not deleted); facts you added yourself stay. The
+    same file again is parsed again only with `reparse`, or when its first
+    parse left no facts (a model call that failed)."""
     base_id, text, already = store_resume(conn, data, filename, settings)
-    if already:
+    if already and not reparse and _has_facts(conn, base_id):
         return IntakeResult(base_id, filename, [], already_uploaded=True)
 
     parsed = resume_parser.parse_resume(text, completer=completer or resolve_backend(settings))
     fact_ids = add_facts(conn, resume_parser.to_facts(parsed, base_id=base_id))
+    if fact_ids:
+        with transaction(conn):
+            conn.execute(
+                f"""UPDATE resume_facts SET active = 0
+                    WHERE source = 'parsed' AND id NOT IN ({",".join("?" * len(fact_ids))})""",
+                fact_ids,
+            )
 
     contact = resume_parser.contact_answers(parsed.contact)
     if contact:
         set_answers(conn, contact)
 
-    return IntakeResult(base_id, filename, fact_ids, already_uploaded=False)
+    return IntakeResult(base_id, filename, fact_ids, already_uploaded=already)
+
+
+def _has_facts(conn: sqlite3.Connection, base_id: int) -> bool:
+    row = conn.execute("SELECT 1 FROM resume_facts WHERE base_id = ? LIMIT 1", (base_id,))
+    return row.fetchone() is not None
 
 
 def latest_base(conn: sqlite3.Connection) -> dict[str, object] | None:

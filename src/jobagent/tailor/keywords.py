@@ -97,7 +97,12 @@ TECH_LEXICON: frozenset[str] = frozenset(
         "structured cabling", "fiber", "vmware", "vsphere", "hyper-v", "active directory",
         "windows server", "microsoft 365", "office 365", "slas", "sla", "change control",
         "it operations", "operations management", "people management", "field engineering",
-        "field operations",
+        "field operations", "network deployment", "data center operations", "turn-up",
+        "bring-up", "burn-in", "power-on", "break-fix", "rma", "rack and stack",
+        "cross-connect", "cross-connects", "optics", "colocation", "hpc", "gpu", "on-call",
+        "incident response", "out-of-band", "802.1x", "mdf", "idf", "msp", "msps",
+        "low-voltage", "segmentation", "telemetry", "ticketing", "ai", "automation", "workflows",
+        "integrations",
     )
 )  # fmt: skip
 
@@ -124,9 +129,49 @@ BOILERPLATE: frozenset[str] = frozenset(
     sunday january february march april june july august september october november
     december inc llc ltd corp corporation al ak az ar ca co ct de fl ga hi id il ia ks ky la
     md ma mi mn ms mo mt ne nv nh nj nm ny nc nd oh ok or pa ri sc sd tn tx ut vt va wa wv wi
-    wy dc
+    wy dc include includes including earnings ote commission commissions usd equity stock
+    retirement savings spending accounts san francisco york seattle london
     """.split()
 )
+
+# Hyphenated words that describe a person or a workplace, not a skill: "hands-on"
+# is in nearly every posting and on no resume as a claim the facts could back.
+SOFT_COMPOUNDS: frozenset[str] = frozenset(
+    """
+    hands-on fast-paced detail-oriented results-driven results-oriented solution-oriented
+    self-starter self-motivated self-reported cross-functional world-class best-in-class
+    high-quality high-impact high-performing high-speed high-density long-term short-term
+    day-to-day well-being end-to-end next-generation cutting-edge state-of-the-art
+    forward-thinking late-stage program-wide fleet-wide company-wide boots-on-the-ground
+    on-the-floor on-site in-office in-person full-time part-time year-round multi-year
+    hands-on-keyboard
+    """.split()
+)
+
+# A section that says who the company is or what it pays, not what the job needs.
+# It runs from one of these lines to the next on-topic heading.
+_OFF_TOPIC = re.compile(
+    r"^(?:about (?!the role|the job|the position|the team|this role|the opportunity|you\b)"
+    r"|benefits|perks|compensation|annual salary|salary|pay range|pay transparency|logistics"
+    r"|equal (?:employment )?opportunity|how we.?re different|come work with us"
+    r"|our (?:values|benefits|culture)|who we are|why (?:join|work)|life at"
+    r"|the (?:annual )?(?:compensation|salary|pay) range|for sales roles)",
+    re.IGNORECASE,
+)
+_ON_TOPIC = re.compile(
+    r"^(?:about (?:the role|the job|the position|the team|this role|the opportunity|you)"
+    r"|the role|responsibilit|what you.?ll|what you will|you may be|you will|you.?ll"
+    r"|requirements|qualifications|strong candidates|it.?s a bonus|bonus points"
+    r"|nice to have|technical skills|representative work|duties|what we.?re looking for"
+    r"|who you are)",
+    re.IGNORECASE,
+)
+_HEADING_CHARS = 60
+
+# Paragraphs a careless HTML flattening glued together: "what's next.Open Connect",
+# "Qualifications:8+ years". A capital or digit straight after the stop starts a
+# new sentence; "node.js" and "ASP.NET" do not match.
+_GLUED_SENTENCE = re.compile(r"(?<=[a-z0-9)])[.:;](?=[A-Z])|(?<=[a-z)])[.:;](?=\d)")
 
 _CLOCK = re.compile(r"^\d{1,2}(?::\d\d)?(?:am|pm)$")
 _WEB = re.compile(r"(?:^www\.|\.(?:com|net|org|io|gov|edu|us)$|@)")
@@ -161,7 +206,7 @@ def posting_keywords(
     """
     if limit < 0:
         raise ValueError("limit must not be negative")
-    text = "\n".join(part for part in (title or "", description or "") if part.strip())
+    text = "\n".join(part for part in (title or "", _on_topic(description or "")) if part.strip())
     if not text:
         return []
 
@@ -178,7 +223,14 @@ def posting_keywords(
 
     lexicon_hits = [t for t in sorted(TECH_LEXICON) if usable(t) and contains_term(text, t)]
     extra_hits = [t for t in _clean(extra) if usable(t) and contains_term(text, t)]
-    names = [t for t in _names_in(text) if usable(t) and not _boilerplate(t, text)]
+    names = [
+        t
+        for t in _names_in(text)
+        if usable(t)
+        and not _boilerplate(t, text)
+        and not _soft_compound(t, text)
+        and not _names_the_company(t, excluded)
+    ]
 
     # A name that is only a piece of a longer term the posting asks for says
     # nothing on its own; a name that only glues present terms together says
@@ -219,6 +271,44 @@ def split_by_support(keywords: Sequence[str], fact_pool: str) -> tuple[list[str]
 
 
 # ----------------------------------------------------------------- helpers --
+
+
+def _on_topic(description: str) -> str:
+    """The posting without its about-the-company and pay sections, sentences unglued.
+
+    A stored description can have lost its paragraph breaks ("next.Open
+    Connect") or its curly apostrophes (U+FFFD), so both are repaired first.
+    If dropping sections would leave nothing, the whole text is kept.
+    """
+    text = _GLUED_SENTENCE.sub(lambda m: m.group(0) + "\n", description.replace("\ufffd", "'"))
+    kept: list[str] = []
+    skipping = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if _OFF_TOPIC.match(stripped):
+            skipping = True
+        elif skipping and len(stripped) <= _HEADING_CHARS and _ON_TOPIC.match(stripped):
+            skipping = False
+        if not skipping:
+            kept.append(line)
+    return "\n".join(kept) if any(line.strip() for line in kept) else text
+
+
+def _soft_compound(token: str, text: str) -> bool:
+    """True for a hyphenated word that is a trait, or one the posting says only once.
+
+    A lexicon term never reaches this check, so "turn-up" and "break-fix" are kept
+    however often they appear; an unknown compound has to be repeated to count.
+    """
+    if "-" not in token or not token.replace("-", "").isalpha():
+        return False
+    return token in SOFT_COMPOUNDS or len(_pattern(token).findall(text)) < 2
+
+
+def _names_the_company(token: str, excluded: set[str]) -> bool:
+    """True for "anthropic-owned", "anthropic's" or "anthropics" when "anthropic" is excluded."""
+    parts = [p for p in re.split(r"[/'-]", token) if p]
+    return any(p in excluded or (p.endswith("s") and p[:-1] in excluded) for p in parts)
 
 
 def _clean(values: Iterable[str]) -> list[str]:

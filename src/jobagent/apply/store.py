@@ -163,6 +163,13 @@ def add_event(
                 utcnow(),
             ),
         )
+        if to_status == "applied":
+            # Confirmed by hand (an unconfirmed send that did go in): it now
+            # counts as sent, in the stats and the daily caps alike.
+            conn.execute(
+                "UPDATE applications SET submitted_at = COALESCE(submitted_at, ?) WHERE id = ?",
+                (utcnow(), application_id),
+            )
     return int(cur.lastrowid)
 
 

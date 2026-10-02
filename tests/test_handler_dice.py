@@ -305,3 +305,28 @@ def test_the_token_note_says_how_long_the_sign_in_has_left():
     assert token_note(page, now=1_000) == "sign-in token good for 30 more min"
     assert token_note(FakePage(FakeContext(exp=900), None), now=1_000) == "sign-in token expired"
     assert token_note(FakePage(FakeContext(exp=None), None), now=1_000) == "no sign-in token"
+
+
+@pytest.mark.usefixtures("page")
+def test_a_submit_that_spins_is_waited_out_before_judging(page, packet):
+    result = run(page, packet, submit=True, variant="slow_submit")
+    assert result.outcome == "submitted", result.error
+    assert "application submitted" in result.confirmation.lower()
+
+
+@pytest.mark.usefixtures("page")
+def test_a_posting_that_reads_applied_after_submit_confirms_it(page, packet):
+    """The first live auto run (2026-10-02): Submit kept spinning and no
+    confirmation showed, but the job page then read "Applied"."""
+    result = run(page, packet, submit=True, variant="no_card")
+    assert result.outcome == "submitted", result.error
+    assert result.confirmation == "Dice's job page now shows Applied"
+    assert js(page, "__submitted") is None, "the posting was opened again to check"
+
+
+@pytest.mark.usefixtures("page")
+def test_a_spinning_submit_with_no_applied_posting_stays_unconfirmed(page, packet, monkeypatch):
+    monkeypatch.setattr("jobagent.apply.handlers.dice.SUBMIT_WAIT_MS", 2_000)
+    monkeypatch.setattr(DiceHandler, "confirm_elsewhere", lambda self, page: None)
+    result = run(page, packet, submit=True, variant="no_card")
+    assert result.outcome == "unconfirmed"

@@ -177,6 +177,20 @@ def test_events_validate_and_record_the_previous_status(conn, job_id):
         store.add_event(conn, 999, to_status="rejected")
 
 
+def test_an_unconfirmed_send_marked_applied_by_hand_counts_as_sent(conn, job_id):
+    app_id = store.get_or_create_application(conn, job_id, mode="auto")
+    store.record_attempt(
+        conn, app_id, _result("unconfirmed"), mode="auto", handler="dice", started_at=utcnow()
+    )
+    assert store.get_application(conn, app_id)["submitted_at"] is None
+    store.add_event(conn, app_id, to_status="applied", note="job page shows Applied")
+    app = store.get_application(conn, app_id)
+    assert app["status"] == "applied" and app["submitted_at"] is not None
+    first = app["submitted_at"]
+    store.add_event(conn, app_id, to_status="applied")
+    assert store.get_application(conn, app_id)["submitted_at"] == first
+
+
 def test_listing_filters_by_derived_status_and_counts(conn):
     ids = []
     for n in range(3):

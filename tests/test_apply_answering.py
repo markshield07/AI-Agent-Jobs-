@@ -874,3 +874,25 @@ def test_a_required_box_to_process_personal_information_is_agreed_to_in_auto_mod
     )
     plan = answering.make_answerer(packet, completer=None, agree_to_terms=True)([field])
     assert fills(plan) == {"pi": True}
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "What is the address from which you plan on working?",
+        "Working address",
+        "Full address",
+    ],
+)
+def test_a_box_for_the_whole_address_gets_street_city_state_and_zip(packet, label):
+    packet.contact["location"] = "Menifee, CA, United States"
+    packet.answers = {"address": "29605 Rigging Way", "postal_code": "92584"}
+    plan = plan_fills([F("where", label, required=True)], packet)
+    assert fills(plan) == {"where": "29605 Rigging Way, Menifee, CA 92584"}
+
+
+def test_a_street_box_still_gets_the_street_alone(packet):
+    packet.contact["location"] = "Menifee, CA, United States"
+    packet.answers = {"address": "29605 Rigging Way", "postal_code": "92584"}
+    plan = plan_fills([F("street", "Street address", required=True)], packet)
+    assert fills(plan) == {"street": "29605 Rigging Way"}

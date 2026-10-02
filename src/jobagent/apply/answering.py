@@ -400,6 +400,14 @@ def answer_key_for(field: FormField, job: Mapping[str, Any] | None = None) -> st
     return key or question_key(field.label)
 
 
+# A single box that wants the whole postal address, not its street line: a
+# question about where one lives or will work, or "full/mailing/home address".
+_WHOLE_ADDRESS = re.compile(
+    r"\b(?:full|complete|mailing|home|residential|current|working)\s+address\b"
+    r"|\baddress\s+(?:from\s+)?(?:which|where)\b",
+    re.IGNORECASE,
+)
+
 _CONTACT_KEYS = frozenset(
     {
         "first_name",
@@ -573,6 +581,16 @@ class _Planner:
             and _key_of_text(name[2:] + "?") == key
         }
         return found.pop() if len(found) == 1 else None
+
+    def _place_part(self, key: str) -> str | None:
+        """City or state: the answer bank's, else that part of a location on
+        file that reads "City, State, ..."."""
+        value = self._bank(key)
+        if value is not None:
+            return value
+        parts = [p.strip() for p in (self.packet.contact.get("location") or "").split(",")]
+        index = 0 if key == "city" else 1
+        return parts[index] if len(parts) >= 2 and parts[index] else None
 
     def _bank(self, *keys: str) -> str | None:
         for key in keys:
@@ -792,6 +810,26 @@ class _Planner:
                 return
             if value is None:
                 value, source = contact.get("phone"), "contact"
+        elif key == "address" and _WHOLE_ADDRESS.search(field.label or ""):
+            # One box for the whole address ("the address from which you plan
+            # on working"): the street alone would read as half an answer.
+            street = self._bank("address")
+            value = (
+                ", ".join(
+                    p
+                    for p in (
+                        street,
+                        self._place_part("city"),
+                        " ".join(
+                            p for p in (self._place_part("state"), self._bank("postal_code")) if p
+                        ),
+                    )
+                    if p
+                )
+                if street
+                else None
+            )
+            source = "answer_bank"
         elif key in ("address", "address_line_2", "postal_code"):
             value = self._bank(key)
             source = "answer_bank"
@@ -808,10 +846,8 @@ class _Planner:
             value = self._bank(key)
             source = "answer_bank"
             if value is None:
-                parts = [p.strip() for p in (contact.get("location") or "").split(",")]
-                index = 0 if key == "city" else 1
-                if len(parts) >= 2 and parts[index]:
-                    value, source = parts[index], "contact"
+                value = self._place_part(key)
+                source = "contact" if value else source
         if value is None and key:
             value = self._bank(key)
             source = "answer_bank"

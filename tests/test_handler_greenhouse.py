@@ -259,3 +259,12 @@ def test_a_company_page_with_no_greenhouse_form_is_not_filled(page, packet, tmp_
     )
     assert result.outcome == "failed" and "no application form" in result.error
     assert page.input_value("#q") == ""
+
+
+def test_react_selects_required_decoy_is_not_read_as_a_question(page):
+    from jobagent.apply.browser.dom import discover_fields
+
+    page.goto(fixture_url())
+    fields = discover_fields(page)
+    assert not [f for f in fields if "select..." in (f.label or "").lower()]
+    assert [f for f in fields if f.label and f.label.startswith("Location")], "the combobox stays"

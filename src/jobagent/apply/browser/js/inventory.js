@@ -218,6 +218,13 @@
     if (tag === 'input' && ['hidden', 'submit', 'button', 'image', 'reset'].includes(type)) return;
     if (tag === 'button') return;
     if (isWrapper(el)) return;
+    // react-select's required decoy (Greenhouse's 2026 board): a see-through
+    // text input out of the tab order and hidden from screen readers, there
+    // only for the browser's own required check. The combobox beside it is
+    // the question; read as its own field it borrows the "Select..."
+    // placeholder for a label and can never be clicked.
+    if (tag === 'input' && !['radio', 'checkbox', 'file'].includes(type)
+        && el.getAttribute('aria-hidden') === 'true' && el.getAttribute('tabindex') === '-1') return;
     let hidden = isHidden(el);
     if (hidden && tag === 'input' && (type === 'radio' || type === 'checkbox')) {
       // A choice drawn over its input (a styled circle) is there if what

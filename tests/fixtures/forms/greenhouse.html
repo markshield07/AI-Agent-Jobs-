@@ -70,8 +70,16 @@
       <div class="field" id="location-field">
         <label for="candidate-location">Location (City) <span class="asterisk">*</span></label>
         <!-- react-select: the box lists nothing until something is typed. -->
-        <input type="text" id="candidate-location" class="select__input" role="combobox"
-               aria-autocomplete="list" aria-expanded="false" autocomplete="off" required>
+        <div style="position: relative">
+          <div class="select__placeholder" id="react-select-candidate-location-placeholder">Select...</div>
+          <input type="text" id="candidate-location" class="select__input" role="combobox"
+                 aria-autocomplete="list" aria-expanded="false" autocomplete="off" required>
+          <!-- react-select's own required decoy (job-boards.greenhouse.io, 2026):
+               see-through, out of the tab order, there only for the browser's
+               required check. -->
+          <input id="location-required" required tabindex="-1" aria-hidden="true" value=""
+                 style="opacity: 0; pointer-events: none; position: absolute; bottom: 0; left: 0; right: 0; width: 100%">
+        </div>
         <div class="select__menu hidden" id="location-menu"></div>
       </div>
 
@@ -239,7 +247,7 @@
     render(typed ? places.filter(function (p) { return p.toLowerCase().indexOf(typed.split(',')[0]) === 0; }) : []);
   });
   menu.addEventListener('click', function (e) {
-    if (e.target.classList.contains('select__option')) { loc.value = e.target.textContent; render([]); }
+    if (e.target.classList.contains('select__option')) { loc.value = e.target.textContent; document.getElementById('location-required').value = loc.value; render([]); }
   });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') render([]); });
 

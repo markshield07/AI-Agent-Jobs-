@@ -285,3 +285,21 @@ def test_an_application_that_was_never_submitted_still_counts(conn):
     found = candidates(conn)
     assert [c.application_id for c in found] == [app_id]
     assert found[0].since  # created_at stands in for submitted_at
+
+
+@pytest.mark.parametrize(
+    ("subject", "body"),
+    [
+        ("New jobs similar to Senior Backend Engineer at Acme Robotics", ""),
+        (
+            "Acme Robotics: Senior Backend Engineer",
+            "https://www.linkedin.com/comm/jobs/view/1?trk=eml-viewed_job_reminder_01-job_card",
+        ),
+        ("Jobs you may be interested in", "Senior Backend Engineer at Acme Robotics"),
+    ],
+)
+def test_a_job_alert_is_never_a_reply(subject, body):
+    alert = message(
+        from_addr="jobs-noreply@linkedin.com", from_name="Acme Robotics", subject=subject, body=body
+    )
+    assert match_message(alert, [candidate()]) is None

@@ -122,6 +122,13 @@ _HIRING = re.compile(
     r"interview\w*|recruit\w*|hiring|careers?|jobs?|openings?|requisition|r[ée]sum[ée]s?)\b",
     re.IGNORECASE,
 )
+_JOB_ALERT = re.compile(
+    r"\bnew jobs? (?:similar to|for you|matching)\b|\bjobs? you may (?:be interested in|like)\b"
+    r"|\brecommended jobs?\b|\bjob alert\b"
+    # LinkedIn names its templates in its links.
+    r"|viewed_job_reminder|job_alert|jobs_alert|jymbii",
+    re.IGNORECASE,
+)
 
 
 def normalise(text: str) -> str:
@@ -191,6 +198,12 @@ def is_automated_sender(address: str) -> bool:
     like `accounts.google.com`."""
     local, _, host = (address or "").lower().partition("@")
     return bool(_AUTOMATED_LOCAL.search(local) or _AUTOMATED_HOST.match(host))
+
+
+def is_job_alert(message: InboxMessage) -> bool:
+    """A board's digest of other jobs ("New jobs similar to ..."): it names a
+    title and company the user applied to, and is a reply to neither."""
+    return bool(_JOB_ALERT.search(f"{message.subject}\n{message.body}"))
 
 
 def about_hiring(message: InboxMessage) -> bool:
@@ -272,6 +285,8 @@ def score(message: InboxMessage, candidate: Candidate) -> tuple[float, list[str]
     """How much this message looks like a reply to this application."""
     if candidate.since and message.received_at and message.received_at < candidate.since:
         return 0.0, []  # it arrived before we applied, so it is not the reply
+    if is_job_alert(message):
+        return 0.0, []
 
     total, reasons = 0.0, []
     domain = message.sender_domain

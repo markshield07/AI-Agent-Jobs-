@@ -104,6 +104,25 @@ _TWO_LABEL_TLDS = frozenset({"co", "com", "org", "net", "gov", "edu", "ac"})
 
 _WORD = re.compile(r"[a-z0-9]+")
 
+# A company's own machines write about more than jobs: Google's account
+# "Security alert" comes from google.com too. Mail from such an address counts
+# the domain only when it is about hiring.
+_AUTOMATED_LOCAL = re.compile(
+    r"no-?reply|do-?not-?reply|notifications?|alerts?|security|accounts?|billing|"
+    r"mailer-daemon|postmaster|newsletters?|marketing|promo|updates?|support|info",
+    re.IGNORECASE,
+)
+_AUTOMATED_HOST = re.compile(
+    r"^(?:accounts?|security|notifications?|alerts?|billing|support|marketing|news|"
+    r"email|e-?mail|mail|info)\.",
+    re.IGNORECASE,
+)
+_HIRING = re.compile(
+    r"\b(?:applications?|applied|applying|applicants?|candida(?:te|cy)|positions?|roles?|"
+    r"interview\w*|recruit\w*|hiring|careers?|jobs?|openings?|requisition|r[ée]sum[ée]s?)\b",
+    re.IGNORECASE,
+)
+
 
 def normalise(text: str) -> str:
     return " ".join(_WORD.findall((text or "").lower()))
@@ -165,6 +184,17 @@ def company_matches_domain(company: str, domain: str) -> bool:
     if squashed == label:
         return True
     return len(tokens[0]) >= 4 and (tokens[0] == label or tokens[0] in label.split("-"))
+
+
+def is_automated_sender(address: str) -> bool:
+    """An address no person writes from: `no-reply@`, `security@`, or a host
+    like `accounts.google.com`."""
+    local, _, host = (address or "").lower().partition("@")
+    return bool(_AUTOMATED_LOCAL.search(local) or _AUTOMATED_HOST.match(host))
+
+
+def about_hiring(message: InboxMessage) -> bool:
+    return bool(_HIRING.search(f"{message.subject} {message.body}"))
 
 
 def title_tokens(title: str) -> list[str]:
@@ -245,6 +275,9 @@ def score(message: InboxMessage, candidate: Candidate) -> tuple[float, list[str]
 
     total, reasons = 0.0, []
     domain = message.sender_domain
+    if domain and is_automated_sender(message.from_addr) and not about_hiring(message):
+        # The company's own robot, writing about something else.
+        domain = ""
     if domain and not is_ats_domain(domain):
         # A mail from the company's own domain is on its own enough to file:
         # a recruiter's reply is often two lines with neither the company's

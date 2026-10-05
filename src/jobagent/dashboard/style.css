@@ -399,3 +399,7 @@ details.full[open] summary::after { content: " ↑"; }
 }
 .nowrap { white-space: nowrap; }
 .job-grid .job-card { grid-template-rows: auto auto 1fr auto; }
+.explain { font-size: 14px; line-height: 1.5; margin: 0 0 10px; padding: 10px 12px; border-radius: 10px;
+  background: var(--accent-soft, #e8f0fe); }
+.tailored { font-size: 13px; margin: 6px 0 10px; }
+td.doc-cell a { white-space: nowrap; }

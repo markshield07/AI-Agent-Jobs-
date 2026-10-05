@@ -51,8 +51,10 @@ rendered from the facts, so cite only the ids.
 - Three to five bullets per entry, most relevant first.
 - Skills: the skill facts most relevant to the posting first, only skill facts, only ids.
 - Education and credentials: only ids of facts of that kind.
-- Summary: two or three sentences, or empty. It is checked against every fact, so it may state \
-only what the facts state.
+- Summary: two or three sentences written for this posting, not a general one: lead with the \
+experience that answers the posting's main requirements, in the posting's own terms wherever a \
+fact supports them, so it reads differently from one posting to the next. It is checked against \
+every fact, so it may state only what the facts state; leave it empty only when no fact fits.
 - Leave any section empty when nothing fits. An empty section is always better than an invented \
 line.
 - Set emphasis to one sentence on what this version leads with and why. It is not rendered."""

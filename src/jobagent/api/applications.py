@@ -160,7 +160,11 @@ def get_applications(
 ) -> list[dict[str, Any]]:
     if status is not None and status not in STATUSES:
         raise HTTPException(400, f"Unknown status {status!r}. One of: {', '.join(STATUSES)}.")
-    return store.list_applications(db.connection(), status=status, limit=limit, offset=offset)
+    conn = db.connection()
+    apps = store.list_applications(conn, status=status, limit=limit, offset=offset)
+    for app in apps:
+        app["documents"] = _documents(conn, app.get("variant_id"))
+    return apps
 
 
 @router.get("/applications/counts")
@@ -189,9 +193,10 @@ def get_application(application_id: int, db: DbDep) -> dict[str, Any]:
     return app
 
 
-def _documents(conn, variant_id: int | None) -> dict[str, str | None]:
-    """Links to the resume and cover letter made for this application, where
-    they exist: what the dashboard shows as "Resume sent" and "Cover letter"."""
+def _documents(conn, variant_id: int | None) -> dict[str, Any]:
+    """The resume and cover letter tailored for this application, where they
+    exist, and how far the tailoring moved: the share of the posting's
+    keywords the tailored resume covers against the uploaded one's."""
     variant = variants.get_variant(conn, variant_id) if variant_id else None
     if variant is None:
         return {"resume": None, "cover_letter": None}
@@ -201,6 +206,9 @@ def _documents(conn, variant_id: int | None) -> dict[str, str | None]:
         "cover_letter": (
             f"/api/variants/{variant.id}/cover-letter" if variant.cover_letter is not None else None
         ),
+        "coverage": variant.keyword_coverage,
+        "base_coverage": variant.base_coverage,
+        "emphasis": variant.content.emphasis or None,
     }
 
 

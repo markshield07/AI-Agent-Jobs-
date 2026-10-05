@@ -185,17 +185,21 @@ def test_one_application_links_the_resume_and_letter_made_for_it(client, conn, t
         Variant(
             job_id=job_id,
             base_id=None,
-            content=TailoredResume(),
+            content=TailoredResume(emphasis="Leads with data center work."),
             cover_letter=letter,
             pdf_path=str(pdf),
+            keyword_coverage=0.36,
+            base_coverage=0.28,
         ),
     )
     app_id = store.get_or_create_application(conn, job_id, mode="dry_run", variant_id=vid)
     docs = client.get(f"/api/applications/{app_id}").json()["documents"]
-    assert docs == {
-        "resume": f"/api/variants/{vid}/pdf",
-        "cover_letter": f"/api/variants/{vid}/cover-letter",
-    }
+    assert docs["resume"] == f"/api/variants/{vid}/pdf"
+    assert docs["cover_letter"] == f"/api/variants/{vid}/cover-letter"
+    assert docs["coverage"] == 0.36 and docs["base_coverage"] == 0.28
+    assert docs["emphasis"] == "Leads with data center work."
+    listed = client.get("/api/applications").json()
+    assert next(a for a in listed if a["id"] == app_id)["documents"]["resume"] == docs["resume"]
     assert client.get(docs["resume"]).content == b"%PDF-1.4"
     assert "I build networks." in client.get(docs["cover_letter"]).text
 

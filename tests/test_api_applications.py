@@ -166,6 +166,43 @@ def test_one_application_comes_with_its_attempts_and_events(client, conn):
     assert client.get("/api/applications/999").status_code == 404
 
 
+def test_one_application_links_the_resume_and_letter_made_for_it(client, conn, tmp_path):
+    from jobagent.tailor import store as variants
+    from jobagent.tailor.models import CoverLetter, TailoredResume, Variant
+
+    job_id = _job(conn)
+    bare = store.get_or_create_application(conn, job_id, mode="dry_run", ats="lever")
+    assert client.get(f"/api/applications/{bare}").json()["documents"] == {
+        "resume": None,
+        "cover_letter": None,
+    }
+
+    pdf = tmp_path / "resume.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    letter = CoverLetter(paragraphs=["Dear Acme,", "I build networks.", "Mark"])
+    vid = variants.save_variant(
+        conn,
+        Variant(
+            job_id=job_id,
+            base_id=None,
+            content=TailoredResume(),
+            cover_letter=letter,
+            pdf_path=str(pdf),
+        ),
+    )
+    app_id = store.get_or_create_application(conn, job_id, mode="dry_run", variant_id=vid)
+    docs = client.get(f"/api/applications/{app_id}").json()["documents"]
+    assert docs == {
+        "resume": f"/api/variants/{vid}/pdf",
+        "cover_letter": f"/api/variants/{vid}/cover-letter",
+    }
+    assert client.get(docs["resume"]).content == b"%PDF-1.4"
+    assert "I build networks." in client.get(docs["cover_letter"]).text
+
+    pdf.unlink()
+    assert client.get(f"/api/applications/{app_id}").json()["documents"]["resume"] is None
+
+
 def test_a_screenshot_is_served_when_there_is_one(client, conn, tmp_path):
     job_id = _job(conn)
     app_id = store.get_or_create_application(conn, job_id, mode="dry_run", ats="lever")

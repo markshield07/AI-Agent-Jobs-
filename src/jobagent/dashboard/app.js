@@ -519,6 +519,16 @@
 
   const narrow = () => window.matchMedia('(max-width: 860px)').matches;
 
+  // The resume and cover letter tailored for this job, as sent (or to be sent).
+  function documentLinks(app) {
+    const docs = app.documents || {};
+    const sent = Boolean(app.submitted_at);
+    return [
+      docs.resume && el('a', { class: 'pill doc', href: docs.resume, target: '_blank', rel: 'noopener' }, sent ? 'Resume sent ↗' : 'Resume ↗'),
+      docs.cover_letter && el('a', { class: 'pill doc', href: docs.cover_letter, target: '_blank', rel: 'noopener' }, 'Cover letter ↗'),
+    ].filter(Boolean);
+  }
+
   async function openApp(id) {
     state.selectedApp = id;
     for (const tr of document.querySelectorAll('#app-table tbody tr')) tr.classList.remove('selected');
@@ -532,7 +542,8 @@
       el('div', { class: 'brief-pills' }, badge(app.status),
         el('span', { class: 'pill' }, app.submitted_at ? `Sent ${when(app.submitted_at)} via ${siteName(app.ats)}` : `${tries} attempt${tries === 1 ? '' : 's'}, not sent`),
         placePills(app.job),
-        el('a', { class: 'pill', href: app.job.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open posting ↗')),
+        el('a', { class: 'pill', href: app.job.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open posting ↗'),
+        ...documentLinks(app)),
     ];
     if (last.error) parts.push(el('div', { class: 'error' }, last.error));
     if (last.confirmation) parts.push(el('p', { class: 'sub' }, `The page said: “${last.confirmation}”`));

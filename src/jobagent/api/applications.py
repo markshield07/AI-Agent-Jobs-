@@ -30,6 +30,7 @@ from jobagent.apply.pipeline import (
 )
 from jobagent.discovery import brief
 from jobagent.discovery import store as jobs_store
+from jobagent.tailor import store as variants
 
 log = logging.getLogger(__name__)
 
@@ -184,7 +185,23 @@ def get_application(application_id: int, db: DbDep) -> dict[str, Any]:
         app["job"]["highlights"] = brief.highlights(job.get("description"))
     app["attempts"] = store.list_attempts(conn, application_id)
     app["events"] = store.list_events(conn, application_id)
+    app["documents"] = _documents(conn, app.get("variant_id"))
     return app
+
+
+def _documents(conn, variant_id: int | None) -> dict[str, str | None]:
+    """Links to the resume and cover letter made for this application, where
+    they exist: what the dashboard shows as "Resume sent" and "Cover letter"."""
+    variant = variants.get_variant(conn, variant_id) if variant_id else None
+    if variant is None:
+        return {"resume": None, "cover_letter": None}
+    has_pdf = bool(variant.pdf_path and Path(variant.pdf_path).is_file())
+    return {
+        "resume": f"/api/variants/{variant.id}/pdf" if has_pdf else None,
+        "cover_letter": (
+            f"/api/variants/{variant.id}/cover-letter" if variant.cover_letter is not None else None
+        ),
+    }
 
 
 @router.get("/applications/{application_id}/screenshot")

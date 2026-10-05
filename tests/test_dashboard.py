@@ -292,3 +292,20 @@ def test_the_resume_tab_lists_your_skills_and_turns_one_off(page, server):
     page.click("#skills li:has-text('Python') button")
     page.wait_for_function("document.querySelector('#skill-count').textContent === '(1)'")
     assert "Python" not in page.inner_text("#skills")
+
+
+@pytest.mark.usefixtures("page")
+def test_an_application_links_the_resume_and_letter_sent(page, server):
+    app_id = server["apps"][0]
+
+    def with_documents(route):
+        body = route.fetch().json()
+        body["documents"] = {"resume": "/api/variants/7/pdf", "cover_letter": None}
+        route.fulfill(json=body)
+
+    page.route(f"**/api/applications/{app_id}", with_documents)
+    page.goto(server["url"] + f"/#applications?id={app_id}")
+    link = page.wait_for_selector("#app-detail a.doc")
+    assert link.inner_text().startswith("Resume sent")
+    assert link.get_attribute("href") == "/api/variants/7/pdf"
+    assert page.locator("#app-detail a.doc").count() == 1, "no letter, no letter link"

@@ -193,7 +193,8 @@ def test_system_prompt_order_and_rules():
         "never-claim terms must not appear anywhere",
         "Three to five bullets per entry",
         "only skill facts",
-        "two or three sentences, or empty",
+        "two or three sentences written for this posting, not a general one",
+        "it may state only what the facts state",
         "Set emphasis to one sentence",
     ):
         assert phrase in system

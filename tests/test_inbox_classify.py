@@ -189,3 +189,39 @@ def test_a_rules_reading_under_the_bar_goes_to_the_model():
         message("Update", "The position has been filled."), completer=completer, min_confidence=0.6
     )
     assert completer.calls == 1 and reading.label == "rejected" and reading.source == "model"
+
+
+# LinkedIn's "Your update from <company>", as the PC's inbox received it: the
+# words say nothing, the template its links name says rejected.
+_LINKEDIN_UPDATE = (
+    "Your update from HCLTech\n"
+    "View job: https://www.linkedin.com/comm/jobs/view/4300000000/"
+    "?trackingId=abc&trk=eml-email_jobs_application_rejected_01-job_card-0-view_job"
+)
+
+
+def test_linkedins_rejected_template_is_read_as_a_rejection():
+    reading = read_message(
+        message("Your application to Network Engineer at HCLTech", _LINKEDIN_UPDATE)
+    )
+    assert reading.label == "rejected" and reading.source == "rules"
+    assert reading.confidence >= 0.6
+
+
+def test_linkedins_other_templates_are_not_rejections():
+    body = _LINKEDIN_UPDATE.replace("application_rejected", "application_viewed")
+    assert read_by_rules(message("Your application was viewed by HCLTech", body)).label != (
+        "rejected"
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Thank you for applying Mark. To continue, start your Job Screening Chat now.",
+        "Thanks for applying! Please answer a few quick questions using Start Chat below.",
+    ],
+)
+def test_a_screening_chat_invitation_is_screening(body):
+    reading = read_message(message("Thank you for applying", body))
+    assert reading.label == "screening"

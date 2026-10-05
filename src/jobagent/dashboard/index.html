@@ -110,7 +110,7 @@
     <div class="split">
       <div class="card list-card">
         <table class="table rows" id="app-table">
-          <thead><tr><th>Job</th><th>Pay</th><th>Status</th><th>Sent</th></tr></thead>
+          <thead><tr><th>Job</th><th>Pay</th><th>Status</th><th>Sent</th><th>Resume</th></tr></thead>
           <tbody></tbody>
         </table>
         <p class="empty" id="app-empty" hidden>No applications yet. Queue a few jobs, then press Apply now.</p>
@@ -138,12 +138,13 @@
     <div class="page-head"><h1>Resume &amp; answers</h1></div>
     <div class="grid two">
       <article class="card">
-        <header class="card-head"><h2>Resume</h2></header>
+        <header class="card-head"><h2>Upload your resume</h2></header>
+        <p class="explain">Upload your resume here, once. For every job, the agent writes a new copy tailored to that posting from it: the summary, the order of your skills and the wording of each line change per job, and nothing is invented. The tailored copy is the one each application sends; open it from the Resume link on any application.</p>
         <p class="sub" id="resume-current">No resume uploaded yet.</p>
         <form id="resume-form" class="stack">
           <input type="file" name="file" accept=".pdf,.docx,.txt,.md" required>
           <label class="check"><input type="checkbox" name="reparse" value="true"> Read it again even if it is already on file</label>
-          <button type="submit">Upload and parse</button>
+          <button type="submit" class="primary">Upload resume</button>
         </form>
       </article>
 

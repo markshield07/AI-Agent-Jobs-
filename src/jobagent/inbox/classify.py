@@ -44,6 +44,10 @@ _RULES: dict[str, list[tuple[str, float]]] = {
         (r"not a (?:fit|match) (?:for|at) this time", NORMAL),
         (r"keep your (?:details|r[eé]sum[eé]|cv) on file", WEAK),
         (r"wish you (?:the best|well) in your (?:job )?search", WEAK),
+        # LinkedIn's "Your update from <company>": its links name the template
+        # LinkedIn sends when the employer marks the application not selected,
+        # whether or not the text says so.
+        (r"email_jobs_application_rejected", STRONG),
     ],
     "offer": [
         (r"(?:pleased|excited|delighted|happy) to (?:extend|offer|make you)", STRONG),
@@ -71,6 +75,12 @@ _RULES: dict[str, list[tuple[str, float]]] = {
         (r"available for a (?:quick |short |brief )?(?:call|chat)", NORMAL),
         (r"(?:hear|learn) more about your (?:background|experience)", NORMAL),
         (r"\byour (?:application|profile) (?:stood out|caught)", NORMAL),
+        # A staffing firm's chatbot screening ("start your Job Screening Chat").
+        (r"screening chat|start (?:the |your )?(?:job )?(?:screening )?chat\b", STRONG),
+        (
+            r"answer (?:a few|some|these|the following) (?:quick |short )?(?:screening )?questions",
+            NORMAL,
+        ),
     ],
     "withdrawn": [
         (r"(?:you|your application) (?:have |has )?(?:been )?withdrawn", STRONG),

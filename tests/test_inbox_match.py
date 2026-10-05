@@ -117,6 +117,47 @@ def test_the_jobs_own_domain_counts_even_when_the_name_does_not():
     assert total >= THRESHOLD and "sender domain is the company's" in reasons
 
 
+# What Google sent when an app password was made for the inbox poller: from
+# the company's own domain, and nothing to do with the application there.
+_SECURITY_ALERT = {
+    "from_addr": "no-reply@accounts.google.com",
+    "from_name": "Google",
+    "subject": "Security alert",
+    "body": "App password created. You received this email to let you know about "
+    "important changes to your Google Account and services.",
+}
+
+
+def test_a_companys_account_mail_is_not_a_reply_to_the_application():
+    google = candidate(company="Google", title="Data Center Operations Manager")
+    assert match_message(message(**_SECURITY_ALERT), [google]) is None
+
+
+@pytest.mark.parametrize(
+    ("address", "company"),
+    [
+        ("no-reply@accounts.google.com", "Google"),
+        ("security@acmerobotics.com", "Acme Robotics"),
+        ("alerts@acmerobotics.com", "Acme Robotics"),
+    ],
+)
+def test_an_automated_address_counts_its_domain_only_when_the_mail_is_about_hiring(
+    address, company
+):
+    spot = candidate(company=company)
+    unrelated = message(from_addr=address, subject="Your invoice", body="Thanks for paying.")
+    assert "sender domain matches the company" not in score(unrelated, spot)[1]
+    hiring = message(from_addr=address, subject="Your application", body="Thanks for applying.")
+    assert "sender domain matches the company" in score(hiring, spot)[1]
+
+
+def test_a_person_at_the_company_still_matches_on_the_domain_alone():
+    two_lines = message(
+        from_addr="dana@acmerobotics.com", subject="Quick chat?", body="Free Thursday?"
+    )
+    assert match_message(two_lines, [candidate()]) is not None
+
+
 def test_an_ats_relay_needs_the_company_and_the_role_in_the_message():
     from_ats = message(
         from_addr="no-reply@us.greenhouse-mail.io",
@@ -244,3 +285,21 @@ def test_an_application_that_was_never_submitted_still_counts(conn):
     found = candidates(conn)
     assert [c.application_id for c in found] == [app_id]
     assert found[0].since  # created_at stands in for submitted_at
+
+
+@pytest.mark.parametrize(
+    ("subject", "body"),
+    [
+        ("New jobs similar to Senior Backend Engineer at Acme Robotics", ""),
+        (
+            "Acme Robotics: Senior Backend Engineer",
+            "https://www.linkedin.com/comm/jobs/view/1?trk=eml-viewed_job_reminder_01-job_card",
+        ),
+        ("Jobs you may be interested in", "Senior Backend Engineer at Acme Robotics"),
+    ],
+)
+def test_a_job_alert_is_never_a_reply(subject, body):
+    alert = message(
+        from_addr="jobs-noreply@linkedin.com", from_name="Acme Robotics", subject=subject, body=body
+    )
+    assert match_message(alert, [candidate()]) is None

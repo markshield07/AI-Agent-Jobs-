@@ -500,7 +500,10 @@
             el('div', { class: 'job-meta' }, [app.job.company, p.where, siteName(app.ats)].filter(Boolean).join(' · '))))),
         el('td', { class: 'pay-cell' + (pay ? '' : ' none') }, pay || 'Not listed'),
         el('td', {}, badge(app.status)),
-        el('td', { class: 'job-meta nowrap' }, app.submitted_at ? when(app.submitted_at) : 'not sent'));
+        el('td', { class: 'job-meta nowrap' }, app.submitted_at ? when(app.submitted_at) : 'not sent'),
+        el('td', { class: 'doc-cell' }, (app.documents || {}).resume
+          ? el('a', { href: app.documents.resume, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, 'PDF ↗')
+          : el('span', { class: 'job-meta' }, '–')));
     }));
     document.getElementById('app-empty').hidden = apps.length > 0;
     const wanted = new URLSearchParams(location.hash.split('?')[1] || '').get('id');
@@ -519,6 +522,26 @@
 
   const narrow = () => window.matchMedia('(max-width: 860px)').matches;
 
+  // The resume and cover letter tailored for this job, as sent (or to be sent).
+  function documentLinks(app) {
+    const docs = app.documents || {};
+    const sent = Boolean(app.submitted_at);
+    return [
+      docs.resume && el('a', { class: 'pill doc', href: docs.resume, target: '_blank', rel: 'noopener' }, sent ? 'Resume sent ↗' : 'Resume ↗'),
+      docs.cover_letter && el('a', { class: 'pill doc', href: docs.cover_letter, target: '_blank', rel: 'noopener' }, 'Cover letter ↗'),
+    ].filter(Boolean);
+  }
+
+  // How the resume was tailored for this job: the posting's keywords it covers
+  // against your uploaded resume, and what it leads with.
+  function tailoring(docs) {
+    if (docs.coverage === null || docs.coverage === undefined) return null;
+    const vs = docs.base_coverage === null || docs.base_coverage === undefined ? '' : ` (your uploaded resume: ${pct(docs.base_coverage)})`;
+    return el('p', { class: 'sub tailored' },
+      `Resume tailored for this job: covers ${pct(docs.coverage)} of the posting's keywords${vs}.`,
+      docs.emphasis ? el('br') : null, docs.emphasis || null);
+  }
+
   async function openApp(id) {
     state.selectedApp = id;
     for (const tr of document.querySelectorAll('#app-table tbody tr')) tr.classList.remove('selected');
@@ -532,8 +555,11 @@
       el('div', { class: 'brief-pills' }, badge(app.status),
         el('span', { class: 'pill' }, app.submitted_at ? `Sent ${when(app.submitted_at)} via ${siteName(app.ats)}` : `${tries} attempt${tries === 1 ? '' : 's'}, not sent`),
         placePills(app.job),
-        el('a', { class: 'pill', href: app.job.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open posting ↗')),
+        el('a', { class: 'pill', href: app.job.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open posting ↗'),
+        ...documentLinks(app)),
     ];
+    const tailoredLine = tailoring(app.documents || {});
+    if (tailoredLine) parts.push(tailoredLine);
     if (last.error) parts.push(el('div', { class: 'error' }, last.error));
     if (last.confirmation) parts.push(el('p', { class: 'sub' }, `The page said: “${last.confirmation}”`));
 

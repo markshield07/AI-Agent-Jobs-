@@ -58,6 +58,7 @@ CAPTCHA_JS = script("captcha.js")
 LOGIN_WALL_JS = script("login_wall.js")
 ERRORS_JS = script("errors.js")
 CLICK_OPTION_JS = script("click_option.js")
+COMBOBOX_STATE_JS = script("combobox_state.js")
 MARK_FORM_JS = script("mark_form.js")
 FORM_SCOPE = '[data-jobagent-form="1"]'
 BODY_TEXT_JS = "() => (document.body ? document.body.innerText : '').slice(0, 40000)"
@@ -136,7 +137,51 @@ def _native_select(page: Any, field: FormField, values: list[str]) -> None:
     )
 
 
+def _combobox_state(page: Any, field: FormField) -> dict[str, Any] | None:
+    try:
+        return page.evaluate(COMBOBOX_STATE_JS, field.selector)
+    except Exception:
+        return None
+
+
+def _combobox_kept(page: Any, field: FormField) -> bool:
+    """Whether a react-select box that started empty now holds a choice: its
+    placeholder gone and nothing left typed, or a chosen value drawn."""
+    state = _combobox_state(page, field)
+    if state is None:
+        return True
+    return bool(state["chosen"] or (not state["placeholder"] and not state["typed"]))
+
+
 def _combobox_pick(page: Any, field: FormField, value: str) -> None:
+    """Pick, then make sure a react-select box kept it: a click it ignores
+    leaves the box empty, and only the site's Submit would say so (Greenhouse's
+    phone Country). A box that drew a placeholder before is checked after; a
+    pick it did not keep is tried again by typing and Enter, react-select's own
+    way to choose the option it highlights."""
+    before = _combobox_state(page, field)
+    _combobox_pick_once(page, field, value)
+    if not (before and before["placeholder"]):
+        return
+    page.wait_for_timeout(SETTLE_MS)
+    if _combobox_kept(page, field):
+        return
+    log.info("%s: the pick of %r did not stay; typing it and pressing Enter", field.key, value)
+    control = page.locator(field.selector).first
+    try:
+        control.click(timeout=3000)
+        control.fill(value, timeout=2000)
+        page.wait_for_timeout(SETTLE_MS + 300)
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(SETTLE_MS)
+    except Exception as exc:
+        log.debug("%s: typing the choice failed: %s", field.key, exc)
+    if not _combobox_kept(page, field):
+        page.keyboard.press("Escape")
+        raise LookupError(f"picked {value!r} but the box kept no choice")
+
+
+def _combobox_pick_once(page: Any, field: FormField, value: str) -> None:
     """Open the combobox, narrow it by typing, click the matching option."""
     control = page.locator(field.selector).first
     control.scroll_into_view_if_needed(timeout=3000)

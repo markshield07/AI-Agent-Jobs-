@@ -23,9 +23,10 @@ from jobagent.api.models import (
 )
 from jobagent.config import Settings
 from jobagent.db.database import Database
+from jobagent.llm.backend import LLMError
 from jobagent.resume import facts as fact_store
 from jobagent.resume.extract import EmptyResume, UnsupportedResume
-from jobagent.resume.intake import ingest_resume, latest_base
+from jobagent.resume.intake import ResumeNotRead, ingest_resume, latest_base
 
 router = APIRouter(prefix="/api")
 
@@ -90,6 +91,12 @@ def upload_resume(
         )
     except (UnsupportedResume, EmptyResume) as exc:
         raise HTTPException(400, str(exc)) from exc
+    except ResumeNotRead as exc:
+        raise HTTPException(502, str(exc)) from exc
+    except LLMError as exc:
+        raise HTTPException(
+            502, f"The resume was saved, but the model could not read it: {exc}"
+        ) from exc
 
     return UploadOut(
         base_id=result.base_id,

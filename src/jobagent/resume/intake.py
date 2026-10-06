@@ -15,6 +15,11 @@ from jobagent.resume.extract import content_sha, extract_text, suffix_of
 from jobagent.resume.facts import add_facts
 
 
+class ResumeNotRead(RuntimeError):
+    """The file was stored, but reading it gave no facts (a model call that
+    came back empty). The facts on file are left as they were."""
+
+
 @dataclass(slots=True)
 class IntakeResult:
     base_id: int
@@ -74,7 +79,14 @@ def ingest_resume(
         return IntakeResult(base_id, filename, [], already_uploaded=True)
 
     parsed = resume_parser.parse_resume(text, completer=completer or resolve_backend(settings))
-    fact_ids = add_facts(conn, resume_parser.to_facts(parsed, base_id=base_id))
+    facts = resume_parser.to_facts(parsed, base_id=base_id)
+    if not facts:
+        # Saying "already on file" here would hide that nothing was read.
+        raise ResumeNotRead(
+            f"{filename} was saved, but reading it gave no facts. Upload it again to retry; "
+            "your current facts are unchanged."
+        )
+    fact_ids = add_facts(conn, facts)
     if fact_ids:
         with transaction(conn):
             conn.execute(

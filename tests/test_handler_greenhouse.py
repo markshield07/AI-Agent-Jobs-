@@ -59,6 +59,7 @@ def packet(tmp_path) -> Packet:
             "website": "https://markshield.dev",
         },
         answers={
+            "country": "United States",
             "work_authorization": "Yes",
             "q:what draws you to northwind analytics": "Your warehouse work is the reason.",
         },
@@ -155,7 +156,10 @@ def test_a_dry_run_fills_the_form_and_leaves_it_unsent(page, packet, tmp_path):
     on_page = page.evaluate(
         """() => ({
             first: document.getElementById('first_name').value,
-            location: document.getElementById('candidate-location').value,
+            location: document.getElementById('candidate-location')
+                .closest('.select__container').getAttribute('data-chosen'),
+            country: document.getElementById('country')
+                .closest('.select__container').getAttribute('data-chosen'),
             resume: document.getElementById('resume').files[0].name,
             cover: document.getElementById('cover_letter').files[0].name,
             auth: document.querySelector('[name$="[3][boolean_value]"]').value,
@@ -165,6 +169,7 @@ def test_a_dry_run_fills_the_form_and_leaves_it_unsent(page, packet, tmp_path):
     )
     assert on_page["first"] == "Mark"
     assert on_page["location"] == "Austin, TX, USA", "the typeahead's own suggestion is taken"
+    assert on_page["country"] == "United States +1", "a click the box ignored is chosen by Enter"
     assert on_page["resume"] == "mark-shield.pdf" and on_page["cover"].endswith("letter.pdf")
     assert on_page["auth"] == "1", "the option's value, not its text, goes to the form"
     assert on_page["gender"] == "Decline To Self Identify"
@@ -226,6 +231,7 @@ def test_submitting_reads_the_confirmation(page, packet):
     assert record["job_application[first_name]"] == "Mark"
     assert record["job_application[resume]"] == "mark-shield.pdf"
     assert record["job_application[answers_attributes][3][boolean_value]"] == "1"
+    assert record["job_application[country]"] == "United States +1", "the phone's Country is kept"
 
 
 def test_a_verification_code_after_the_button_is_blocked(page, packet):

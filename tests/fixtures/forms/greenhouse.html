@@ -13,7 +13,9 @@
 
   Variants, chosen with ?variant=...:
     apply_button  the form sits behind a#apply_button, as the older layout does
-    security      after the button the board asks for the code it emailed (#security-input-0)
+    security      after the button (greyed out for a moment) the board asks for the
+                  code it emailed: eight boxes #security-input-0..7 above the button,
+                  then Submit again; the code is ?code=, hWze7RPl by default
     needs_input   adds a required salary question that nothing on file answers
     error         the submit shows a field error in #application_form .error
 -->
@@ -34,7 +36,7 @@
   .select__option { padding: 4px 8px; cursor: pointer; }
   .error { color: #b3261e; margin: 8px 0; }
   #submit_app { padding: 10px 18px; background: #24a47f; color: #fff; border: 0; cursor: pointer; }
-  #security-modal { border: 1px solid #ccc; padding: 16px; margin-top: 16px; }
+  #security-fields input { width: 2em; text-align: center; }
 </style>
 </head>
 <body>
@@ -208,17 +210,23 @@
       <label><input type="checkbox" id="marketing_opt_in" name="job_application[marketing_opt_in]"> Keep me updated about future roles at Northwind Analytics.</label>
     </div>
 
+    <div id="security-fields" class="hidden">
+      <p>We sent a security code to your email. Enter it below, then submit again.</p>
+      <input type="text" id="security-input-0" maxlength="1" aria-label="Security code character 1">
+      <input type="text" id="security-input-1" maxlength="1" aria-label="Security code character 2">
+      <input type="text" id="security-input-2" maxlength="1" aria-label="Security code character 3">
+      <input type="text" id="security-input-3" maxlength="1" aria-label="Security code character 4">
+      <input type="text" id="security-input-4" maxlength="1" aria-label="Security code character 5">
+      <input type="text" id="security-input-5" maxlength="1" aria-label="Security code character 6">
+      <input type="text" id="security-input-6" maxlength="1" aria-label="Security code character 7">
+      <input type="text" id="security-input-7" maxlength="1" aria-label="Security code character 8">
+    </div>
+
     <div class="error hidden" id="form-error"></div>
     <div class="g-recaptcha" data-sitekey="6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI" data-size="invisible"></div>
     <button type="submit" id="submit_app">Submit Application</button>
   </form>
 
-  <div id="security-modal" class="hidden">
-    <h3>Confirm your email</h3>
-    <p>We sent a code to your email address. Enter it to finish your application.</p>
-    <input type="text" id="security-input-0" maxlength="6" aria-label="Verification code">
-    <button type="button" id="security-submit">Confirm</button>
-  </div>
 
   <div id="application_confirmation" class="hidden">
     <h3>Thank you for applying</h3>
@@ -331,8 +339,21 @@
     });
     window.__submitted = record;
     if (variant === 'security') {
-      document.getElementById('security-modal').classList.remove('hidden');
-      return;
+      var boxes = document.getElementById('security-fields');
+      var button = document.getElementById('submit_app');
+      if (boxes.classList.contains('hidden')) {
+        button.disabled = true;
+        setTimeout(function () { button.disabled = false; boxes.classList.remove('hidden'); }, 1500);
+        return;
+      }
+      var typed = Array.prototype.map.call(boxes.querySelectorAll('input'), function (b) { return b.value; }).join('');
+      var expected = new URLSearchParams(location.search).get('code') || 'hWze7RPl';
+      if (typed !== expected) {
+        errorBox.textContent = 'Incorrect security code.';
+        errorBox.classList.remove('hidden');
+        return;
+      }
+      window.__code = typed;
     }
     form.classList.add('hidden');
     document.getElementById('application_confirmation').classList.remove('hidden');

@@ -7,19 +7,23 @@ application: hWze7RPl"). lordvacuum/job-agent reads it from the mailbox when it
 has one; so does this. The mailbox is the one the inbox poller already reads,
 opened read-only, and the code is used once, on the page that asked for it.
 
-A code is taken only from a mail that arrived after the button was pressed
-(less a minute of clock difference), names the company when its subject names
-one, and has not been used already in this run, so three applications to the
-same company one after another each get their own.
+A code is taken only from a mail that was not in the inbox when the button
+was pressed, arrived after it (less a minute of clock difference), names the
+company when its subject names one, and has not been used before: the used
+ones are kept in the data folder, so applications to the same company one
+after another, each its own command, each get their own. When several new
+mails qualify, the one naming the job's title wins, else the first to arrive.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .mailbox import InboxNotConfigured, Mailbox, MailboxError, open_mailbox
@@ -81,24 +85,41 @@ def _received(message: InboxMessage) -> datetime | None:
 
 
 def find_code(
-    messages: Iterable[InboxMessage], *, company: str = "", after: datetime
+    messages: Iterable[InboxMessage],
+    *,
+    company: str = "",
+    after: datetime,
+    skip: Iterable[str] = (),
+    title: str = "",
 ) -> tuple[str, str] | None:
-    """(code, message id) from the newest unused code mail since `after`."""
+    """(code, message id) from the code mail that answers a press at `after`.
+
+    Mails in `skip` (already used, or already there before the press) never
+    count. Of the rest, one naming the job's title wins; otherwise the first
+    to arrive, since the press that asked for it came first.
+    """
     since = after - CLOCK_SKEW
-    found: list[tuple[datetime, str, str]] = []
+    skipped = set(skip) | _USED
+    found: list[tuple[bool, datetime, str, str]] = []
     for message in messages:
-        if message.message_id in _USED:
+        if message.message_id in skipped:
             continue
         when = _received(message)
         if when is None or when < since:
             continue
         code = code_in(message, company)
         if code:
-            found.append((when, code, message.message_id))
+            named = bool(title) and title.strip().lower() in message.body.lower()
+            found.append((not named, when, code, message.message_id))
     if not found:
         return None
-    _, code, message_id = max(found)
+    _, _, code, message_id = min(found)
     return code, message_id
+
+
+def code_mail_ids(messages: Iterable[InboxMessage], company: str = "") -> set[str]:
+    """The ids of the code mails in `messages`."""
+    return {m.message_id for m in messages if code_in(m, company)}
 
 
 def wait_for_code(
@@ -106,42 +127,131 @@ def wait_for_code(
     *,
     company: str = "",
     after: datetime,
+    skip: Iterable[str] = (),
+    title: str = "",
     timeout_s: float = 240,
     interval_s: float = 10,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
-) -> str | None:
-    """Poll the mailbox until the code arrives, or None after `timeout_s`."""
+) -> tuple[str, str] | None:
+    """Poll the mailbox until the code arrives: (code, message id), or None
+    after `timeout_s`."""
     deadline = clock() + timeout_s
-    # IMAP's SINCE counts whole days on the server's calendar: the day before
-    # covers a submit just after midnight.
-    since = (after - timedelta(days=1)).date().isoformat()
+    skip = set(skip)
     while True:
         try:
-            found = find_code(mailbox.fetch(since=since, limit=30), company=company, after=after)
+            found = find_code(
+                mailbox.fetch(since=_imap_since(after), limit=30),
+                company=company,
+                after=after,
+                skip=skip,
+                title=title,
+            )
         except MailboxError as exc:
             log.warning("could not read the mailbox for a security code: %s", exc)
             found = None
         if found:
-            code, message_id = found
-            _USED.add(message_id)
-            return code
+            _USED.add(found[1])
+            return found
         if clock() >= deadline:
             return None
         sleep(interval_s)
 
 
-def email_code_source(settings: Settings, company: str = "") -> CodeSource | None:
-    """A function from the submit time to the emailed code, or None when no
+def _imap_since(after: datetime) -> str:
+    # IMAP's SINCE counts whole days on the server's calendar: the day before
+    # covers a submit just after midnight.
+    return (after - timedelta(days=1)).date().isoformat()
+
+
+class EmailCodes:
+    """The emailed code for one application, from the configured mailbox.
+
+    `mark()`, just before the button is pressed, notes the code mails already
+    in the inbox; none of them is this press's. A code once handed out is
+    written to `used_path`, so the next application, in this run or the next
+    command, never takes it. Called again after a code was refused, it waits
+    for the next new one.
+    """
+
+    def __init__(
+        self,
+        mailbox: Mailbox,
+        *,
+        company: str = "",
+        title: str = "",
+        used_path: Path | None = None,
+        timeout_s: float = 240,
+        interval_s: float = 10,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.mailbox = mailbox
+        self.company = company
+        self.title = title
+        self.used_path = used_path
+        self.timeout_s = timeout_s
+        self.interval_s = interval_s
+        self.sleep = sleep
+        self.clock = clock
+        self.before: set[str] = set()
+
+    def mark(self) -> None:
+        try:
+            now = datetime.now(UTC)
+            self.before = code_mail_ids(
+                self.mailbox.fetch(since=_imap_since(now), limit=30), self.company
+            )
+        except MailboxError as exc:
+            log.warning("could not read the mailbox before the press: %s", exc)
+
+    def __call__(self, after: datetime) -> str | None:
+        found = wait_for_code(
+            self.mailbox,
+            company=self.company,
+            after=after,
+            skip=self.before | self._used(),
+            title=self.title,
+            timeout_s=self.timeout_s,
+            interval_s=self.interval_s,
+            sleep=self.sleep,
+            clock=self.clock,
+        )
+        if not found:
+            return None
+        self._remember(found[1])
+        return found[0]
+
+    def _used(self) -> set[str]:
+        if self.used_path is None:
+            return set()
+        try:
+            return set(json.loads(self.used_path.read_text()))
+        except (OSError, ValueError, TypeError):
+            return set()
+
+    def _remember(self, message_id: str) -> None:
+        if self.used_path is None:
+            return
+        kept = [i for i in self._used() if i != message_id][-199:] + [message_id]
+        try:
+            self.used_path.parent.mkdir(parents=True, exist_ok=True)
+            self.used_path.write_text(json.dumps(kept))
+        except OSError as exc:
+            log.warning("could not record the used code: %s", exc)
+
+
+def email_code_source(settings: Settings, company: str = "", title: str = "") -> EmailCodes | None:
+    """The emailed code for an application to `company`, or None when no
     mailbox is set up."""
     try:
         mailbox = open_mailbox(settings)
     except InboxNotConfigured:
         return None
-
-    def source(after: datetime) -> str | None:
-        return wait_for_code(
-            mailbox, company=company, after=after, timeout_s=settings.security_code_wait_s
-        )
-
-    return source
+    return EmailCodes(
+        mailbox,
+        company=company,
+        title=title,
+        used_path=settings.data_dir / "security-codes-used.json",
+        timeout_s=settings.security_code_wait_s,
+    )

@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from jobagent.inbox import codes
-from jobagent.inbox.codes import code_in, find_code, wait_for_code
+from jobagent.inbox.codes import EmailCodes, code_in, find_code, wait_for_code
 from jobagent.inbox.models import InboxMessage
 
 PRESSED = datetime(2026, 10, 6, 20, 21, 30, tzinfo=UTC)
@@ -71,14 +71,21 @@ def test_a_code_mailed_before_the_press_is_not_this_ones():
     assert find_code([old], company="Anthropic", after=PRESSED) is None
 
 
-def test_the_newest_unused_code_is_taken():
+def test_the_first_new_code_is_taken_unless_another_names_the_job():
     first = mail(message_id="a", at=PRESSED + timedelta(seconds=5))
     second = mail(
         message_id="b",
         at=PRESSED + timedelta(seconds=40),
-        body=GREENHOUSE_BODY.replace("hWze7RPl", "Qp4rT9xZ"),
+        body=GREENHOUSE_BODY.replace("hWze7RPl", "Qp4rT9xZ") + " DC Operations Lead",
     )
-    assert find_code([first, second], company="Anthropic", after=PRESSED) == ("Qp4rT9xZ", "b")
+    assert find_code([first, second], company="Anthropic", after=PRESSED) == ("hWze7RPl", "a")
+    assert find_code(
+        [first, second], company="Anthropic", after=PRESSED, title="DC Operations Lead"
+    ) == ("Qp4rT9xZ", "b")
+    assert find_code([first, second], company="Anthropic", after=PRESSED, skip={"a"}) == (
+        "Qp4rT9xZ",
+        "b",
+    )
 
 
 class FakeMailbox:
@@ -104,7 +111,7 @@ def test_the_mailbox_is_polled_until_the_code_arrives_and_used_once():
         sleep=lambda s: None,
         clock=lambda: next(ticks),
     )
-    assert got == "hWze7RPl" and box.calls == 3
+    assert got == ("hWze7RPl", "m1") and box.calls == 3
     again = FakeMailbox([[mail()]])
     assert (
         wait_for_code(again, company="Anthropic", after=PRESSED, timeout_s=0, sleep=lambda s: None)
@@ -122,3 +129,35 @@ def test_no_code_in_time_is_none():
         clock=lambda: next(ticks),
     )
     assert got is None
+
+
+def test_a_code_mail_already_there_at_the_press_is_not_this_ones(tmp_path):
+    """The previous application's mail lands seconds before this press."""
+    previous = mail(message_id="prev", at=PRESSED - timedelta(seconds=10))
+    mine = mail(
+        message_id="mine",
+        at=PRESSED + timedelta(seconds=30),
+        body=GREENHOUSE_BODY.replace("hWze7RPl", "Mine2345"),
+    )
+
+    class Inbox:
+        name = "fake"
+        arrived = [previous]
+
+        def fetch(self, *, since=None, limit=200):
+            return list(self.arrived)
+
+    inbox = Inbox()
+    codes_for_job = EmailCodes(inbox, company="Anthropic", timeout_s=0, sleep=lambda s: None)
+    codes_for_job.mark()
+    inbox.arrived = [previous, mine]
+    assert codes_for_job(PRESSED) == "Mine2345"
+
+
+def test_a_used_code_is_remembered_by_the_next_command(tmp_path):
+    used = tmp_path / "used.json"
+    one = EmailCodes(FakeMailbox([[mail()]]), company="Anthropic", used_path=used, timeout_s=0)
+    assert one(PRESSED) == "hWze7RPl"
+    codes._USED.clear()  # a new process
+    two = EmailCodes(FakeMailbox([[mail()]]), company="Anthropic", used_path=used, timeout_s=0)
+    assert two(PRESSED) is None

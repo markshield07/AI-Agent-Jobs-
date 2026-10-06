@@ -15,6 +15,7 @@ error is `unconfirmed`, and the job waits for a person to look.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
@@ -36,6 +37,8 @@ from jobagent.apply.models import Answerer, FormField, HandlerResult, Packet
 from jobagent.apply.place import read_place, wrong_place
 
 log = logging.getLogger(__name__)
+
+_CODE_REFUSED = re.compile(r"incorrect (?:security|verification) code|security code is invalid")
 
 COOKIE_BUTTON_SELECTORS: tuple[str, ...] = (
     "#onetrust-accept-btn-handler",
@@ -198,6 +201,9 @@ class BaseHandler:
             return self._result(page, "dry_run", screenshot_path, needed=needed, **common)
 
         before_url, before_text = page.url, page_text(page)
+        mark = getattr(packet.security_code, "mark", None)
+        if self.security_code_selectors and callable(mark):
+            mark()  # the code mails already in the inbox are not this press's
         pressed_at = datetime.now(UTC)
         if not click_first_visible(page, self.submit_buttons(page, fields)):
             return self._result(
@@ -295,21 +301,38 @@ class BaseHandler:
                 "enter it in a visible browser (run with --headed) or apply by hand"
             )
         log.info("%s: the site asks for the code it emailed; reading the inbox", self.ats)
-        code = packet.security_code(pressed_at)
-        if not code:
-            return (
-                "the site emailed a verification code and waits for it, but no code mail "
-                "reached the inbox in time; nothing was sent. Try again, or enter the code "
-                "in a visible browser (run with --headed)"
-            )
-        if not self._type_code(page, code):
-            return "the site asked for an emailed code, but its code box would not take it"
-        page.wait_for_timeout(500)
-        buttons = [*self.code_submit_selectors, *self.submit_buttons(page, fields)]
-        if not click_first_visible(page, buttons):
-            return "the emailed code is in, but there was no button to send it with"
-        wait_settled(page, self.submit_settle_ms)
+        for attempt in range(2):
+            code = packet.security_code(pressed_at)
+            if not code:
+                return (
+                    "the site emailed a verification code and waits for it, but no "
+                    + ("further " if attempt else "")
+                    + "code mail reached the inbox in time; nothing was sent. Try again, or "
+                    "enter the code in a visible browser (run with --headed)"
+                )
+            if not self._type_code(page, code):
+                return "the site asked for an emailed code, but its code box would not take it"
+            page.wait_for_timeout(500)
+            buttons = [*self.code_submit_selectors, *self.submit_buttons(page, fields)]
+            if not click_first_visible(page, buttons):
+                return "the emailed code is in, but there was no button to send it with"
+            wait_settled(page, self.submit_settle_ms)
+            if not self._code_refused(page):
+                return None
+            # Another application's code, most likely: wait for the next new one.
+            log.info("%s: the site refused code %s; waiting for the next code mail", self.ats, code)
         return None
+
+    def _code_refused(self, page: Any) -> bool:
+        """Whether the page says the code was wrong, given a few seconds to say it."""
+        for _ in range(10):
+            text = page_text(page).lower()
+            if _CODE_REFUSED.search(text):
+                return True
+            if not self._any_visible(page, self.security_code_selectors):
+                return False
+            page.wait_for_timeout(1_000)
+        return False
 
     def _type_code(self, page: Any, code: str) -> bool:
         """One box per character (Greenhouse draws eight), or one box for all."""

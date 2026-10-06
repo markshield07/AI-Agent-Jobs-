@@ -264,6 +264,15 @@ def test_no_code_in_the_inbox_in_time_sends_nothing(page, packet):
     assert page.evaluate("window.__code") is None
 
 
+def test_a_refused_code_is_followed_by_the_next_one(page, packet):
+    """Another application's code first, then this one's own."""
+    handed = iter(["Ot4erJob", "hWze7RPl"])
+    packet.security_code = lambda pressed_at: next(handed)
+    result = run(page, packet, submit=True, variant="security")
+    assert result.outcome == "submitted", result.error
+    assert page.evaluate("window.__code") == "hWze7RPl"
+
+
 def test_a_wrong_code_is_not_called_a_submission(page, packet):
     packet.security_code = lambda pressed_at: "AAAA1111"
     result = run(page, packet, submit=True, variant="security")

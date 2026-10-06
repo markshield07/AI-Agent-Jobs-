@@ -478,6 +478,19 @@ def _section(field: FormField) -> str:
     return "questions"
 
 
+def _in_a_us_state(location: str) -> bool:
+    """ "Menifee, CA 92584" or "Austin, Texas": a place in one of the states."""
+    from jobagent.discovery.sources.jobspy_source import _STATES
+
+    for part in location.split(",")[1:]:
+        words = re.sub(r"\d", " ", part).split()
+        if not words:
+            continue
+        if (len(words) == 1 and words[0] in _STATES.values()) or " ".join(words).lower() in _STATES:
+            return True
+    return False
+
+
 # --------------------------------------------------------------- options --
 
 
@@ -853,9 +866,13 @@ class _Planner:
             # The answer bank, else the last part of "City, State, Country".
             value = self._bank(key)
             source = "answer_bank"
-            parts = [p.strip() for p in (contact.get("location") or "").split(",")]
+            location = contact.get("location") or ""
+            parts = [p.strip() for p in location.split(",")]
             if value is None and len(parts) >= 3 and parts[-1]:
                 value, source = parts[-1], "contact"
+            elif value is None and _in_a_us_state(location):
+                # "Menifee, CA 92584": a US state, so the country is not in doubt.
+                value, source = "United States", "contact"
         elif key in ("city", "state"):
             # From the answer bank, else from the location on file when it
             # reads "City, State, ...".

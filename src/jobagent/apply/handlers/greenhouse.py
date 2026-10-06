@@ -166,7 +166,16 @@ class GreenhouseHandler(BaseHandler):
         search, a newsletter box) are not an application."""
         if not self._form_visible(page):
             return []
-        return discover_fields(page)
+        fields = discover_fields(page)
+        # The phone's Country (#country) says aria-required="false", yet the
+        # form refuses a phone without it ("Country is invalid") and says so
+        # only after Submit. Counted as required, a Country that will not take
+        # its value stops the run here rather than at the button.
+        if any("phone" in f"{f.key} {f.label}".lower() for f in fields):
+            for field in fields:
+                if field.selector == "#country" or field.key == "country":
+                    field.required = True
+        return fields
 
     def apply(
         self,

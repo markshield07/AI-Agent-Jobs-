@@ -169,16 +169,20 @@ def _combobox_pick(page: Any, field: FormField, value: str) -> None:
     log.info("%s: the pick of %r did not stay; typing it and pressing Enter", field.key, value)
     control = page.locator(field.selector).first
     try:
-        control.click(timeout=3000)
-        control.fill(value, timeout=2000)
-        page.wait_for_timeout(SETTLE_MS + 300)
+        # Real keystrokes, as a person types: react-select filters on them and
+        # highlights the first match, which Enter chooses.
+        control.focus(timeout=3000)
+        control.fill("", timeout=2000)
+        page.keyboard.type(value, delay=30)
+        page.wait_for_timeout(SETTLE_MS + 400)
         page.keyboard.press("Enter")
         page.wait_for_timeout(SETTLE_MS)
     except Exception as exc:
         log.debug("%s: typing the choice failed: %s", field.key, exc)
     if not _combobox_kept(page, field):
+        state = _combobox_state(page, field)
         page.keyboard.press("Escape")
-        raise LookupError(f"picked {value!r} but the box kept no choice")
+        raise LookupError(f"picked {value!r} but the box kept no choice ({state})")
 
 
 def _combobox_pick_once(page: Any, field: FormField, value: str) -> None:

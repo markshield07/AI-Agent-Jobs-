@@ -335,7 +335,9 @@ def apply_to_job(
     completer = _resolve_completer(settings, completer, notes)
     packet = build_packet(conn, job, variant, settings)
     if submit:
-        packet.security_code = email_code_source(settings, str(job.get("company") or ""))
+        packet.security_code = email_code_source(
+            settings, str(job.get("company") or ""), str(job.get("title") or "")
+        )
     answerer = make_answerer(
         packet,
         completer=completer,

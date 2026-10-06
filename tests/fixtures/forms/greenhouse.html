@@ -62,6 +62,24 @@
         <label for="email">Email <span class="asterisk">*</span></label>
         <input type="email" id="email" name="job_application[email]" required>
       </div>
+      <div class="field" id="country-field">
+        <label id="country-label" for="country">Country <span class="asterisk">*</span></label>
+        <!-- The phone's country (job-boards.greenhouse.io, 2026): a react-select
+             listing "<country> +<code>" once opened. Its placeholder is empty;
+             a choice shows only the code and leaves the input and data-value
+             empty. In the fixture a scripted click on an option is ignored,
+             the way the live form ignored the agent's; Enter on the highlighted
+             option chooses it. -->
+        <div class="select__container" style="position: relative">
+          <div class="select__placeholder" id="react-select-country-placeholder"></div>
+          <div data-value=""><input type="text" id="country" class="select__input" role="combobox"
+                 aria-labelledby="country-label" aria-describedby="react-select-country-placeholder country-error"
+                 aria-autocomplete="list" aria-expanded="false" autocomplete="off" value=""></div>
+          <input id="country-required" data-label="Country" name="job_application[country]" required tabindex="-1" aria-hidden="true" value=""
+                 style="opacity: 0; pointer-events: none; position: absolute; bottom: 0; left: 0; right: 0; width: 100%">
+        </div>
+        <div class="select__menu hidden" id="country-menu" role="listbox"></div>
+      </div>
       <div class="field">
         <label for="phone">Phone</label>
         <input type="tel" id="phone" name="job_application[phone]">
@@ -70,14 +88,14 @@
       <div class="field" id="location-field">
         <label for="candidate-location">Location (City) <span class="asterisk">*</span></label>
         <!-- react-select: the box lists nothing until something is typed. -->
-        <div style="position: relative">
+        <div class="select__container" style="position: relative">
           <div class="select__placeholder" id="react-select-candidate-location-placeholder">Select...</div>
           <input type="text" id="candidate-location" class="select__input" role="combobox"
-                 aria-autocomplete="list" aria-expanded="false" autocomplete="off" required>
+                 aria-autocomplete="list" aria-expanded="false" autocomplete="off" aria-required="true">
           <!-- react-select's own required decoy (job-boards.greenhouse.io, 2026):
                see-through, out of the tab order, there only for the browser's
                required check. -->
-          <input id="location-required" required tabindex="-1" aria-hidden="true" value=""
+          <input id="location-required" data-label="Location (City)" required tabindex="-1" aria-hidden="true" value=""
                  style="opacity: 0; pointer-events: none; position: absolute; bottom: 0; left: 0; right: 0; width: 100%">
         </div>
         <div class="select__menu hidden" id="location-menu"></div>
@@ -227,29 +245,56 @@
     });
   }
 
-  // #candidate-location: a react-select typeahead. Nothing is listed until
-  // something is typed, and a click on an option fills the box.
-  var loc = document.getElementById('candidate-location');
-  var menu = document.getElementById('location-menu');
-  var places = ['Austin, TX, USA', 'Boston, MA, USA', 'Denver, CO, USA', 'Berlin, Germany'];
-  function render(hits) {
-    menu.innerHTML = '';
-    hits.forEach(function (p) {
-      var d = document.createElement('div');
-      d.className = 'select__option'; d.setAttribute('role', 'option'); d.textContent = p;
-      menu.appendChild(d);
+  // A react-select as the live form draws it: a choice replaces the
+  // placeholder with the chosen value, empties the input and fills the
+  // required decoy. `typeahead` lists nothing until something is typed;
+  // `ignoreClicks` ignores a click on an option, leaving Enter to choose.
+  function reactSelect(id, menuId, decoyId, choices, opts) {
+    var input = document.getElementById(id);
+    var menu = document.getElementById(menuId);
+    var box = input.closest('.select__container');
+    var hits = [];
+    function render(list) {
+      hits = list;
+      menu.innerHTML = '';
+      list.forEach(function (p) {
+        var d = document.createElement('div');
+        d.className = 'select__option'; d.setAttribute('role', 'option'); d.textContent = p;
+        menu.appendChild(d);
+      });
+      menu.classList.toggle('hidden', list.length === 0);
+      input.setAttribute('aria-expanded', list.length ? 'true' : 'false');
+    }
+    function filter() {
+      var typed = input.value.trim().toLowerCase();
+      if (!typed) return opts.typeahead ? [] : choices.slice();
+      return choices.filter(function (p) { return p.toLowerCase().indexOf(typed.split(',')[0]) === 0; });
+    }
+    function choose(text) {
+      var placeholder = document.getElementById('react-select-' + id + '-placeholder');
+      if (placeholder) placeholder.parentNode.removeChild(placeholder);
+      var shown = box.querySelector('.select__single-value');
+      if (!shown) { shown = document.createElement('div'); shown.className = 'select__single-value'; box.insertBefore(shown, box.firstChild); }
+      shown.textContent = opts.shown ? opts.shown(text) : text;
+      box.setAttribute('data-chosen', text);
+      input.value = '';
+      input.setAttribute('aria-describedby', (input.getAttribute('aria-describedby') || '').replace(/\S*placeholder\S*/, '').trim());
+      document.getElementById(decoyId).value = text;
+      render([]);
+    }
+    input.addEventListener('click', function () { if (!opts.typeahead) render(filter()); });
+    input.addEventListener('input', function () { render(filter()); });
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter' && hits.length) { e.preventDefault(); choose(hits[0]); } });
+    menu.addEventListener('click', function (e) {
+      if (!opts.ignoreClicks && e.target.classList.contains('select__option')) choose(e.target.textContent);
     });
-    menu.classList.toggle('hidden', hits.length === 0);
-    loc.setAttribute('aria-expanded', hits.length ? 'true' : 'false');
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') render([]); });
   }
-  loc.addEventListener('input', function () {
-    var typed = loc.value.trim().toLowerCase();
-    render(typed ? places.filter(function (p) { return p.toLowerCase().indexOf(typed.split(',')[0]) === 0; }) : []);
-  });
-  menu.addEventListener('click', function (e) {
-    if (e.target.classList.contains('select__option')) { loc.value = e.target.textContent; document.getElementById('location-required').value = loc.value; render([]); }
-  });
-  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') render([]); });
+  reactSelect('candidate-location', 'location-menu', 'location-required',
+    ['Austin, TX, USA', 'Boston, MA, USA', 'Denver, CO, USA', 'Berlin, Germany'], {typeahead: true});
+  reactSelect('country', 'country-menu', 'country-required',
+    ['United States +1', 'Afghanistan +93', 'Canada +1', 'Germany +49'],
+    {ignoreClicks: true, shown: function (t) { return t.replace(/^.* (\+\d+)$/, '$1'); }});
 
   [['resume-attach', 'resume', 'resume-name'], ['cover-attach', 'cover_letter', 'cover-name']].forEach(function (t) {
     var trigger = document.getElementById(t[0]), input = document.getElementById(t[1]), out = document.getElementById(t[2]);
@@ -264,7 +309,7 @@
     var missing = [];
     Array.prototype.forEach.call(form.querySelectorAll('[required]'), function (el) {
       var label = form.querySelector('label[for="' + el.id + '"]');
-      var name = label ? label.textContent.replace('*', '').trim() : (el.name || 'A field');
+      var name = label ? label.textContent.replace('*', '').trim() : (el.getAttribute('data-label') || el.name || 'A field');
       var empty = el.type === 'file' ? el.files.length === 0 : !el.value.trim();
       if (empty && missing.indexOf(name) < 0) missing.push(name);
     });

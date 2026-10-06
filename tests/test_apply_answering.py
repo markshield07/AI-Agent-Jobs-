@@ -930,3 +930,20 @@ def test_a_street_box_still_gets_the_street_alone(packet):
     packet.answers = {"address": "29605 Rigging Way", "postal_code": "92584"}
     plan = plan_fills([F("street", "Street address", required=True)], packet)
     assert fills(plan) == {"street": "29605 Rigging Way"}
+
+
+@pytest.mark.parametrize(
+    ("location", "country"),
+    [
+        ("Menifee, CA 92584", "United States"),
+        ("Austin, Texas", "United States"),
+        ("Berlin, Berlin, Germany", "Germany"),
+        ("Menifee", None),
+    ],
+)
+def test_the_country_follows_from_the_location_on_file(packet, location, country):
+    packet.contact["location"] = location
+    packet.answers.pop("country", None)
+    field = FormField(key="country", label="Country", kind="text", required=True)
+    plan = plan_fills([field], packet)
+    assert fills(plan).get("country") == country

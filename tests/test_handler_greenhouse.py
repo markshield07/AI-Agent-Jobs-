@@ -274,3 +274,13 @@ def test_react_selects_required_decoy_is_not_read_as_a_question(page):
     fields = discover_fields(page)
     assert not [f for f in fields if "select..." in (f.label or "").lower()]
     assert [f for f in fields if f.label and f.label.startswith("Location")], "the combobox stays"
+
+
+def test_the_phones_country_counts_as_required(page, packet):
+    """The live form marks it optional and refuses the phone without it only
+    after Submit; with no country on file the run stops before the button."""
+    packet.answers.pop("country")
+    result = run(page, packet, submit=True)
+    assert result.outcome == "needs_input", result.error
+    assert [n.label for n in result.needed if n.required] == ["Country"]
+    assert submitted(page) is None

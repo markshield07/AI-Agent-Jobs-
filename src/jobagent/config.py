@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     inbox_poll_limit: int = 200  # messages per poll
     inbox_model_triage: bool = True  # ask the model about replies the rules cannot read
     inbox_min_confidence: float = 0.6  # below this a reply moves no status
+    # How long a submit waits for a security code the board emails (Greenhouse).
+    security_code_wait_s: int = 240
 
     @property
     def apply_site_list(self) -> tuple[str, ...]:

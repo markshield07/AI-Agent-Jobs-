@@ -133,7 +133,10 @@ class GreenhouseHandler(BaseHandler):
         'button:has-text("Submit")',
     )
     # B2 (`#security-input-0`), E2 (`input[id^="security-input"]`).
-    security_code_selectors = ("#security-input-0", 'input[id^="security-input"]')
+    security_code_selectors = ('input[id^="security-input"]', "#security-input-0")
+    # The code boxes can take a while to show after the button, with the button
+    # greyed out and spinning meanwhile; the code mail is sent at the same time.
+    submit_wait_ms: int = 60_000
     # How long to give a React-rendered form after the page has settled
     # before concluding there is none (job-agent waits 8s; the form renders
     # well within a settled page's networkidle in practice).

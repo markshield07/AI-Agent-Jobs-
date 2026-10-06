@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -69,6 +70,10 @@ class BaseHandler:
     )
     # Visible after the button: the site wants a code from the inbox first.
     security_code_selectors: tuple[str, ...] = ()
+    # Pressed after the code is typed, before the submit button is tried again.
+    code_submit_selectors: tuple[str, ...] = ()
+    # Beyond the settle after the button: how long to wait for any answer.
+    submit_wait_ms: int = 0
     # How long to give the page after each navigation or click.
     settle_ms: int = 10_000
     # Where the site's own posting states its location and remote type, beside
@@ -193,12 +198,27 @@ class BaseHandler:
             return self._result(page, "dry_run", screenshot_path, needed=needed, **common)
 
         before_url, before_text = page.url, page_text(page)
+        pressed_at = datetime.now(UTC)
         if not click_first_visible(page, self.submit_buttons(page, fields)):
             return self._result(
                 page, "failed", screenshot_path, needed=needed, error="no submit button", **common
             )
         wait_settled(page, self.submit_settle_ms)
-        blocked = self.after_submit(page)
+        self._await_answer(page, before_url, before_text)
+        code_sent = False
+        if self.security_code_selectors and self._any_visible(page, self.security_code_selectors):
+            pending = self.enter_emailed_code(page, packet, fields, pressed_at)
+            if pending:
+                return self._result(
+                    page, "blocked", screenshot_path, needed=needed, error=pending, **common
+                )
+            # The code boxes may stay drawn while the page answers the second press.
+            code_sent = True
+            self._await_answer(page, before_url, before_text, code_boxes_answer=False)
+        answered = code_sent and (
+            check_outcome(page, before_url=before_url, before_text=before_text)[0] != "unconfirmed"
+        )
+        blocked = None if answered else self.after_submit(page)
         if blocked:
             return self._result(
                 page, "blocked", screenshot_path, needed=needed, error=blocked, **common
@@ -236,6 +256,86 @@ class BaseHandler:
         return self._result(
             page, "submitted", screenshot_path, needed=needed, confirmation=text, **common
         )
+
+    # -- the emailed security code -----------------------------------------
+
+    def _await_answer(
+        self, page: Any, before_url: str, before_text: str, *, code_boxes_answer: bool = True
+    ) -> None:
+        """Give a slow page up to `submit_wait_ms` more to show its answer: a
+        confirmation, an error, or the box for an emailed code. A button left
+        spinning is otherwise read as no answer at all."""
+        waited = 0
+        while waited < self.submit_wait_ms:
+            if (
+                code_boxes_answer
+                and self.security_code_selectors
+                and self._any_visible(page, self.security_code_selectors)
+            ):
+                return
+            if check_outcome(page, before_url=before_url, before_text=before_text)[0] != (
+                "unconfirmed"
+            ):
+                return
+            page.wait_for_timeout(1_000)
+            waited += 1_000
+
+    def enter_emailed_code(
+        self, page: Any, packet: Packet, fields: list[FormField], pressed_at: datetime
+    ) -> str | None:
+        """Read the code the site emailed, type it, press the button again.
+
+        Returns None once the code is in and the button pressed, else the
+        reason the application waits on the code.
+        """
+        if packet.security_code is None:
+            return (
+                "the site emailed a verification code and waits for it before it accepts "
+                "the application; no mailbox is set up to read it (JOBAGENT_IMAP_*), so "
+                "enter it in a visible browser (run with --headed) or apply by hand"
+            )
+        log.info("%s: the site asks for the code it emailed; reading the inbox", self.ats)
+        code = packet.security_code(pressed_at)
+        if not code:
+            return (
+                "the site emailed a verification code and waits for it, but no code mail "
+                "reached the inbox in time; nothing was sent. Try again, or enter the code "
+                "in a visible browser (run with --headed)"
+            )
+        if not self._type_code(page, code):
+            return "the site asked for an emailed code, but its code box would not take it"
+        page.wait_for_timeout(500)
+        buttons = [*self.code_submit_selectors, *self.submit_buttons(page, fields)]
+        if not click_first_visible(page, buttons):
+            return "the emailed code is in, but there was no button to send it with"
+        wait_settled(page, self.submit_settle_ms)
+        return None
+
+    def _type_code(self, page: Any, code: str) -> bool:
+        """One box per character (Greenhouse draws eight), or one box for all."""
+        boxes = []
+        for selector in self.security_code_selectors:
+            try:
+                found = page.locator(selector)
+                boxes = [found.nth(i) for i in range(found.count()) if found.nth(i).is_visible()]
+            except Exception:
+                continue
+            if boxes:
+                break
+        if not boxes:
+            return False
+        try:
+            if len(boxes) == len(code):
+                for box, char in zip(boxes, code, strict=True):
+                    box.fill(char, timeout=3_000)
+            else:
+                boxes[0].click(timeout=3_000)
+                boxes[0].fill("", timeout=3_000)
+                page.keyboard.type(code, delay=60)
+        except Exception as exc:
+            log.info("%s: could not type the emailed code: %s", self.ats, exc)
+            return False
+        return True
 
     # -- helpers ---------------------------------------------------------
 

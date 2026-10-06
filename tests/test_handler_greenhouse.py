@@ -234,11 +234,41 @@ def test_submitting_reads_the_confirmation(page, packet):
     assert record["job_application[country]"] == "United States +1", "the phone's Country is kept"
 
 
-def test_a_verification_code_after_the_button_is_blocked(page, packet):
+def test_a_verification_code_with_no_mailbox_is_blocked(page, packet):
     result = run(page, packet, submit=True, variant="security")
     assert result.outcome == "blocked"
     assert "verification code" in result.error
     assert "--headed" in result.error, "the reason says what to do about it"
+    assert page.evaluate("window.__code") is None
+
+
+def test_the_emailed_code_is_entered_and_the_form_sent_again(page, packet):
+    asked = []
+
+    def code_from_inbox(pressed_at):
+        asked.append(pressed_at)
+        return "hWze7RPl"
+
+    packet.security_code = code_from_inbox
+    result = run(page, packet, submit=True, variant="security")
+    assert result.outcome == "submitted", result.error
+    assert page.evaluate("window.__code") == "hWze7RPl"
+    assert len(asked) == 1 and asked[0].tzinfo is not None, "asked once, from the press"
+
+
+def test_no_code_in_the_inbox_in_time_sends_nothing(page, packet):
+    packet.security_code = lambda pressed_at: None
+    result = run(page, packet, submit=True, variant="security")
+    assert result.outcome == "blocked"
+    assert "no code mail" in result.error
+    assert page.evaluate("window.__code") is None
+
+
+def test_a_wrong_code_is_not_called_a_submission(page, packet):
+    packet.security_code = lambda pressed_at: "AAAA1111"
+    result = run(page, packet, submit=True, variant="security")
+    assert result.outcome != "submitted"
+    assert page.evaluate("window.__code") is None
 
 
 def test_a_server_error_is_a_failure_with_what_the_page_said(page, packet):

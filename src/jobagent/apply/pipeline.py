@@ -41,6 +41,7 @@ from jobagent.discovery import store as jobs
 from jobagent.discovery.ats import detect_ats
 from jobagent.discovery.criteria import load_criteria
 from jobagent.discovery.scoring.rules import place_matches, score_rules
+from jobagent.inbox.codes import email_code_source
 from jobagent.llm.backend import Completer, LLMUnavailable, resolve_backend
 from jobagent.resume.facts import list_facts, list_never_claim
 from jobagent.tailor import store as variants
@@ -333,6 +334,8 @@ def apply_to_job(
     notes: list[str] = []
     completer = _resolve_completer(settings, completer, notes)
     packet = build_packet(conn, job, variant, settings)
+    if submit:
+        packet.security_code = email_code_source(settings, str(job.get("company") or ""))
     answerer = make_answerer(
         packet,
         completer=completer,

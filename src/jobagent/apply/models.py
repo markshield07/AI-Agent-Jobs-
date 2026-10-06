@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Literal, Protocol
 
 FieldKind = Literal[
@@ -165,6 +166,9 @@ class Packet:
     # The locations searched for; a posting whose own page puts it elsewhere,
     # and not remote, is skipped. Empty means no check.
     wanted_places: list[str] = field(default_factory=list)
+    # From the moment the button was pressed to the code the board emailed
+    # (inbox/codes.py), or None when no mailbox is set up.
+    security_code: Callable[[datetime], str | None] | None = None
 
 
 @dataclass(slots=True)

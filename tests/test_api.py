@@ -169,3 +169,35 @@ def test_the_dashboard_can_ask_to_read_the_same_resume_again(client):
     assert again["already_uploaded"] is True
     assert again["facts_created"] == 2
     assert len(client.get("/api/facts").json()) == 2, "the earlier parse is set aside"
+
+
+def test_a_new_resume_that_reads_to_nothing_says_so(client, monkeypatch):
+    client.post("/api/resume", files={"file": ("old.txt", b"old resume", "text/plain")})
+    monkeypatch.setattr(
+        "jobagent.resume.intake.resume_parser.parse_resume",
+        lambda text, **kwargs: ParsedResume(contact=ParsedContact(), facts=[]),
+    )
+    out = client.post("/api/resume", files={"file": ("new.txt", b"new resume", "text/plain")})
+
+    assert out.status_code == 502
+    assert "gave no facts" in out.json()["detail"]
+    assert len(client.get("/api/facts").json()) == 2, "the facts on file are left as they were"
+
+    monkeypatch.setattr(
+        "jobagent.resume.intake.resume_parser.parse_resume", lambda text, **kwargs: STUB_PARSE
+    )
+    retry = client.post("/api/resume", files={"file": ("new.txt", b"new resume", "text/plain")})
+    assert retry.status_code == 200 and retry.json()["facts_created"] == 2, (
+        "uploading again reads it"
+    )
+
+
+def test_a_model_failure_on_upload_is_reported(client, monkeypatch):
+    from jobagent.llm.backend import LLMError
+
+    def fail(text, **kwargs):
+        raise LLMError("claude exited 1")
+
+    monkeypatch.setattr("jobagent.resume.intake.resume_parser.parse_resume", fail)
+    out = client.post("/api/resume", files={"file": ("r.txt", b"resume", "text/plain")})
+    assert out.status_code == 502 and "claude exited 1" in out.json()["detail"]

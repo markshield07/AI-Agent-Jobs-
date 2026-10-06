@@ -798,7 +798,7 @@
     const form = event.currentTarget;
     try {
       const out = await busy(form.querySelector('button'), api('/api/resume', { method: 'POST', body: new FormData(form) }));
-      toast(out.facts_created ? `Read ${out.filename}: ${out.facts_created} facts.` : 'That resume was already on file. Tick "Read it again" to re-read it.');
+      toast(out.facts_created ? `Read ${out.filename}: ${out.facts_created} facts. New applications are tailored from it.` : 'That resume was already on file. Tick "Read it again" to re-read it.');
       form.reset();
       LOADERS.profile();
     } catch (e) { toast(e.message, true); }

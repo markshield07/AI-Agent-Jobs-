@@ -4,22 +4,27 @@
 <meta charset="utf-8">
 <title>{{ title }}</title>
 <style>
-  /* Same page and fonts as the resume; no date, the caller decides that. */
-  @page { size: Letter; margin: 0.6in; }
-  body { font-family: Helvetica, Arial, sans-serif; font-size: 10.5pt; line-height: 1.4;
-         color: #111; margin: 0; }
-  h1 { font-size: 18pt; margin: 0; }
-  p { margin: 0 0 9pt; }
-  .contact { color: #333; margin-bottom: 18pt; }
-  .reference { font-weight: bold; }
+  /* Same page, fonts and header as the resume; no date, the caller decides that. */
+  @page { size: Letter; margin: 0.6in 0.75in; }
+  body { font-family: Calibri, Carlito, "Segoe UI", Helvetica, Arial, sans-serif;
+         font-size: 11pt; line-height: 1.45; color: #1f2933; margin: 0; }
+  header { border-bottom: 2.5pt solid #1f4e79; padding-bottom: 6pt; margin-bottom: 22pt; }
+  h1 { font-size: 26pt; line-height: 1.05; color: #13304d; margin: 0; }
+  p { margin: 0 0 10pt; }
+  .contact { font-size: 9.5pt; color: #52606d; margin: 3pt 0 0; }
+  .reference { font-weight: bold; color: #1f4e79; }
 </style>
 </head>
 <body>
+{% if name or contact_line %}
+<header>
 {% if name %}
 <h1>{{ name }}</h1>
 {% endif %}
 {% if contact_line %}
 <p class="contact">{{ contact_line }}</p>
+{% endif %}
+</header>
 {% endif %}
 {% if reference %}
 <p class="reference">{{ reference }}</p>

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import importlib.resources
+import io
 import tomllib
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
+
+from pypdf import PdfReader
 
 from jobagent.resume.facts import Fact
 from jobagent.tailor.models import Bullet, CoverLetter, Entry, TailoredResume
@@ -140,8 +143,10 @@ def test_target_title_line_only_when_given():
     assert 'class="target"' not in without
     with_title = resume_html(plan(), facts(), CONTACT, target_title="Staff Engineer")
     assert '<p class="target">Staff Engineer</p>' in with_title
-    # Under the name and contact line, above the first section.
-    assert with_title.index("<h1>") < with_title.index('class="target"') < with_title.index("<h2>")
+    # A headline under the name, above the contact line and the first section.
+    assert with_title.index("<h1>") < with_title.index('class="target"')
+    assert with_title.index('class="target"') < with_title.index('class="contact"')
+    assert with_title.index('class="contact"') < with_title.index("<h2>")
 
 
 # -------------------------------------------------------------- sections --
@@ -185,7 +190,7 @@ def test_whitespace_summary_counts_as_empty():
 
 
 def test_entry_heading_title_and_employer():
-    assert "<h3>Senior Engineer — Acme Corp</h3>" in entry_html(
+    assert '<h3>Senior Engineer — <span class="employer">Acme Corp</span></h3>' in entry_html(
         title="Senior Engineer", employer="Acme Corp"
     )
 
@@ -198,7 +203,7 @@ def test_entry_heading_title_only():
 
 def test_entry_heading_employer_only():
     out = entry_html(employer="Acme Corp")
-    assert "<h3>Acme Corp</h3>" in out
+    assert '<h3><span class="employer">Acme Corp</span></h3>' in out
     assert "—" not in out
 
 
@@ -230,8 +235,8 @@ def test_bullets_render_in_order_and_heading_comes_from_first_fact():
     second = out.index("Ran on-call for 3 teams.")
     third = out.index("Built a C++ trading gateway.")
     assert first < second < third
-    assert out.index("<h3>Senior Engineer — Acme Corp</h3>") < first
-    assert second < out.index("<h3>Engineer — Globex</h3>") < third
+    assert out.index('<h3>Senior Engineer — <span class="employer">Acme Corp</span></h3>') < first
+    assert second < out.index('<h3>Engineer — <span class="employer">Globex</span></h3>') < third
     assert "<h3>invoice-cli</h3>" in out
 
 
@@ -396,8 +401,8 @@ def test_resume_text_order_and_layout():
     lines = text.splitlines()
     assert lines[:3] == [
         "Jane Doe",
-        "jane@example.com | 555-0100 | Austin, TX | https://github.com/jane | https://jane.dev",
         "Staff Engineer",
+        "jane@example.com | 555-0100 | Austin, TX | https://github.com/jane | https://jane.dev",
     ]
     assert lines[3] == "" and lines[4] == "Summary"
     positions = [text.index(f"\n{h}\n") for h in HEADINGS]
@@ -412,12 +417,18 @@ def test_resume_text_omits_missing_header_and_sections():
     assert text == "Skills\nPython\n"
 
 
-def test_resume_text_matches_html_content():
-    """The coverage gate measures the text; the PDF must say the same things."""
-    text = resume_text(plan(), facts(), CONTACT)
-    html = resume_html(plan(), facts(), CONTACT)
+def test_resume_text_matches_pdf_text():
+    """The coverage gate measures the text; the PDF must say the same things.
+
+    Checked on the text a parser pulls out of the PDF, not the HTML: styling
+    such as letter-spacing can split words there while the HTML still reads fine.
+    """
+    text = resume_text(plan(), facts(), CONTACT, target_title="Staff Engineer")
+    pdf = render_pdf(resume_html(plan(), facts(), CONTACT, target_title="Staff Engineer"))
+    extracted = " ".join(page.extract_text() for page in PdfReader(io.BytesIO(pdf)).pages)
+    flat = " ".join(extracted.split()).casefold()
     for line in text.splitlines():
-        assert line.removeprefix("- ") in html, line
+        assert " ".join(line.removeprefix("- ").split()).casefold() in flat, line
 
 
 def test_internal_newlines_collapse_so_every_text_line_is_whole():
@@ -496,9 +507,10 @@ def test_cover_letter_shares_page_rule_fonts_and_sizes_with_resume():
     letter = cover_letter_html(CoverLetter(paragraphs=["Dear\nteam,"]), CONTACT)
     resume = resume_html(plan(), facts(), CONTACT)
     for rule in (
-        "@page { size: Letter; margin: 0.6in; }",
-        "body { font-family: Helvetica, Arial, sans-serif; font-size: 10.5pt;",
-        "h1 { font-size: 18pt;",
+        'body { font-family: Calibri, Carlito, "Segoe UI", Helvetica, Arial, sans-serif;',
+        "header { border-bottom: 2.5pt solid #1f4e79;",
+        "h1 { font-size: 26pt;",
+        ".contact { font-size: 9.5pt;",
     ):
         assert rule in letter and rule in resume, rule
     for forbidden in ("<table", "<img", "float:", "column-count", "<svg"):

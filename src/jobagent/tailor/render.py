@@ -9,9 +9,10 @@ the coverage gate measures is what the PDF says, save for the target title
 
 ATS-safe means one column, no tables, images or floats, system fonts and plain
 section headings: the parsers on the other side read text in document order
-and lose anything laid out any other way. Styling lives in a <style> block in
-each template; WeasyPrint turns that into the PDF (blueprint: "styling in CSS
-beats ReportLab's drawing API").
+and lose anything laid out any other way. The look comes only from type, color
+and rules, so every word stays real, selectable text in reading order. Styling
+lives in a <style> block in each template; WeasyPrint turns that into the PDF
+(blueprint: "styling in CSS beats ReportLab's drawing API").
 """
 
 from __future__ import annotations
@@ -48,9 +49,15 @@ CERTIFICATIONS = "Certifications"
 
 @dataclass(slots=True)
 class _EntryView:
-    heading: str  # "title — employer", whichever exist
+    title: str
+    employer: str
     dates: str  # "start – end", whichever exist; "" for no date line
     bullets: list[str] = field(default_factory=list)
+
+    @property
+    def heading(self) -> str:
+        """The "title — employer" line, whichever of the two exist."""
+        return " — ".join(_present(self.title, self.employer))
 
     def __bool__(self) -> bool:
         return bool(self.heading or self.dates or self.bullets)
@@ -191,7 +198,8 @@ def _entry_view(entry: Entry, facts: Mapping[int, Fact]) -> _EntryView:
     head = facts.get(entry.fact_ids[0]) if entry.fact_ids else None
     detail = _detail(head) if head else {}
     return _EntryView(
-        heading=" — ".join(_present(detail.get("title"), detail.get("employer"))),
+        title=_text(detail.get("title")),
+        employer=_text(detail.get("employer")),
         dates=_date_span(detail),
         bullets=_present(*(b.text for b in entry.bullets)),
     )
@@ -245,7 +253,7 @@ def _reference_line(company: str | None, job_title: str | None) -> str:
 
 
 def _text_lines(view: _ResumeView) -> list[str]:
-    lines = _present(view.name, view.contact_line, view.target_title)
+    lines = _present(view.name, view.target_title, view.contact_line)
     sections: list[list[str]] = [
         _section(SUMMARY, [view.summary] if view.summary else []),
         _section(SKILLS, [", ".join(view.skills)] if view.skills else []),

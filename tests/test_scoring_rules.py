@@ -262,7 +262,8 @@ def test_remote_only_needs_the_posting_to_say_so():
     remote_only = crit(locations=["Remote"])
     # A board's Remote label or remote search alone is not enough.
     assert rejected(remote_only, remote=True, location="Remote")
-    assert rejected(remote_only, title="Network Manager (Remote)", location=None)
+    assert rejected(remote_only, title="Remote-Friendly Network Engineer", location=None)
+    assert rejected(remote_only, title="Remote Hands Technician", location=None)
     assert rejected(remote_only, location="United States")
     assert rejected(remote_only, location=None)
     short = score(remote_only, remote=True, location="Remote").reason
@@ -271,6 +272,22 @@ def test_remote_only_needs_the_posting_to_say_so():
     assert (
         "nothing in the posting says it is fully remote"
         in score(remote_only, remote=True, location="Remote", description=long).reason
+    )
+
+
+def test_remote_only_counts_a_title_that_says_remote():
+    remote_only = crit(locations=["Remote"])
+    for title in (
+        "Network Manager (Remote)",
+        "Remote - Senior Network Systems Engineer",
+        "Sr. Manager, IT Infrastructure & Operations (Remote)",
+    ):
+        assert not rejected(remote_only, remote=True, location="United States", title=title)
+    # The office checks still win over the title.
+    assert rejected(
+        remote_only,
+        title="Network Manager (Remote)",
+        description="Candidates must reside in Texas.",
     )
 
 

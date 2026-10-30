@@ -90,6 +90,13 @@ FULLY_REMOTE = re.compile(
     r"|location\s+type)\s*:\s*(?:100%\s+|fully\s+)?remote\b(?![\s,/(-]*(?:or\s+)?(?:hybrid|on-?site))",
     re.I,
 )
+# "Network Engineer (Remote)", "Remote - Senior Engineer": not "Remote-Friendly"
+# or "Remote Hands", which say nothing about where the person works.
+TITLE_REMOTE = re.compile(
+    r"(?<!not )(?<!non-)\bremote\b(?![- ]?(?:friendly|eligible|optional|possible|hands|support"
+    r"|access|sites?|monitoring|management|desktop|infrastructure|operations|network))",
+    re.I,
+)
 # What makes a posting not fully remote, whatever else it says. Hybrid as a
 # way of working, not a hybrid cloud; a move for the person, not a data
 # center's; an office, not Office 365.
@@ -361,8 +368,9 @@ def remote_only_reason(job: Mapping[str, Any]) -> str | None:
     negated = NOT_REMOTE.search(text)
     if negated:
         return f'not fully remote: the posting says "{negated.group(0)}"'
-    # A bare "Remote" location never matches; "100% Remote" does.
-    if not FULLY_REMOTE.search(f"{text}\n{location}"):
+    # A bare "Remote" location never matches; "100% Remote" does. The
+    # employer's own title saying Remote counts (Mark, 2026-10-30).
+    if not (FULLY_REMOTE.search(f"{text}\n{location}") or TITLE_REMOTE.search(title)):
         if len(description.strip()) < 400:
             return "not fully remote: no full description to show it is fully remote"
         return "not fully remote: nothing in the posting says it is fully remote"

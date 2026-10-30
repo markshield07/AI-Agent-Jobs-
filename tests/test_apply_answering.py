@@ -947,3 +947,68 @@ def test_the_country_follows_from_the_location_on_file(packet, location, country
     field = FormField(key="country", label="Country", kind="text", required=True)
     plan = plan_fills([field], packet)
     assert fills(plan).get("country") == country
+
+
+# ------------------------------------------------------------- remote only --
+
+
+def test_remote_only_answers_on_site_relocation_and_commute_questions_no(packet):
+    packet.wanted_places = ["remote"]
+    # Stored answers from when on-site work was wanted no longer count.
+    packet.answers.update({"relocation": "Yes", "commute_ok:long_beach_ca": "Yes"})
+    packet.answers[question_key("Are you able to work onsite 3 days a week?")] = "Yes"
+    packet.job["location"] = "Long Beach, CA"
+    yes_no = {"kind": "radio", "options": ["Yes", "No"], "required": True}
+    fields = [
+        F("r", "Are you willing to relocate?", **yes_no),
+        F("c", "Are you comfortable commuting to this job's location?", **yes_no),
+        F("o", "Are you able to work onsite 3 days a week?", **yes_no),
+        F("h", "Are you comfortable working in a hybrid setting?", **yes_no),
+        F("d", "Can you work in our Dallas office?", kind="select", options=["Yes", "No"]),
+        F("t", "Would you relocate to Austin, TX? Please explain.", kind="textarea"),
+    ]
+    plan = plan_fills(fields, packet)
+    assert plan.needed == []
+    assert fills(plan) == {
+        "r": "No",
+        "c": "No",
+        "o": "No",
+        "h": "No",
+        "d": "No",
+        "t": answering.REMOTE_ONLY_TEXT,
+    }
+    assert set(sources(plan).values()) == {"remote_only"}
+
+
+def test_remote_only_picks_remote_from_a_choice_of_arrangements(packet):
+    packet.wanted_places = ["remote"]
+    field = F(
+        "w",
+        "Which work arrangement do you prefer?",
+        kind="select",
+        options=["On-site", "Hybrid", "Remote"],
+        required=True,
+    )
+    plan = plan_fills([field], packet)
+    assert fills(plan) == {"w": "Remote"} and sources(plan) == {"w": "remote_only"}
+
+
+def test_remote_only_leaves_a_question_about_remote_work_to_the_bank(packet):
+    packet.wanted_places = ["remote"]
+    field = F(
+        "rw",
+        "Are you comfortable working remotely?",
+        kind="radio",
+        options=["Yes", "No"],
+        required=True,
+    )
+    plan = plan_fills([field], packet)
+    assert plan.fills == [] and plan.needed[0].key == "rw"
+
+
+def test_with_places_wanted_the_bank_still_answers_on_site_questions(packet):
+    packet.wanted_places = ["remote", "menifee, ca"]
+    packet.answers["relocation"] = "Yes"
+    field = F("r", "Are you willing to relocate?", kind="radio", options=["Yes", "No"])
+    plan = plan_fills([field], packet)
+    assert fills(plan) == {"r": "Yes"} and sources(plan) == {"r": "answer_bank"}

@@ -13,6 +13,7 @@ from jobagent.discovery.scoring.rules import (
 )
 
 OPEN = "Open to remote candidates."
+FULL = "This is a fully remote position."
 
 
 def crit(**overrides: Any) -> SearchCriteria:
@@ -214,12 +215,11 @@ def test_location_missing_scores_eight_and_mismatch_zero():
 
 def test_location_remote_criterion_only_matches_remote_jobs():
     criteria = crit(locations=["Remote"])
-    assert points("location", criteria, location="Austin, TX", description=OPEN) == 0
-    assert points("location", criteria, location=None) == 8
-    assert points("location", criteria, location="Remote") == 20
-    assert points("location", criteria, remote=True, location="Austin, TX") == 20
+    assert points("location", criteria, location="Remote", description=FULL) == 20
+    assert points("location", criteria, remote=True, location="Austin, TX", description=FULL) == 20
+    assert points("location", criteria, location="Austin, TX", description=FULL) == 20
     no_remote = crit(remote_ok=False, locations=["Remote"])
-    assert points("location", no_remote, remote=True, location="Remote") == 0
+    assert points("location", no_remote, remote=True, location="Remote", description=FULL) == 0
 
 
 def test_remote_only_drops_postings_that_are_plainly_not_remote():
@@ -228,16 +228,85 @@ def test_remote_only_drops_postings_that_are_plainly_not_remote():
     assert rejected(remote_only, remote=0, location="Tempe, AZ")
     assert rejected(remote_only, remote=True, title="Network Engineer (Hybrid - Herndon, VA)")
     assert rejected(remote_only, location="On-site, Mount Laurel, NJ")
-    assert "only Remote" in score(remote_only, remote=False).reason
+    assert "board marks it on-site" in score(remote_only, remote=False).reason
 
 
-def test_remote_only_keeps_remote_and_open_postings():
+def test_remote_only_keeps_postings_that_say_they_are_fully_remote():
     remote_only = crit(locations=["Remote"])
-    assert not rejected(remote_only, remote=True, location="Austin, TX")
-    assert not rejected(remote_only, location="Remote, US")
-    assert not rejected(remote_only, title="Network Manager (Remote)", location=None)
-    assert not rejected(remote_only, location="United States")
-    assert not rejected(remote_only, location=None)
+    assert not rejected(remote_only, remote=True, location="Austin, TX", description=FULL)
+    assert not rejected(remote_only, location="Remote, US", description=FULL)
+    assert not rejected(remote_only, title="Network Manager (100% Remote)", location=None)
+    assert not rejected(remote_only, location="United States", description=FULL)
+    for said in (
+        "This role is 100% remote.",
+        "We are hiring a remote position for our NOC.",
+        "Work arrangement: Remote",
+        "You can work from home full-time.",
+        "Remote anywhere in the US.",
+        "This position is remote and open to candidates in any US state.",
+        "Fully remote; candidates must reside in the United States.",
+        "Fully remote. You must live in California, Arizona or Nevada.",
+        "Completely remote. Occasional travel to data centers, up to 20%.",
+        "Fully remote. Occasional onsite visits to customer sites.",
+        "Fully remote. Experience with hybrid cloud and on-prem networks.",
+        "Fully remote. No relocation required.",
+        "Fully remote. Lead data center relocation projects and migrations.",
+        "Fully remote. Skilled in Office 365 and in-office suite tools.",
+        "Fully remote. Our environment is hybrid cloud.",
+        "Fully remote. Expect 2 days onsite per quarter for planning.",
+    ):
+        assert not rejected(remote_only, remote=True, description=said), said
+
+
+def test_remote_only_needs_the_posting_to_say_so():
+    remote_only = crit(locations=["Remote"])
+    # A board's Remote label or remote search alone is not enough.
+    assert rejected(remote_only, remote=True, location="Remote")
+    assert rejected(remote_only, title="Network Manager (Remote)", location=None)
+    assert rejected(remote_only, location="United States")
+    assert rejected(remote_only, location=None)
+    short = score(remote_only, remote=True, location="Remote").reason
+    assert short == "not fully remote: no full description to show it is fully remote"
+    long = "Manage the network operations team and vendors. " * 20
+    assert (
+        "nothing in the posting says it is fully remote"
+        in score(remote_only, remote=True, location="Remote", description=long).reason
+    )
+
+
+def test_remote_only_drops_hybrid_on_site_relocation_and_a_place_to_live():
+    remote_only = crit(locations=["Remote"])
+    for said, shown in (
+        ("Remote role. This is a hybrid position in Dallas.", "hybrid position"),
+        ("Fully remote with 2 days a week in the office.", "2 days a week in the office"),
+        ("Remote position, 3 days onsite per week at minimum.", "3 days onsite"),
+        ("Fully remote. Some in-office collaboration.", "in-office"),
+        ("Remote position. Relocation assistance is available.", "Relocation"),
+        ("Fully remote. Candidates must reside in Texas.", "reside in Texas"),
+        ("Fully remote, but you must live within 50 miles of Austin.", "within 50 miles of"),
+        ("Remote role. Must be within commuting distance of Plano, TX.", "commuting distance"),
+        ("This role is located in Dallas, TX. Fully remote training.", "located in Dallas"),
+        ("Remote role. Local candidates only.", "Local candidates"),
+        ("This is not a remote position.", "not a remote"),
+        ("Fully remote. The engineer must work onsite at the Plano NOC.", "must work onsite"),
+        ("Remote/Hybrid. Network engineer.", "Remote/Hybrid"),
+    ):
+        result = score(remote_only, remote=True, location="Remote", description=said)
+        assert result.disqualified, said
+        assert result.reason.startswith("not fully remote: the posting says"), result.reason
+        assert shown.lower() in result.reason.lower(), (said, result.reason)
+    assert rejected(remote_only, remote=True, title="Network Engineer - Hybrid", description=FULL)
+    assert rejected(remote_only, remote=True, location="Dallas, TX (On-site)", description=FULL)
+
+
+def test_the_texas_interview_would_have_been_skipped():
+    remote_only = crit(locations=["Remote"])
+    posting = (
+        "Network Operations Manager. Remote position. The successful candidate will "
+        "support our Austin, Texas facility and must reside in Texas. "
+        "This role requires the ability to work onsite at our Austin data center."
+    )
+    assert rejected(remote_only, remote=True, location="United States", description=posting)
 
 
 def test_a_second_location_keeps_on_site_postings_in_play():
@@ -322,7 +391,7 @@ def test_keywords_reason_lists_at_most_eight_sorted():
 
 
 def test_missing_fields_are_tolerated():
-    result = score_rules({}, SearchCriteria(), set())
+    result = score_rules({}, crit(locations=["Remote", "Austin, TX"]), set())
     assert result.disqualified is False
     assert result.breakdown == {"title": 25, "salary": 15, "location": 8, "keywords": 12}
     assert result.score == 60
@@ -388,7 +457,8 @@ def test_passes_applies_the_threshold_and_disqualification():
     assert passes(RuleScore(score=60, disqualified=False, reason=""), criteria) is True
     assert passes(RuleScore(score=59, disqualified=False, reason=""), criteria) is False
     assert passes(RuleScore(score=0, disqualified=True, reason=""), crit(min_score=0)) is False
-    assert passes(score_rules({}, SearchCriteria(), set()), SearchCriteria()) is True
+    either = SearchCriteria(locations=["Remote", "Austin, TX"])
+    assert passes(score_rules({}, either, set()), either) is True
 
 
 def test_cities_plus_remote_drop_on_site_postings_elsewhere():
@@ -444,7 +514,12 @@ def test_the_description_outweighs_the_boards_remote_flag():
     onsite = "The engineer will work onsite at Naval Station Norfolk."
     result = score(remote_only, remote=True, location="Norfolk, VA", description=onsite)
     assert result.disqualified
-    assert 'the description says "onsite at Naval Station Norfolk"' in result.reason
+    assert 'the posting says "onsite at Naval Station Norfolk"' in result.reason
+    elsewhere = crit(locations=["Remote", "Austin, TX"])
+    assert (
+        'the description says "onsite at Naval Station Norfolk"'
+        in score(elsewhere, remote=True, location="Norfolk, VA", description=onsite).reason
+    )
     assert points("location", crit(), remote=True, description=onsite) == 15
     # In a place that is wanted, it stays in.
     near = crit(locations=["Remote", "Norfolk, VA"])

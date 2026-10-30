@@ -74,6 +74,90 @@ SAYS_REMOTE = re.compile(
 )
 NOT_REMOTE = re.compile(r"\bnot (?:a )?remote\b|\bno remote\b|\bnon-remote\b", re.I)
 
+# Remote only (Mark, 2026-10-30, after an interview for a "remote" job that
+# wanted him on site in Texas): a posting must say in its own words that the
+# job is fully remote. A board's Remote label or remote search is not enough.
+FULLY_REMOTE = re.compile(
+    r"\b(?:fully|100\s?%|completely|entirely|totally|permanently|exclusively|full[- ]time)"
+    r"[- ]remote\b"
+    r"|\bremote[- ](?:only|position|role|job|opportunity|employee|work\s+(?:position|role))\b"
+    r"|\b(?:this|the)\s+(?:position|role|job|opportunity)\s+(?:is|will\s+be)\s+(?:an?\s+)?"
+    r"(?:fully\s+|100%\s+)?remote\b"
+    r"|\bthis\s+is\s+an?\s+(?:fully\s+|100%\s+)?remote\b"
+    r"|\bwork(?:ing)?\s+(?:from\s+home|remotely)\s+(?:full[- ]time|100\s?%|from\s+anywhere)"
+    r"|\bremote\s+(?:from\s+)?anywhere\s+in\s+the\s+(?:us|u\.s\.?|united\s+states)\b"
+    r"|\b(?:location|workplace(?:\s+type)?|work\s+(?:location|arrangement|model|setting|type)"
+    r"|location\s+type)\s*:\s*(?:100%\s+|fully\s+)?remote\b(?![\s,/(-]*(?:or\s+)?(?:hybrid|on-?site))",
+    re.I,
+)
+# What makes a posting not fully remote, whatever else it says. Hybrid as a
+# way of working, not a hybrid cloud; a move for the person, not a data
+# center's; an office, not Office 365.
+_HYBRID_WORK = re.compile(
+    r"\bhybrid\b(?=[\s,/()-]*(?:role|position|schedule|work|working|model|arrangement"
+    r"|opportunity|remote|on-?site|office|in-office|basis|job|setting|\d))"
+    r"|\b(?:position|role|job|schedule|this)\s+is\s+(?:a\s+)?hybrid\b|:\s*hybrid\b"
+    r"|\b(?:remote|on-?site)\s*(?:/|or|-|,)\s*hybrid\b|\(\s*hybrid\s*\)",
+    re.I,
+)
+_NOT_SOFTWARE = r"(?!\s*(?:365|suite|products?|applications?|apps|tools|programs))"
+_PLACE = (
+    rf"(?:on-?site|on\s+site|in[- ](?:the\s+|our\s+)?office{_NOT_SOFTWARE}|in[- ]person"
+    r"|in\s+(?:the|our)\s+[\w-]+\s+office)"
+)
+_DAYS = r"(?:\d|one|two|three|four|five)\s*(?:\+\s*|or\s+more\s+)?"
+_STRICT_OFFICE = [
+    _HYBRID_WORK,
+    re.compile(rf"\bin[- ]office\b{_NOT_SOFTWARE}", re.I),
+    re.compile(
+        r"\b(?:report|come|commute)\s+(?:in)?to\s+(?:the|our|an?)\s+(?:[\w-]+\s+)?office\b"
+        r"|\bwork\s+(?:from|in|out\s+of)\s+(?:the|our|one\s+of\s+our)\s+(?:[\w-]+\s+)?offices?\b",
+        re.I,
+    ),
+    re.compile(r"\bcommuting\s+distance\b|\blocal\s+candidates\b|\blocals?\s+only\b", re.I),
+    re.compile(r"\bwithin\s+\d+\s*(?:miles?|mi|km)\s+(?:of|from)\b", re.I),
+    re.compile(
+        r"\brelocation\s+(?:assistance|package|benefits?|support|bonus|stipend|reimbursement"
+        r"|expenses?|is\s+(?:required|available|offered|provided)|required|available|offered"
+        r"|provided|to)\b"
+        r"|\b(?:willing(?:ness)?|able|open|ready|need|needs|required|must)\s+(?:to\s+)?relocate\b"
+        r"|\brelocate\s+to\b",
+        re.I,
+    ),
+]
+# Days in an office: a few a quarter or a year are travel, not an office job.
+_OFFICE_DAYS = [
+    re.compile(rf"\b{_DAYS}days?\s+(?:(?:a|per|each|every)\s+week\s+)?{_PLACE}", re.I),
+    re.compile(rf"\b{_PLACE}\s+{_DAYS}days?\b", re.I),
+]
+# "Must live in Texas", "this role is located in Dallas": wants the person in
+# a place. The US as a whole, or California, is fine.
+_LIVE_IN = re.compile(
+    r"\b(?:live|living|reside|residing|resides|be\s+(?:located|based|local)|located|based)"
+    r"\s+(?:in|within|near|to)\b(?P<where>[^.;!?\n]{0,80})",
+    re.I,
+)
+_MUST = re.compile(
+    r"\b(?:must|required?|requires|requirement|need(?:s|ed)?\s+to|have\s+to|should|only"
+    r"|eligible|position|role|job)\b",
+    re.I,
+)
+_ANYWHERE_US = re.compile(
+    r"^\s*(?:the\s+)?(?:u\.?s\.?a?\.?\b|united\s+states|usa\b|america\b|north\s+america"
+    r"|continental|contiguous|lower\s+48|one\s+of\s+the\s+(?:50|fifty)|any\s+(?:of\s+the\s+)?"
+    r"(?:50\s+)?(?:u\.?s\.?\s+)?states?|the\s+country)"
+    r"|\bcalifornia\b|,\s*ca\b",
+    re.I,
+)
+# Words that make on-site an occasional thing in a remote job.
+_NOW_AND_THEN_STRICT = re.compile(
+    r"\b(?:occasional(?:ly)?|as\s+needed|when\s+(?:needed|required)|if\s+needed"
+    r"|periodic(?:ally)?|quarterly|annual(?:ly)?|visits?"
+    r"|(?:a|per|each|every)\s+(?:quarter|month|year))\b",
+    re.I,
+)
+_NOT_REQUIRED = re.compile(r"^\W*(?:is\s+|are\s+)?not\s+(?:required|needed|necessary)\b", re.I)
+
 
 @dataclass(slots=True)
 class RuleScore:
@@ -178,6 +262,8 @@ def _not_remote(job: Mapping[str, Any], title: str, criteria: SearchCriteria) ->
     wanted = criteria.normalised(criteria.locations)
     if not wanted:
         return None
+    if is_remote_only(criteria):
+        return remote_only_reason(job)
     if _is_remote(job, title):
         return None
     flag = job.get("remote")
@@ -249,6 +335,78 @@ BROAD_PLACES = frozenset(
 )
 
 
+def is_remote_only(criteria: SearchCriteria) -> bool:
+    """Remote is the only place searched for."""
+    return criteria.normalised(criteria.locations) == ["remote"]
+
+
+def remote_only_reason(job: Mapping[str, Any]) -> str | None:
+    """Why a posting is not plainly fully remote, or None when it says it is
+    and nothing in it asks for an office, a place to live or a move. When
+    unsure, it gives a reason: skipping a remote job costs less than an
+    interview for one in Texas."""
+    title = _text(job, "title")
+    location = _text(job, "location").strip()
+    description = _text(job, "description")
+    flag = job.get("remote")
+    if flag is not None and not _flag(flag):
+        return f"not fully remote: the board marks it on-site ({location or 'no place given'})"
+    for text in (title, location):
+        if _in_office(text):
+            return f'not fully remote: the posting says "{text.strip()}"'
+    text = f"{title}\n{description}"
+    said = office_words(text)
+    if said:
+        return f'not fully remote: the posting says "{said}"'
+    negated = NOT_REMOTE.search(text)
+    if negated:
+        return f'not fully remote: the posting says "{negated.group(0)}"'
+    # A bare "Remote" location never matches; "100% Remote" does.
+    if not FULLY_REMOTE.search(f"{text}\n{location}"):
+        if len(description.strip()) < 400:
+            return "not fully remote: no full description to show it is fully remote"
+        return "not fully remote: nothing in the posting says it is fully remote"
+    return None
+
+
+def office_words(text: str) -> str | None:
+    """The words in a posting that want someone in an office, in a place or
+    moving there: hybrid work, days on site, in-office, relocation, commuting
+    distance, or living somewhere other than anywhere in the US (or
+    California). Occasional visits are not an office job."""
+    for sentence in re.split(r"(?<=[.!?;])\s+|\n+", text or ""):
+        for pattern in _STRICT_OFFICE:
+            for match in pattern.finditer(sentence):
+                if _NEGATED.search(sentence[: match.start()]):
+                    continue
+                if _NOT_REQUIRED.search(sentence[match.end() :]):
+                    continue
+                return _said(match.group(0), sentence, match.end())
+        for pattern in (*_OFFICE_DAYS, *_OFFICE_SAYS, _ONSITE_AT):
+            for match in pattern.finditer(sentence):
+                if _NEGATED.search(sentence[: match.start()]):
+                    continue
+                if _NOW_AND_THEN_STRICT.search(sentence):
+                    continue
+                return _said(match.group(0), sentence, match.end())
+        for match in _LIVE_IN.finditer(sentence):
+            if not _MUST.search(sentence[: match.start()]):
+                continue
+            if _NEGATED.search(sentence[: match.start()]):
+                continue
+            if _ANYWHERE_US.search(match.group("where")):
+                continue
+            return _said(match.group(0), sentence, match.end())
+    return None
+
+
+def _said(words: str, sentence: str, end: int) -> str:
+    """The matched words, with a little of what follows, for the reason."""
+    tail = re.match(r"[^.;!?]{0,40}", sentence[end:])
+    shown = words + (tail.group(0) if tail else "")
+    return re.sub(r"\s+", " ", shown).strip().rstrip(".,;:")
+
+
 def not_remote(job: Mapping[str, Any], criteria: SearchCriteria) -> str | None:
     """Why this posting wants someone in an office the person did not ask
     for, or None; the same test scoring applies, for a job queued before."""
@@ -304,6 +462,9 @@ def _score_salary(job: Mapping[str, Any], criteria: SearchCriteria) -> int:
 def _score_location(job: Mapping[str, Any], title: str, criteria: SearchCriteria) -> int:
     have = _text(job, "location").strip().lower()
     if _is_remote(job, title) and criteria.remote_ok:
+        return 20
+    if is_remote_only(criteria) and criteria.remote_ok and remote_only_reason(job) is None:
+        # Its own words say fully remote, whatever place the board shows.
         return 20
 
     wanted = criteria.normalised(criteria.locations)

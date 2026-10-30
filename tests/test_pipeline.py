@@ -13,7 +13,9 @@ from jobagent.discovery.pipeline import RunReport, run_discovery
 from jobagent.llm.backend import Completion, LLMUnavailable
 from jobagent.resume import facts as fact_store
 
-LONG = "Python and AWS and Terraform, Kubernetes, Postgres, Docker, CI and GitHub Actions. " * 8
+LONG = "This is a fully remote role. " + (
+    "Python and AWS and Terraform, Kubernetes, Postgres, Docker, CI and GitHub Actions. " * 8
+)
 
 STRONG = RawJob(
     url="https://boards.greenhouse.io/acme/jobs/1?gh_src=abc",
@@ -33,7 +35,7 @@ WEAK = RawJob(
     company="Beta",
     source="lever",
     location="Remote",
-    description="We need someone who knows Python, Docker and Postgres. " * 20,
+    description="Fully remote. We need someone who knows Python, Docker and Postgres. " * 20,
 )
 OFF_TOPIC = RawJob(
     url="https://example.com/sales",
@@ -290,7 +292,7 @@ def test_linkedin_pages_are_spaced_and_a_429_ends_that_sites_fetches(conn, monke
         asked.append(url)
         if url.rstrip("/").endswith("/3"):
             raise RateLimited(url)
-        return "A long enough description. " * 30
+        return "A fully remote role. " * 30
 
     waits: list[float] = []
     monkeypatch.setattr("jobagent.discovery.pipeline.enrich_description", fetch)

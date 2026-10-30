@@ -99,11 +99,19 @@ def ready_job(conn, tmp_path):
         pdf_exists=True,
         apply_url=None,
         source="greenhouse",
+        description="This is a fully remote position.",
     ) -> str:
         # A title of its own per posting unless given: the same title twice at
         # one company is one role, applied to once.
         title = title or f"Engineer {url.rstrip('/').rsplit('/', 1)[-1]}"
-        raw = RawJob(url=url, title=title, company=company, source=source, apply_url=apply_url)
+        raw = RawJob(
+            url=url,
+            title=title,
+            company=company,
+            source=source,
+            apply_url=apply_url,
+            description=description,
+        )
         jid = jobs.upsert_jobs(conn, [raw]).new_ids[0]
         jobs.set_status(conn, jid, status)
         pdf_path = tmp_path / f"{jid}.pdf"
@@ -282,7 +290,13 @@ def test_skips_and_refusals(conn, settings, ready_job):
     with pytest.raises(ApplyError, match="No job nope"):
         _apply(conn, "nope", settings, handler)
 
-    raw = RawJob(url=f"https://{FAKE_HOST}/acme/bare", title="T", company="C", source="lever")
+    raw = RawJob(
+        url=f"https://{FAKE_HOST}/acme/bare",
+        title="T",
+        company="C",
+        source="lever",
+        description="This is a fully remote position.",
+    )
     bare = jobs.upsert_jobs(conn, [raw]).new_ids[0]
     assert "no ready resume" in _apply(conn, bare, settings, handler)["reason"]
 
@@ -573,7 +587,13 @@ def test_build_packet_without_a_letter(conn, settings, ready_job):
 def test_run_apply_takes_queued_jobs_with_a_ready_resume(conn, settings, ready_job):
     ready = [ready_job(f"https://{FAKE_HOST}/acme/{i}") for i in range(3)]
     ready_job(f"https://{FAKE_HOST}/acme/new", status="pending")  # not queued
-    raw = RawJob(url=f"https://{FAKE_HOST}/acme/bare", title="T", company="C", source="lever")
+    raw = RawJob(
+        url=f"https://{FAKE_HOST}/acme/bare",
+        title="T",
+        company="C",
+        source="lever",
+        description="This is a fully remote position.",
+    )
     bare = jobs.upsert_jobs(conn, [raw]).new_ids[0]
     jobs.set_status(conn, bare, "queued")  # queued, but no resume yet
     handler = FakeHandler()
@@ -1149,7 +1169,7 @@ def test_a_queued_job_whose_description_says_onsite_is_skipped_before_any_browse
     handler = FakeHandler(_result("dry_run"))
     record = _apply(conn, jid, settings, handler, mode="auto")
     assert record["outcome"] == "skipped" and record["wrong_place"] is True
-    assert 'the description says "onsite at Naval Station Norfolk"' in record["reason"]
+    assert '"onsite at Naval Station Norfolk"' in record["reason"]
     assert handler.calls == [], "no browser, no form"
     assert jobs.get_job(conn, jid)["status"] == "skipped"
 
@@ -1232,8 +1252,8 @@ def test_a_queued_job_todays_rules_turn_away_is_skipped_before_any_browser(
 def test_a_queued_job_whose_application_deadline_has_passed_is_skipped(conn, settings, ready_job):
     jid = ready_job()
     conn.execute(
-        "UPDATE jobs SET description = 'U.S. Citizenship is required. Application Deadline: "
-        "9/27/2020' WHERE id = ?",
+        "UPDATE jobs SET description = 'Fully remote. U.S. Citizenship is required. "
+        "Application Deadline: 9/27/2020' WHERE id = ?",
         (jid,),
     )
     conn.commit()

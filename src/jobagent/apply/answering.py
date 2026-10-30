@@ -311,6 +311,18 @@ def canonical_key(field: FormField) -> str | None:
 # its own, still never guessed, and its "Yes" must not become the amount.
 _VALUE_KEYS = frozenset({"salary_expectation", "work_arrangement"})
 
+# A question about working somewhere other than home: on site, in an office,
+# hybrid, moving or commuting. Answered No when only remote jobs are wanted.
+_OFFICE_QUESTION = re.compile(
+    r"\brelocat|\bcommut|\bhybrid\b|\bon-?site\b|\bon\s+site\b|\bin[- ]office\b"
+    r"|\bin[- ]person\b|\bin\s+(?:the|our)\s+(?:[\w-]+\s+)?office\b"
+    r"|\b(?:report|come|travel)\s+(?:in)?to\s+(?:the|our|an?)\s+(?:[\w-]+\s+)?office\b"
+    r"|\bwork\s+(?:from|in|at|out\s+of)\s+(?:the|our|one\s+of\s+our)\s+(?:[\w-]+\s+)?offices?\b",
+    re.IGNORECASE,
+)
+REMOTE_ONLY = "remote_only"
+REMOTE_ONLY_TEXT = "No. I am only looking for fully remote work."
+
 
 def _yes_or_no(field: FormField) -> bool:
     options = {_norm(o) for o in field.options or () if _norm(o)}
@@ -707,6 +719,8 @@ class _Planner:
         if section == "cover_letter":
             self._value_or_need(field, self.packet.cover_letter, "cover_letter", NOT_ON_FILE)
             return
+        if self._plan_remote_only(field, key):
+            return
         # Questions. The answer bank first, by canonical key and by label;
         # a commute question only by this job's own key.
         keys = (key, question_key(field.label))
@@ -741,6 +755,35 @@ class _Planner:
             self._fill(field, body, "cover_letter")
             return
         self._plan_open(field)
+
+    def _plan_remote_only(self, field: FormField, key: str | None) -> bool:
+        """Searching for remote jobs only: a question about working on site,
+        in an office, hybrid, relocating or commuting is answered No, before
+        the answer bank (Mark, 2026-10-30: 100% remote only, no hybrid, no
+        moving). A choice of arrangements takes Remote. True when planned."""
+        if self.packet.wanted_places != ["remote"]:
+            return False
+        label = field.label or ""
+        options = list(field.options or ())
+        remote = next((o for o in options if re.search(r"\bremote\b", o, re.I)), None)
+        if remote is not None and any(_OFFICE_QUESTION.search(o) for o in options):
+            # A choice of arrangements: "On-site", "Hybrid", "Remote".
+            self._fill(field, remote, REMOTE_ONLY)
+            return True
+        if key not in ("relocation", "commute_ok", "work_arrangement") and not (
+            _OFFICE_QUESTION.search(label)
+        ):
+            return False
+        if not _OFFICE_QUESTION.search(label) or re.search(r"\bremote(?:ly)?\b", label, re.I):
+            # "Are you comfortable working remotely?" is not about an office.
+            return False
+        if field.kind in ("text", "textarea"):
+            self._fill(field, REMOTE_ONLY_TEXT, REMOTE_ONLY)
+            return True
+        if field.kind in ("select", "radio", "checkbox") and not _yes_or_no(field):
+            if pick_option("No", options) is None:
+                return False
+        return self._apply_value(field, "No", REMOTE_ONLY)
 
     def _plan_open(self, field: FormField) -> None:
         """For the model to answer from the facts, else asked (required) or skipped."""

@@ -26,7 +26,7 @@ from jobagent.discovery.enrich import RateLimited, enrich_description
 from jobagent.discovery.http import make_client
 from jobagent.discovery.models import RawJob
 from jobagent.discovery.scoring.classify import classify_jobs
-from jobagent.discovery.scoring.rules import RuleScore, passes, score_rules
+from jobagent.discovery.scoring.rules import RuleScore, is_remote_only, passes, score_rules
 from jobagent.discovery.sources import all_sources
 from jobagent.discovery.sources.filters import title_matches
 from jobagent.llm.backend import Completer, LLMUnavailable, resolve_backend
@@ -120,8 +120,9 @@ def run_discovery(
 
         if classify or enrich_with_model:
             completer = _resolve_completer(settings, completer, report)
+        unreadable: set[str] = set()
         if enrich:
-            _enrich(
+            unreadable = _enrich(
                 conn,
                 report,
                 client=client,
@@ -129,7 +130,7 @@ def run_discovery(
                 criteria=criteria,
                 max_enrich=max_enrich,
             )
-        _score(conn, criteria, report)
+        _score(conn, criteria, report, wait_for_descriptions=enrich, unreadable=unreadable)
         if classify:
             _classify(conn, criteria, report, completer)
     finally:
@@ -198,12 +199,14 @@ def _enrich(
     criteria: SearchCriteria | None = None,
     max_enrich: int = 100,
     sleep: Any = None,
-) -> None:
+) -> set[str]:
     """Fetch the full postings, those whose title matches first. LinkedIn
     answers 429 Too Many Requests to a quick run of page loads, so its pages
     are spaced out and a run reads only so many, and a 429 from any site ends
-    that site's fetches for the run: the rest wait for the next one."""
+    that site's fetches for the run: the rest wait for the next one.
+    Returns the jobs whose page could not be read at all."""
     sleep = sleep or time.sleep
+    unreadable: set[str] = set()
     todo = store.jobs_needing_enrichment(conn)
     if criteria is not None:
         todo.sort(key=lambda job: not title_matches(job.get("title") or "", criteria))
@@ -240,10 +243,14 @@ def _enrich(
             continue
         except Exception as exc:  # one unfetchable page must not end the run
             log.warning("enrichment of %s failed: %s", job["url"], exc)
+            unreadable.add(job["id"])
             continue
         if text:
             store.set_description(conn, job["id"], text)
             report.enriched += 1
+        else:
+            unreadable.add(job["id"])
+    return unreadable
 
 
 # Seconds between page loads on a site that limits them, before jitter, and
@@ -258,9 +265,20 @@ def _host(url: str) -> str:
     return (urlparse(url or "").netloc or "").lower()
 
 
-def _score(conn: sqlite3.Connection, criteria: SearchCriteria, report: RunReport) -> None:
+def _score(
+    conn: sqlite3.Connection,
+    criteria: SearchCriteria,
+    report: RunReport,
+    wait_for_descriptions: bool = False,
+    unreadable: set[str] | None = None,
+) -> None:
     tags = profile_tags(conn)
+    wait = wait_for_descriptions and is_remote_only(criteria)
     for job in store.jobs_pending_rules(conn):
+        if wait and job["id"] not in (unreadable or ()) and _waiting_for_description(job):
+            # Only its own description can show it is fully remote: scored
+            # once a later run has read it (a site's cap or its 429 left it).
+            continue
         result = score_rules(job, criteria, tags)
         store.set_rule_score(conn, job["id"], result.score, result.reason)
         report.scored += 1
@@ -273,11 +291,16 @@ def _score(conn: sqlite3.Connection, criteria: SearchCriteria, report: RunReport
             report.rule_misses[kind] = report.rule_misses.get(kind, 0) + 1
 
 
+def _waiting_for_description(job: dict) -> bool:
+    """Not yet read in full: a snippet or nothing, and no fetch has finished."""
+    return not job.get("enriched_at") and len(str(job.get("description") or "")) < 400
+
+
 def miss_kind(result: RuleScore, criteria: SearchCriteria) -> str:
     """A short name for why a posting failed the rules, to count them by."""
     if result.disqualified:
         reason = result.reason
-        if reason.startswith("not remote"):
+        if reason.startswith(("not remote", "not fully remote")):
             return "not remote"
         if reason.startswith("salary"):
             return "salary under the minimum"

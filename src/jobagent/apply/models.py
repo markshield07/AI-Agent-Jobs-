@@ -60,6 +60,7 @@ FillSource = Literal[
     "skip",
     "prefilled",  # the site filled it from the signed-in account; left as it was
     "auto_mode",  # agreed to a required terms box because the person chose auto mode
+    "remote_only",  # an on-site, relocation or commute question, when only remote jobs are wanted
 ]
 
 MODES: tuple[str, ...] = ("dry_run", "review", "auto")

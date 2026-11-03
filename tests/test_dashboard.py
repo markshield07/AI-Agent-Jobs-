@@ -243,6 +243,18 @@ def test_the_page_renders_the_numbers_and_every_tab(page, server):
 
 
 @pytest.mark.usefixtures("page")
+def test_a_signed_out_model_is_flagged_on_the_overview(page, server, conn):
+    jobs.set_model_problem(conn, "`claude` reported an error: Failed to authenticate")
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+
+    page.goto(server["url"] + "/#overview")
+    page.wait_for_selector("#attention .model-problem")
+    assert "claude auth login" in page.inner_text("#attention .model-problem")
+    assert errors == [], errors
+
+
+@pytest.mark.usefixtures("page")
 def test_a_lapsed_workday_sign_in_is_flagged_with_its_waiting_jobs(page, server, settings):
     from jobagent.apply import sessions
 

@@ -324,7 +324,7 @@
     const m = a.model_problem;
     if (m) {
       box.append(el('p', { class: 'model-problem' }, m.signed_out
-        ? ['New jobs are not being scored: the agent's Claude sign-in has ended. Run ', el('code', {}, 'claude auth login'), ' in a terminal on this PC.']
+        ? ['New jobs are not being scored: the agent’s Claude sign-in has ended. Run ', el('code', {}, 'claude auth login'), ' in a terminal on this PC.']
         : `New jobs are not being scored: ${m.error}`));
     }
     if (!items.length) {

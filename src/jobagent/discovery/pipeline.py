@@ -324,9 +324,13 @@ def _classify(
         return
     if completer is None:
         report.unclassified += len(candidates)
+        store.set_model_problem(conn, report.notes[-1] if report.notes else "no model is set up")
         return
 
     result = classify_jobs(candidates, profile=profile_text(conn), completer=completer)
+    # Every batch failing (a signed-out `claude`, say) stalls the whole queue,
+    # so the dashboard says so; one batch getting through clears it.
+    store.set_model_problem(conn, result.error if result.error and not result.items else None)
     report.input_tokens += result.input_tokens
     report.output_tokens += result.output_tokens
     for item in result.items:

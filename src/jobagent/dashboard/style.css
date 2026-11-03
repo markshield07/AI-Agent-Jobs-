@@ -159,6 +159,7 @@ main { max-width: 1240px; margin: 0 auto; padding: 24px 24px 64px; }
 .attention a b { font-size: 14px; }
 .attention .calm { background: var(--good-soft); color: var(--good); }
 .attention .calm::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.attention .model-problem { flex-basis: 100%; margin: 0; padding: 9px 13px; border-radius: 10px; background: var(--bad-soft); color: var(--bad); font-weight: 600; font-size: 13px; }
 
 .segmented { display: inline-flex; background: var(--bg); border-radius: 99px; padding: 2px; }
 .segmented button { border: 0; border-radius: 99px; padding: 3px 11px; font-size: 12px; background: transparent; color: var(--muted); }

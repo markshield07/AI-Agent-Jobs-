@@ -320,7 +320,15 @@
       [a.to_check, 'to check (blocked or unconfirmed)', '#applications?status=blocked'],
       [a.unmatched_replies, 'replies not matched to a job', '#applications'],
     ].filter(([n]) => n > 0);
+    // The model could not tier new jobs on the last run, so nothing new gets queued.
+    const m = a.model_problem;
+    if (m) {
+      box.append(el('p', { class: 'model-problem' }, m.signed_out
+        ? ['New jobs are not being scored: the agent's Claude sign-in has ended. Run ', el('code', {}, 'claude auth login'), ' in a terminal on this PC.']
+        : `New jobs are not being scored: ${m.error}`));
+    }
     if (!items.length) {
+      if (m) return;
       box.append(el('a', { class: 'calm', href: '#applications' }, 'Nothing needs you right now'));
       return;
     }

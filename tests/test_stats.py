@@ -181,3 +181,12 @@ def test_recent_activity_newest_first(conn, history):
     assert feed[1]["moved_to"] == "screening", "the inbox's move rides on its reply"
     assert feed[2]["site"] == "indeed" and feed[2]["title"] == "Job 3"
     assert feed[3]["moved_to"] is None
+
+
+def test_a_model_problem_needs_attention(conn):
+    from jobagent.discovery.store import set_model_problem
+
+    assert dashboard_stats(conn, now=NOW)["attention"]["model_problem"] is None
+    set_model_problem(conn, "`claude` reported an error: Failed to authenticate")
+    problem = dashboard_stats(conn, now=NOW)["attention"]["model_problem"]
+    assert problem["signed_out"] is True

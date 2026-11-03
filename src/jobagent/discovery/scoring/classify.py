@@ -52,6 +52,7 @@ class ClassifyResult:
     input_tokens: int = 0
     output_tokens: int = 0
     unclassified: list[str] = field(default_factory=list)  # job ids the model did not return
+    error: str | None = None  # the last batch's failure, if any batch failed
 
 
 _SYSTEM_HEAD = """You rank job postings for one specific candidate. For each posting you are \
@@ -258,6 +259,7 @@ def classify_jobs(
             # SDK drops numeric bounds from the schema it sends, so a tier of 5
             # arrives as a pydantic ValidationError rather than an LLMError.
             log.error("classifier batch of %d failed: %s", len(batch), exc)
+            result.error = str(exc)
             result.unclassified.extend(batch_ids)
             continue
 

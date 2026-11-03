@@ -23,6 +23,8 @@ import sqlite3
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from jobagent.discovery.store import model_problem
+
 RESPONSE_STATUSES = ("screening", "interviewing", "offer", "rejected")
 UNCATEGORISED = "Uncategorised"
 
@@ -222,6 +224,7 @@ def dashboard_stats(
             "to_approve": app_status.get("review", 0),
             "to_check": app_status.get("blocked", 0) + app_status.get("unconfirmed", 0),
             "unmatched_replies": int(unmatched),
+            "model_problem": model_problem(conn),
         },
     }
 

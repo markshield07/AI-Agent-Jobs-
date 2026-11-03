@@ -10,7 +10,7 @@ from jobagent.discovery import store
 from jobagent.discovery.criteria import SearchCriteria
 from jobagent.discovery.models import RawJob
 from jobagent.discovery.pipeline import RunReport, run_discovery
-from jobagent.llm.backend import Completion, LLMUnavailable
+from jobagent.llm.backend import Completion, LLMError, LLMUnavailable
 from jobagent.resume import facts as fact_store
 
 LONG = "This is a fully remote role. " + (
@@ -336,3 +336,35 @@ def test_a_run_reads_only_so_many_linkedin_pages(conn, monkeypatch):
     )
     pipeline._enrich(conn, RunReport(run_id=0), client=None, completer=None, sleep=lambda s: None)
     assert len(asked) == 3
+
+
+class SignedOutCompleter:
+    name = "claude-code"
+
+    def complete(self, **_kwargs):
+        raise LLMError("`claude` reported an error: Failed to authenticate: OAuth session expired")
+
+
+def test_a_signed_out_model_is_flagged_until_a_run_gets_through(conn, settings, criteria, profile):
+    strong_id = _ids(STRONG)[0]
+    report = run_discovery(
+        conn,
+        settings,
+        criteria=criteria,
+        sources=[FakeSource("one", [STRONG])],
+        completer=SignedOutCompleter(),
+        enrich=False,
+    )
+    assert report.unclassified == 1
+    problem = store.model_problem(conn)
+    assert problem and problem["signed_out"] and "OAuth" in problem["error"]
+
+    run_discovery(
+        conn,
+        settings,
+        criteria=criteria,
+        sources=[FakeSource("one", [STRONG])],
+        completer=FakeCompleter({strong_id: 1}),
+        enrich=False,
+    )
+    assert store.model_problem(conn) is None

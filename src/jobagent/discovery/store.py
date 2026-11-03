@@ -288,6 +288,39 @@ def jobs_pending_classification(conn: sqlite3.Connection, min_score: int) -> lis
     return [_row_to_dict(r) for r in rows]
 
 
+# ------------------------------------------------------------ model state --
+
+MODEL_PROBLEM_KEY = "model_problem"
+# How `claude` words a sign-in that has ended or never happened.
+_SIGNED_OUT_WORDS = ("authenticate", "oauth", "not logged in", "/login")
+
+
+def set_model_problem(conn: sqlite3.Connection, error: str | None) -> None:
+    """Remember why the last run could not tier jobs, or clear it with None."""
+    with transaction(conn):
+        if error is None:
+            conn.execute("DELETE FROM settings WHERE key = ?", (MODEL_PROBLEM_KEY,))
+            return
+        conn.execute(
+            """INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                              updated_at = excluded.updated_at""",
+            (MODEL_PROBLEM_KEY, json.dumps({"error": error[:500]}), utcnow()),
+        )
+
+
+def model_problem(conn: sqlite3.Connection) -> dict[str, Any] | None:
+    """Why the model could not tier jobs on the last run that tried, and since when."""
+    row = conn.execute(
+        "SELECT value, updated_at FROM settings WHERE key = ?", (MODEL_PROBLEM_KEY,)
+    ).fetchone()
+    if row is None:
+        return None
+    error = json.loads(row["value"]).get("error", "")
+    signed_out = any(w in error.lower() for w in _SIGNED_OUT_WORDS)
+    return {"error": error, "signed_out": signed_out, "at": row["updated_at"]}
+
+
 # ------------------------------------------------------------------- runs --
 
 

@@ -22,6 +22,8 @@
   const SITE_LABEL = {
     linkedin: 'LinkedIn', indeed: 'Indeed', greenhouse: 'Greenhouse', lever: 'Lever',
     ashby: 'Ashby', workday: 'Workday', dice: 'Dice', generic: 'Company site', other: 'Other',
+    weworkremotely: 'We Work Remotely', workingnomads: 'Working Nomads', himalayas: 'Himalayas',
+    glassdoor: 'Glassdoor', zip_recruiter: 'ZipRecruiter', google: 'Google Jobs',
   };
 
   const state = { days: 30, appStatus: '', jobStatus: 'queued', selectedApp: null, config: null };
@@ -291,6 +293,7 @@
     renderFunnel(stats.funnel);
     renderCategories(stats.by_category);
     renderSites(stats.by_site);
+    renderSources(stats.by_source || []);
     renderActivity(activity);
   };
 
@@ -449,6 +452,23 @@
         el('td', { class: 'num' }, `${r.applied} applied`),
         el('td', { class: 'num' }, `${r.responses} replies`),
         el('td', { class: 'num' }, pct(r.response_rate)))))));
+  }
+
+  function renderSources(rows) {
+    const box = document.getElementById('sources');
+    if (!box) return;
+    if (!rows.length) { box.replaceChildren(el('p', { class: 'sub' }, 'Nothing found yet.')); return; }
+    box.replaceChildren(el('table', { class: 'table compact' },
+      el('thead', {}, el('tr', {}, el('th', {}, 'Source'), el('th', { class: 'num' }, 'Found'),
+        el('th', { class: 'num' }, 'Applied'), el('th', { class: 'num' }, 'Replies'),
+        el('th', { class: 'num' }, 'Interviews'), el('th', { class: 'num' }, 'Reply rate'))),
+      el('tbody', {}, rows.map((r) =>
+        el('tr', {}, el('td', {}, siteName(r.source)),
+          el('td', { class: 'num' }, String(r.discovered)),
+          el('td', { class: 'num' }, String(r.applied)),
+          el('td', { class: 'num' }, String(r.responses)),
+          el('td', { class: 'num' }, String(r.interviews)),
+          el('td', { class: 'num' }, pct(r.response_rate)))))));
   }
 
   function renderActivity(items) {

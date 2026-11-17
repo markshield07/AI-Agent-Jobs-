@@ -20,6 +20,7 @@ from typing import Any
 
 from jobagent.discovery.criteria import SearchCriteria
 from jobagent.discovery.sources.filters import title_matches
+from jobagent.discovery.sources.remote_boards import REMOTE_ONLY_BOARDS
 
 _MAX = {"title": 35, "salary": 20, "location": 20, "keywords": 25}
 
@@ -370,7 +371,13 @@ def remote_only_reason(job: Mapping[str, Any]) -> str | None:
         return f'not fully remote: the posting says "{negated.group(0)}"'
     # A bare "Remote" location never matches; "100% Remote" does. The
     # employer's own title saying Remote counts (Mark, 2026-10-30).
-    if not (FULLY_REMOTE.search(f"{text}\n{location}") or TITLE_REMOTE.search(title)):
+    # A remote-only board (We Work Remotely, Working Nomads, Himalayas) lists
+    # nothing else: being listed there is the posting saying it is remote.
+    # Office, hybrid and relocation words above still turn it away.
+    on_remote_board = _text(job, "source").strip().lower() in REMOTE_ONLY_BOARDS
+    if not (
+        on_remote_board or FULLY_REMOTE.search(f"{text}\n{location}") or TITLE_REMOTE.search(title)
+    ):
         if len(description.strip()) < 400:
             return "not fully remote: no full description to show it is fully remote"
         return "not fully remote: nothing in the posting says it is fully remote"

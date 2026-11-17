@@ -65,6 +65,9 @@ behind it, picked by `JOBAGENT_LLM_BACKEND` in `.env`:
 | `JOBAGENT_EASY_APPLY_DAILY_CAP` | `10` | LinkedIn's and Indeed's own caps, each, inside the daily one |
 | `JOBAGENT_DICE_DAILY_CAP` | `3` | Dice's own cap, inside the daily one; starts low, raise it once Dice applications go through |
 | `JOBAGENT_APPLY_SITES` | (every site) | e.g. `linkedin,indeed` or `linkedin,dice`: apply only through those sites' own forms. Discovery then asks LinkedIn for Easy Apply jobs, Indeed for Indeed Apply jobs and Dice (searched only when named here) for Easy Apply, full-time jobs, and a job that sends you to a company's site is skipped with a reason starting "set aside" |
+| `JOBAGENT_COMPANY_SITE_DAILY_CAP` | `10` | Greenhouse's and Lever's own caps (each), inside the daily one |
+| `JOBAGENT_COMPANY_BOARDS` | `false` | `true` also watches the built-in list of network, cloud, data center and MSP company boards on Greenhouse and Lever (`src/jobagent/discovery/sources/company_boards.py`); `jobagent boards check` says which answer. Name `greenhouse,lever` in `JOBAGENT_APPLY_SITES` too; LinkedIn and Indeed stay on Easy Apply |
+| `JOBAGENT_REMOTE_BOARDS` | (none) | Remote-only boards to read, e.g. `weworkremotely,workingnomads,himalayas`; each read at most every 6 hours, keeping only US-open listings whose apply link leads to Greenhouse or Lever |
 | `JOBAGENT_APPLY_DELAY_SECONDS` | `45` | The pause between submissions, jittered |
 | `JOBAGENT_APPLY_MODEL_ANSWERS` | `true` | Let the model draft answers to open questions, from the fact base |
 | `JOBAGENT_HEADLESS` | `true` | `false`, or `--headed`, shows the browser window |

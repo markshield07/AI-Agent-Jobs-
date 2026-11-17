@@ -1293,3 +1293,21 @@ def test_picked_without_job_ids_is_refused(conn, settings):
 
     with pytest.raises(ApplyError):
         run_apply(conn, settings, picked=True)
+
+
+def test_greenhouse_and_lever_each_have_a_daily_cap_of_their_own(conn, settings, ready_job):
+    assert settings.company_site_daily_cap == 10
+    capped = settings.model_copy(update={"company_site_daily_cap": 1})
+    greenhouse = FakeHandler(_result("submitted", confirmation="sent"), ats="greenhouse")
+    lever = FakeHandler(_result("submitted", confirmation="sent"), ats="lever")
+    first = ready_job(f"https://{FAKE_HOST}/acme/gh-first")
+    second = ready_job(f"https://{FAKE_HOST}/acme/gh-second")
+    third = ready_job(f"https://{FAKE_HOST}/acme/lever-first")
+
+    assert _apply(conn, first, capped, greenhouse, mode="auto")["outcome"] == "submitted"
+    record = _apply(conn, second, capped, greenhouse, mode="auto")
+    assert record["outcome"] == "skipped"
+    assert (
+        record["reason"] == "Greenhouse cap of 1 applications a day reached; it goes out tomorrow"
+    )
+    assert _apply(conn, third, capped, lever, mode="auto")["outcome"] == "submitted"

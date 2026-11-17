@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 import httpx
 
+from jobagent.discovery.ats import detect_ats
 from jobagent.discovery.criteria import SearchCriteria
 from jobagent.discovery.http import get_json, make_client
 from jobagent.discovery.models import RawJob
@@ -60,7 +61,7 @@ class GreenhouseSource:
                     continue
                 if company is None:
                     company = self._fetch_board_name(board.slug) or _slug_name(board.slug)
-                yield _to_raw(entry, company)
+                yield _to_raw(entry, company, board.slug)
 
     def _fetch_jobs(self, slug: str) -> list[Any]:
         """The board's postings, or an empty list when the board cannot be read."""
@@ -107,8 +108,15 @@ def _slug_name(slug: str) -> str:
     return slug.replace("-", " ").replace("_", " ").strip().title() or slug
 
 
-def _to_raw(entry: dict[str, Any], company: str) -> RawJob:
+def _to_raw(entry: dict[str, Any], company: str, slug: str | None = None) -> RawJob:
     url = entry["absolute_url"].strip()
+    job_id = entry.get("id")
+    apply_url = url
+    if slug and job_id is not None and detect_ats(url) != "greenhouse":
+        # A board that posts on the company's own careers page (…?gh_jid=123):
+        # Greenhouse's hosted page carries the same form and is one the
+        # Greenhouse handler and JOBAGENT_APPLY_SITES both recognise.
+        apply_url = f"https://job-boards.greenhouse.io/{quote(slug, safe='')}/jobs/{job_id}"
     location = entry.get("location")
     location_name = location.get("name") if isinstance(location, dict) else None
     if not isinstance(location_name, str) or not location_name.strip():
@@ -116,7 +124,6 @@ def _to_raw(entry: dict[str, Any], company: str) -> RawJob:
     content = entry.get("content")
     # Empty text means "no description", which is what tells enrichment to fetch one.
     description = html_to_text(content) or None if isinstance(content, str) else None
-    job_id = entry.get("id")
     return RawJob(
         url=url,
         title=entry["title"].strip(),
@@ -124,7 +131,7 @@ def _to_raw(entry: dict[str, Any], company: str) -> RawJob:
         source="greenhouse",
         location=location_name,
         description=description,
-        apply_url=url,
+        apply_url=apply_url,
         posted_at=_posted_at(entry),
         remote=True if location_name and "remote" in location_name.lower() else None,
         external_id=str(job_id) if job_id is not None else None,

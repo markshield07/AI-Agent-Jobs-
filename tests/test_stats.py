@@ -181,3 +181,13 @@ def test_recent_activity_newest_first(conn, history):
     assert feed[1]["moved_to"] == "screening", "the inbox's move rides on its reply"
     assert feed[2]["site"] == "indeed" and feed[2]["title"] == "Job 3"
     assert feed[3]["moved_to"] is None
+
+
+def test_by_source_counts_where_jobs_were_found(conn, history):
+    stats = dashboard_stats(conn, days=30, now=NOW)
+    rows = {r["source"]: r for r in stats["by_source"]}
+    assert sum(r["discovered"] for r in rows.values()) == stats["totals"]["discovered"]
+    assert sum(r["applied"] for r in rows.values()) == stats["totals"]["applied"]
+    assert sum(r["responses"] for r in rows.values()) == stats["totals"]["responses"]
+    for row in rows.values():
+        assert set(row) >= {"discovered", "queued", "applied", "interviews", "response_rate"}

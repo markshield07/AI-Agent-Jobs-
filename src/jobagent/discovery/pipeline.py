@@ -17,9 +17,11 @@ import sqlite3
 import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from jobagent.config import Settings
+from jobagent.db.database import transaction, utcnow
 from jobagent.discovery import store
 from jobagent.discovery.criteria import SearchCriteria, load_criteria
 from jobagent.discovery.enrich import RateLimited, enrich_description
@@ -28,7 +30,8 @@ from jobagent.discovery.models import RawJob
 from jobagent.discovery.scoring.classify import classify_jobs
 from jobagent.discovery.scoring.rules import RuleScore, is_remote_only, passes, score_rules
 from jobagent.discovery.sources import all_sources
-from jobagent.discovery.sources.filters import title_matches
+from jobagent.discovery.sources.company_boards import with_company_boards
+from jobagent.discovery.sources.filters import parse_when, title_matches
 from jobagent.llm.backend import Completer, LLMUnavailable, resolve_backend
 from jobagent.resume.profile import profile_tags, profile_text
 
@@ -108,6 +111,8 @@ def run_discovery(
     and the report says so.
     """
     criteria = criteria or load_criteria(conn)
+    if settings.company_boards and sources is None:
+        criteria = with_company_boards(criteria, settings.apply_site_list)
     run_id = store.start_run(conn) if run_id is None else run_id
     report = RunReport(run_id=run_id)
 
@@ -115,7 +120,13 @@ def run_discovery(
     client = client or make_client()
     try:
         if sources is None:
-            sources = all_sources(criteria, client=client, apply_sites=settings.apply_site_list)
+            sources = all_sources(
+                criteria,
+                client=client,
+                apply_sites=settings.apply_site_list,
+                remote_boards=settings.remote_board_list,
+            )
+            sources = _due_sources(conn, sources, report)
         _search(conn, criteria, sources, report, run_id)
 
         if classify or enrich_with_model:
@@ -158,6 +169,38 @@ def _resolve_completer(
         log.warning("model stages skipped: %s", exc)
         report.notes.append(f"No model backend, so rule survivors were left pending: {exc}")
         return None
+
+
+_LAST_READ_KEY = "source_last_read:{}"
+
+
+def _due_sources(
+    conn: sqlite3.Connection, sources: Sequence[Source], report: RunReport
+) -> list[Source]:
+    """The sources due a read. A source with `min_interval_hours` (the remote
+    boards, whose data changes daily and whose terms ask for restraint) is
+    read once in that many hours; every other source, every run."""
+    now = datetime.now(UTC)
+    due: list[Source] = []
+    for source in sources:
+        hours = getattr(source, "min_interval_hours", None)
+        if hours:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = ?", (_LAST_READ_KEY.format(source.name),)
+            ).fetchone()
+            last = parse_when(row["value"]) if row else None
+            if last is not None and now - last < timedelta(hours=float(hours)):
+                report.notes.append(f"{source.name}: read {last:%H:%M} UTC, next after {hours:g}h")
+                continue
+            with transaction(conn):
+                conn.execute(
+                    """INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+                       ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                                      updated_at = excluded.updated_at""",
+                    (_LAST_READ_KEY.format(source.name), now.isoformat(), utcnow()),
+                )
+        due.append(source)
+    return due
 
 
 def _search(

@@ -11,6 +11,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The job boards whose own application forms the agent fills.
 BOARD_SITES = frozenset({"linkedin", "indeed", "dice"})
+# Company application forms (ATS) the agent fills, with a daily cap of their own.
+COMPANY_SITES = frozenset({"greenhouse", "lever"})
+
+
+def board_apply_only(sites: tuple[str, ...] | list[str]) -> bool:
+    """Whether the job boards (LinkedIn, Indeed, Dice) are asked only for jobs
+    that apply on their own forms. Naming Greenhouse or Lever alongside them
+    leaves that as it is: those jobs come from the company and remote boards,
+    not from LinkedIn postings that send you to a company's site."""
+    named = set(sites)
+    return bool(named & BOARD_SITES) and named <= BOARD_SITES | COMPANY_SITES
 
 
 class Settings(BaseSettings):
@@ -38,11 +49,21 @@ class Settings(BaseSettings):
     easy_apply_daily_cap: int = 10
     # Dice starts lower still, to be raised once its applications go through.
     dice_daily_cap: int = 3
+    # Greenhouse and Lever each get this many a day (company boards and the
+    # remote-only boards both apply through them).
+    company_site_daily_cap: int = 10
     apply_delay_seconds: float = 45.0  # between submissions, with jitter
     # Where applications go, e.g. "linkedin,dice": only jobs that apply on
     # those sites' own forms. A job that sends the applicant to a company's
     # site is set aside (skipped, with the reason), not tried. Empty: every site.
     apply_sites: str = ""
+    # Extra places to find jobs. `remote_boards` names remote-only boards to
+    # read, e.g. "weworkremotely,workingnomads,himalayas"; `company_boards`
+    # watches the built-in list of network, cloud and MSP company boards on
+    # Greenhouse and Lever. Both only find jobs that apply on Greenhouse or
+    # Lever, so JOBAGENT_APPLY_SITES has to name those for them to be sent.
+    remote_boards: str = ""
+    company_boards: bool = False
     apply_model_answers: bool = True  # let the model draft answers from the fact base
     headless: bool = True
     browser_executable: str | None = None  # a Chromium binary, when Playwright's is absent
@@ -70,11 +91,16 @@ class Settings(BaseSettings):
         return tuple(dict.fromkeys(name for name in names if name))
 
     @property
+    def remote_board_list(self) -> tuple[str, ...]:
+        names = (part.strip().lower() for part in self.remote_boards.split(","))
+        return tuple(dict.fromkeys(name for name in names if name))
+
+    @property
     def board_apply_only(self) -> bool:
-        """Only the boards' own forms (LinkedIn, Indeed, Dice): discovery then
-        asks those boards for jobs that apply there (Easy Apply, Indeed Apply)."""
-        sites = self.apply_site_list
-        return bool(sites) and set(sites) <= BOARD_SITES
+        """Only the boards' own forms (LinkedIn, Indeed, Dice), give or take the
+        company forms found on company and remote boards: LinkedIn and Indeed
+        are then asked for jobs that apply there (Easy Apply, Indeed Apply)."""
+        return board_apply_only(self.apply_site_list)
 
     @property
     def db_path(self) -> Path:

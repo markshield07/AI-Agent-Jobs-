@@ -243,6 +243,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip", action="append", choices=("discover", "tailor", "apply", "inbox"), default=[]
     )
     cycle.add_argument("--json", action="store_true", help="Print each cycle's report as JSON.")
+
+    boards = sub.add_parser(
+        "boards", help="Check the built-in company boards and the remote-only boards answer."
+    )
+    boards.add_argument("action", choices=("check",))
     return parser
 
 
@@ -1056,6 +1061,51 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_boards(args: argparse.Namespace) -> int:
+    """Read each built-in company board and remote board once and say what came
+    back: how many open roles, or why it could not be read. Nothing is stored."""
+    from jobagent.discovery.http import get_json, get_text, make_client
+    from jobagent.discovery.sources.company_boards import CATALOG
+    from jobagent.discovery.sources.greenhouse import API_BASE
+    from jobagent.discovery.sources.lever import POSTINGS_URL
+    from jobagent.discovery.sources.remote_boards import (
+        HimalayasSource,
+        WeWorkRemotelySource,
+        WorkingNomadsSource,
+        parse_rss,
+    )
+
+    bad = 0
+    with make_client() as client:
+        for ats, slug, name in CATALOG:
+            try:
+                if ats == "greenhouse":
+                    count = len(get_json(client, f"{API_BASE}/{slug}/jobs").get("jobs") or [])
+                else:
+                    count = len(get_json(client, POSTINGS_URL.format(slug=slug), mode="json"))
+                print(f"ok    {ats:10} {slug:16} {name}: {count} open roles")
+            except Exception as exc:  # report and carry on: this is a check
+                bad += 1
+                print(f"FAIL  {ats:10} {slug:16} {name}: {type(exc).__name__}: {exc}")
+        remote = {
+            "weworkremotely": lambda: len(
+                parse_rss(get_text(client, WeWorkRemotelySource.FEEDS[0]))
+            ),
+            "workingnomads": lambda: len(get_json(client, WorkingNomadsSource.API)),
+            "himalayas": lambda: len(
+                get_json(client, HimalayasSource.API, q="network engineer", country="US")["jobs"]
+            ),
+        }
+        for board, read in remote.items():
+            try:
+                print(f"ok    remote     {board:16} {read()} listings")
+            except Exception as exc:
+                bad += 1
+                print(f"FAIL  remote     {board:16} {type(exc).__name__}: {exc}")
+    print(f"{bad} of {len(CATALOG) + len(remote)} could not be read")
+    return 0
+
+
 _COMMANDS = {
     "discover": _cmd_discover,
     "resume": _cmd_resume,
@@ -1068,6 +1118,7 @@ _COMMANDS = {
     "inbox": _cmd_inbox,
     "login": _cmd_login,
     "run": _cmd_run,
+    "boards": _cmd_boards,
 }
 
 

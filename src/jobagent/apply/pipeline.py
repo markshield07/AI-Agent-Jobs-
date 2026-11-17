@@ -35,7 +35,7 @@ from jobagent.apply.closing import deadline_passed
 from jobagent.apply.handlers import default_handlers, handler_for
 from jobagent.apply.models import MODES, Handler, HandlerResult, NeededInput, Packet
 from jobagent.apply.sessions import SITES
-from jobagent.config import Settings
+from jobagent.config import COMPANY_SITES, Settings
 from jobagent.db.database import utcnow
 from jobagent.discovery import store as jobs
 from jobagent.discovery.ats import detect_ats
@@ -529,13 +529,18 @@ def _ruled_out(job: Mapping[str, Any], criteria: Any) -> str | None:
 
 
 def _site_cap_reached(conn: sqlite3.Connection, settings: Settings, handler: Handler) -> str | None:
-    """Why a board's own daily cap (LinkedIn, Indeed, Dice) stops this application, if it does."""
-    if handler.ats not in SITES:
+    """Why a site's own daily cap (LinkedIn, Indeed, Dice, Greenhouse, Lever)
+    stops this application, if it does."""
+    if handler.ats in COMPANY_SITES:
+        cap = settings.company_site_daily_cap
+        label = handler.ats.title()
+    elif handler.ats in SITES:
+        cap = settings.dice_daily_cap if handler.ats == "dice" else settings.easy_apply_daily_cap
+        label = SITES[handler.ats].label
+    else:
         return None
-    cap = settings.dice_daily_cap if handler.ats == "dice" else settings.easy_apply_daily_cap
     if store.submitted_last_day(conn, ats=handler.ats) < cap:
         return None
-    label = SITES[handler.ats].label
     return f"{label} cap of {cap} applications a day reached; it goes out tomorrow"
 
 

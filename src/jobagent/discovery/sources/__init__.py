@@ -12,13 +12,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from jobagent.config import BOARD_SITES
+from jobagent.config import board_apply_only
 from jobagent.discovery.criteria import SearchCriteria
 from jobagent.discovery.sources.ashby import AshbySource
 from jobagent.discovery.sources.dice import DiceSource
 from jobagent.discovery.sources.greenhouse import GreenhouseSource
 from jobagent.discovery.sources.jobspy_source import JobSpySource
 from jobagent.discovery.sources.lever import LeverSource
+from jobagent.discovery.sources.remote_boards import remote_board_sources
 
 if TYPE_CHECKING:
     import httpx
@@ -32,12 +33,18 @@ def all_sources(
     criteria: SearchCriteria,
     client: httpx.Client | None = None,
     apply_sites: tuple[str, ...] = (),
+    *,
+    remote_boards: tuple[str, ...] = (),
 ) -> list[Source]:
     """Every source that has something to search, given these criteria. With
     JOBAGENT_APPLY_SITES naming only boards (LinkedIn, Indeed, Dice), those
-    boards alone, asked for the jobs that apply on their own forms."""
+    boards alone, asked for the jobs that apply on their own forms.
+
+    `remote_boards` names remote-only boards to read when the titles to look
+    for are set. The built-in company boards come in through the criteria
+    (`company_boards.with_company_boards`)."""
     wanted = {board.ats for board in criteria.boards}
-    on_site_only = bool(apply_sites) and set(apply_sites) <= BOARD_SITES
+    on_site_only = board_apply_only(apply_sites)
     if apply_sites:
         wanted &= set(apply_sites)
     sources: list[Source] = []
@@ -51,4 +58,6 @@ def all_sources(
         sources.append(JobSpySource(on_site_only=on_site_only))
     if "dice" in apply_sites and criteria.titles:
         sources.append(DiceSource(client))
+    if remote_boards and criteria.titles:
+        sources.extend(remote_board_sources(remote_boards, client))
     return sources

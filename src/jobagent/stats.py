@@ -32,6 +32,7 @@ _SENT_SQL = """
 SELECT a.id,
        a.submitted_at,
        COALESCE(a.ats, j.source) AS site,
+       j.source AS found_on,
        COALESCE(NULLIF(TRIM(j.category), ''), :uncat) AS category,
        s.status,
        (SELECT MIN(t) FROM (
@@ -106,7 +107,7 @@ def dashboard_stats(
     jobs = [
         dict(r)
         for r in conn.execute(
-            "SELECT scraped_at, status,"
+            "SELECT scraped_at, status, source,"
             " COALESCE(NULLIF(TRIM(category), ''), ?) AS category FROM jobs",
             (UNCATEGORISED,),
         ).fetchall()
@@ -166,6 +167,37 @@ def dashboard_stats(
     for row in by_site:
         row["response_rate"] = _rate(row["responses"], row["applied"])
 
+    # Where the job was found, which is not always where it applied: a job on
+    # We Work Remotely or a company board applies on Greenhouse or Lever.
+    found: dict[str, dict[str, Any]] = {}
+
+    def found_row(name: str | None) -> dict[str, Any]:
+        name = name or "other"
+        return found.setdefault(
+            name,
+            {
+                "source": name,
+                "discovered": 0,
+                "queued": 0,
+                "applied": 0,
+                "responses": 0,
+                "interviews": 0,
+            },
+        )
+
+    for job in jobs:
+        row = found_row(job["source"])
+        row["discovered"] += 1
+        row["queued"] += 1 if job["status"] == "queued" else 0
+    for app in sent:
+        row = found_row(app["found_on"])
+        row["applied"] += 1
+        row["responses"] += 1 if app["responded_at"] else 0
+        row["interviews"] += 1 if app["interviewed"] else 0
+    by_source = sorted(found.values(), key=lambda r: (-r["applied"], -r["discovered"], r["source"]))
+    for row in by_source:
+        row["response_rate"] = _rate(row["responses"], row["applied"])
+
     job_status = {
         r["status"]: r["n"]
         for r in conn.execute("SELECT status, COUNT(*) AS n FROM jobs GROUP BY status")
@@ -216,6 +248,7 @@ def dashboard_stats(
         ],
         "by_category": by_category,
         "by_site": by_site,
+        "by_source": by_source,
         "application_status": app_status,
         "attention": {
             "needs_input": app_status.get("needs_input", 0),
